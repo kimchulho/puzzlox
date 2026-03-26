@@ -199,7 +199,7 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (roomId: number, imageUrl: string, 
             </svg>
           </div>
           
-          <h1 className="text-3xl font-bold text-white mb-2">Multiplayer Puzzle</h1>
+          <h1 className="text-3xl font-bold text-white mb-2">Web Puzzle</h1>
           <p className="text-slate-400 mb-8">
             Create a new puzzle room and invite friends!
           </p>

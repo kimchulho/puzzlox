@@ -466,7 +466,6 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                 p.x = target.x;
                 p.y = target.y;
                 targetPositions.delete(id);
-                evaluateScoredPieces();
                 checkCompletion();
               } else {
                 p.x += dx * 0.3;
@@ -870,49 +869,6 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           }, 250);
         };
 
-        let scoredPieces = new Set<number>();
-
-        const evaluateScoredPieces = () => {
-          const newlyScored = new Set<number>();
-          for (let i = 0; i < PIECE_COUNT; i++) {
-            if (scoredPieces.has(i)) continue;
-            
-            const p = pieces.current.get(i)!;
-            if (p.eventMode === 'none') {
-              // Locked
-              newlyScored.add(i);
-              continue;
-            }
-            
-            // Check if connected to any neighbor
-            const c1 = i % GRID_COLS;
-            const r1 = Math.floor(i / GRID_COLS);
-            const neighbors = [i - 1, i + 1, i - GRID_COLS, i + GRID_COLS];
-            
-            for (const n of neighbors) {
-              if (n >= 0 && n < PIECE_COUNT) {
-                const c2 = n % GRID_COLS;
-                const r2 = Math.floor(n / GRID_COLS);
-                const isLogicallyAdjacent = (Math.abs(c1 - c2) === 1 && r1 === r2) || (Math.abs(r1 - r2) === 1 && c1 === c2);
-                if (isLogicallyAdjacent) {
-                  const p2 = pieces.current.get(n)!;
-                  const expectedX = p.x + (c2 - c1) * pieceWidth;
-                  const expectedY = p.y + (r2 - r1) * pieceHeight;
-                  if (Math.abs(p2.x - expectedX) < 1 && Math.abs(p2.y - expectedY) < 1) {
-                    newlyScored.add(i);
-                    break;
-                  }
-                }
-              }
-            }
-          }
-          
-          if (newlyScored.size > 0) {
-            newlyScored.forEach(id => scoredPieces.add(id));
-          }
-          return newlyScored.size;
-        };
-
         const updateScore = async (points: number) => {
           if (points <= 0) return;
           const username = localStorage.getItem('puzzle_username') || 'Anonymous';
@@ -1085,9 +1041,8 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             });
           }
           
-          const points = evaluateScoredPieces();
-          if (points > 0) {
-            updateScore(points);
+          if (snapped) {
+            updateScore(1);
           }
           
           return snapped;
@@ -1350,9 +1305,6 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           pieces.current.set(i, pieceContainer);
         }
         setPlacedPieces(initialPlacedCount);
-        
-        // Initialize scored pieces without awarding points
-        evaluateScoredPieces();
 
         // 3. Supabase Realtime 수신
         const channel = supabase.channel(`room_${roomId}`);
