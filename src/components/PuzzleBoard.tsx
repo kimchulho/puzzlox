@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import * as PIXI from 'pixi.js';
 import { createClient } from '@supabase/supabase-js';
 import { throttle } from 'lodash';
-import { Clock, Users, Trophy, ChevronLeft, X, Palette, LayoutGrid, Zap, Heart, Image as ImageIcon, Bot, Maximize, Minimize } from 'lucide-react';
+import { Clock, Users, Trophy, ChevronLeft, X, Palette, LayoutGrid, Zap, Heart, Image as ImageIcon, Bot, Maximize, Minimize, RotateCcw } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 import confetti from 'canvas-confetti';
 
@@ -91,6 +91,27 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
       }
     } catch (err) {
       console.error("Error attempting to toggle fullscreen:", err);
+    }
+  };
+
+  const toggleOrientation = async () => {
+    try {
+      if (!document.fullscreenElement) {
+        await document.documentElement.requestFullscreen();
+      }
+      
+      if (window.screen && window.screen.orientation && window.screen.orientation.lock) {
+        const currentType = window.screen.orientation.type;
+        if (currentType.startsWith('portrait')) {
+          await window.screen.orientation.lock('landscape');
+        } else {
+          await window.screen.orientation.lock('portrait');
+        }
+      } else {
+        console.warn("Screen orientation lock is not supported on this device/browser.");
+      }
+    } catch (err) {
+      console.error("Error attempting to lock orientation:", err);
     }
   };
 
@@ -2734,19 +2755,19 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
 
   return (
     <div className="w-full h-full relative" style={{ backgroundColor: bgColor }}>
-      <div className="absolute top-0 left-0 w-full z-50 bg-slate-900/80 backdrop-blur-sm border-b border-slate-700/50 p-2 sm:p-4 flex flex-col sm:flex-row items-center justify-between gap-2 sm:gap-4 text-white shadow-lg">
+      <div className="absolute top-0 left-0 w-full z-50 bg-slate-900/80 backdrop-blur-sm border-b border-slate-700/50 p-1.5 sm:p-2 flex flex-col sm:flex-row items-center justify-between gap-1.5 sm:gap-2 text-white shadow-lg">
         {/* Top Row (Mobile) / Left Side (Desktop) */}
-        <div className="flex items-center justify-between w-full sm:w-auto gap-2">
+        <div className="flex items-center justify-between w-full sm:w-auto gap-1.5 sm:gap-2">
           <button 
             onClick={onBack}
-            className="flex items-center justify-center bg-slate-800 hover:bg-slate-700 w-8 h-8 sm:w-10 sm:h-10 rounded-lg transition-colors border border-slate-600 shrink-0"
+            className="flex items-center justify-center bg-slate-800 hover:bg-slate-700 w-8 h-8 sm:w-9 sm:h-9 rounded-lg transition-colors border border-slate-600 shrink-0"
             title="Back to Lobby"
           >
-            <ChevronLeft size={20} className="w-5 h-5 sm:w-6 sm:h-6" />
+            <ChevronLeft size={20} className="w-5 h-5" />
           </button>
           
-          <div className="flex items-center gap-2 bg-slate-800/50 px-2 sm:px-3 py-1.5 rounded-lg border border-slate-700/50 flex-1 sm:flex-none justify-center">
-            <div className="w-full max-w-[60px] sm:max-w-none sm:w-32 bg-slate-700 rounded-full h-2 sm:h-2.5 overflow-hidden">
+          <div className="flex items-center gap-2 bg-slate-800/50 px-2 sm:px-3 h-8 sm:h-9 rounded-lg border border-slate-700/50 flex-1 sm:flex-none justify-center">
+            <div className="w-full max-w-[60px] sm:max-w-none sm:w-32 bg-slate-700 rounded-full h-2 overflow-hidden">
               <div 
                 className="bg-blue-500 h-full rounded-full transition-all duration-500" 
                 style={{ width: `${(placedPieces / totalPieces) * 100}%` }}
@@ -2760,34 +2781,34 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           {/* Leaderboard Button on Mobile Top Right */}
           <button 
             onClick={() => setShowLeaderboard(!showLeaderboard)}
-            className={`flex sm:hidden items-center gap-1 px-2 py-1.5 rounded-lg transition-colors border shrink-0 ${showLeaderboard ? 'bg-amber-500/20 border-amber-500/50 text-amber-400' : 'bg-slate-800 hover:bg-slate-700 border-slate-600'}`}
+            className={`flex sm:hidden items-center justify-center w-8 h-8 rounded-lg transition-colors border shrink-0 ${showLeaderboard ? 'bg-amber-500/20 border-amber-500/50 text-amber-400' : 'bg-slate-800 hover:bg-slate-700 border-slate-600'}`}
+            title="Rank"
           >
-            <Trophy size={14} className={showLeaderboard ? 'text-amber-400' : 'text-slate-400'} />
-            <span className="text-xs font-medium">Rank</span>
+            <Trophy size={16} className={showLeaderboard ? 'text-amber-400' : 'text-slate-400'} />
           </button>
         </div>
 
         {/* Bottom Row (Mobile) / Right Side (Desktop) */}
-        <div className="flex items-center w-full sm:w-auto gap-2 justify-center sm:justify-end">
-          <div className="flex items-center gap-1 sm:gap-2 bg-slate-800/50 px-2 sm:px-3 py-1.5 rounded-lg border border-slate-700/50 flex-1 sm:flex-none justify-center">
-            <Users size={14} className="text-slate-400 sm:w-4 sm:h-4" />
+        <div className="flex items-center w-full sm:w-auto gap-1.5 sm:gap-2 justify-center sm:justify-end">
+          <div className="flex items-center gap-1.5 bg-slate-800/50 px-2 sm:px-3 h-8 sm:h-9 rounded-lg border border-slate-700/50 flex-1 sm:flex-none justify-center" title="Players">
+            <Users size={14} className="text-slate-400" />
             <span className="text-xs sm:text-sm font-medium whitespace-nowrap">
-              {playerCount}/{maxPlayers} <span className="hidden sm:inline">Player(s)</span>
+              {playerCount}/{maxPlayers}
             </span>
           </div>
 
-          <div className="flex items-center gap-1 sm:gap-2 bg-slate-800/50 px-2 sm:px-3 py-1.5 rounded-lg border border-slate-700/50 flex-1 sm:flex-none justify-center">
-            <Clock size={14} className="text-slate-400 sm:w-4 sm:h-4" />
+          <div className="flex items-center gap-1.5 bg-slate-800/50 px-2 sm:px-3 h-8 sm:h-9 rounded-lg border border-slate-700/50 flex-1 sm:flex-none justify-center" title="Play Time">
+            <Clock size={14} className="text-slate-400" />
             <span className="text-xs sm:text-sm font-medium font-mono whitespace-nowrap">{formatTime(playTime)}</span>
           </div>
 
           <div className="relative">
             <button
               onClick={() => setShowBotMenu(!showBotMenu)}
-              className={`flex items-center justify-center w-8 h-8 sm:w-10 sm:h-10 rounded-lg border transition-colors shrink-0 ${showBotMenu ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-400' : 'bg-slate-800/50 border-slate-700/50 text-slate-400 hover:bg-slate-700 hover:text-white'}`}
+              className={`flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 rounded-lg border transition-colors shrink-0 ${showBotMenu ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-400' : 'bg-slate-800/50 border-slate-700/50 text-slate-400 hover:bg-slate-700 hover:text-white'}`}
               title="Bot Actions"
             >
-              <Bot size={20} className={`sm:w-5 sm:h-5 ${isColorBotLoading ? 'animate-pulse text-indigo-400' : ''}`} />
+              <Bot size={18} className={isColorBotLoading ? 'animate-pulse text-indigo-400' : ''} />
             </button>
             
             {showBotMenu && (
@@ -2868,11 +2889,11 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           <div className="relative">
             <button 
               onClick={() => setShowColorPicker(!showColorPicker)}
-              className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1.5 rounded-lg border transition-colors shrink-0 ${showColorPicker ? 'bg-blue-500/20 border-blue-500/50 text-blue-400' : 'bg-slate-800/50 border-slate-700/50 text-slate-400 hover:bg-slate-700'}`}
+              className={`flex items-center gap-1.5 px-2 sm:px-2.5 h-8 sm:h-9 rounded-lg border transition-colors shrink-0 ${showColorPicker ? 'bg-blue-500/20 border-blue-500/50 text-blue-400' : 'bg-slate-800/50 border-slate-700/50 text-slate-400 hover:bg-slate-700'}`}
               title="Change Background Color"
             >
-              <Palette size={14} className="sm:w-4 sm:h-4" />
-              <div className="w-4 h-4 rounded-full border border-slate-600 shadow-sm" style={{ backgroundColor: bgColor }} />
+              <Palette size={16} />
+              <div className="w-3.5 h-3.5 rounded-full border border-slate-600 shadow-sm" style={{ backgroundColor: bgColor }} />
             </button>
             
             {showColorPicker && (
@@ -2915,18 +2936,26 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
 
           <button 
             onClick={() => setShowLeaderboard(!showLeaderboard)}
-            className={`hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg transition-colors border shrink-0 ${showLeaderboard ? 'bg-amber-500/20 border-amber-500/50 text-amber-400' : 'bg-slate-800 hover:bg-slate-700 border-slate-600'}`}
+            className={`hidden sm:flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 rounded-lg transition-colors border shrink-0 ${showLeaderboard ? 'bg-amber-500/20 border-amber-500/50 text-amber-400' : 'bg-slate-800 hover:bg-slate-700 border-slate-600'}`}
+            title="Leaderboard"
           >
-            <Trophy size={16} className={showLeaderboard ? 'text-amber-400' : 'text-slate-400'} />
-            <span className="font-medium text-sm">Leaderboard</span>
+            <Trophy size={18} className={showLeaderboard ? 'text-amber-400' : 'text-slate-400'} />
+          </button>
+
+          <button 
+            onClick={toggleOrientation}
+            className="flex sm:hidden items-center justify-center w-8 h-8 bg-slate-800/50 hover:bg-slate-700 rounded-lg transition-colors border border-slate-700/50 text-slate-400 hover:text-white shrink-0"
+            title="Rotate Screen"
+          >
+            <RotateCcw size={16} />
           </button>
 
           <button 
             onClick={toggleFullscreen}
-            className="flex items-center justify-center w-8 h-8 sm:w-10 sm:h-10 bg-slate-800/50 hover:bg-slate-700 rounded-lg transition-colors border border-slate-700/50 text-slate-400 hover:text-white shrink-0"
+            className="flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 bg-slate-800/50 hover:bg-slate-700 rounded-lg transition-colors border border-slate-700/50 text-slate-400 hover:text-white shrink-0"
             title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
           >
-            {isFullscreen ? <Minimize size={20} className="sm:w-5 sm:h-5" /> : <Maximize size={20} className="sm:w-5 sm:h-5" />}
+            {isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}
           </button>
         </div>
       </div>
