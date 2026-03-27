@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import * as PIXI from 'pixi.js';
 import { createClient } from '@supabase/supabase-js';
 import { throttle } from 'lodash';
@@ -27,6 +27,8 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
   const initialPositionsRef = useRef<{x: number, y: number}[]>([]);
   const isBotRunningRef = useRef(false);
   const isColorBotRunningRef = useRef(false);
+  const worldRef = useRef<PIXI.Container | null>(null);
+  const miniPadDragRef = useRef<{ x: number, y: number, isDragging: boolean, moved: boolean } | null>(null);
 
   const [placedPieces, setPlacedPieces] = useState(0);
   const [totalPieces, setTotalPieces] = useState(pieceCount);
@@ -39,6 +41,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [showBotMenu, setShowBotMenu] = useState(false);
   const [showMosaicModal, setShowMosaicModal] = useState(false);
+  const [showFullImage, setShowFullImage] = useState(false);
   const [mosaicUrl, setMosaicUrl] = useState("https://ewbjogsolylcbfmpmyfa.supabase.co/storage/v1/object/public/checki/2.jpg");
   const [mosaicQuick, setMosaicQuick] = useState(false);
   const [mosaicGap, setMosaicGap] = useState(1.6);
@@ -157,6 +160,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
         const world = new PIXI.Container();
         world.sortableChildren = true;
         app.stage.addChild(world);
+        worldRef.current = world;
 
         const cursorsContainer = new PIXI.Container();
         cursorsContainer.zIndex = 2000;
@@ -2670,6 +2674,40 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
     };
   }, [imageUrl]);
 
+  const handleMiniPadPointerDown = (e: React.PointerEvent) => {
+    miniPadDragRef.current = { x: e.clientX, y: e.clientY, isDragging: true, moved: false };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  const handleMiniPadPointerMove = (e: React.PointerEvent) => {
+    if (!miniPadDragRef.current?.isDragging || !worldRef.current) return;
+
+    const dx = e.clientX - miniPadDragRef.current.x;
+    const dy = e.clientY - miniPadDragRef.current.y;
+
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+      miniPadDragRef.current.moved = true;
+    }
+
+    if (miniPadDragRef.current.moved) {
+      // 2.5x multiplier for fast panning
+      worldRef.current.x += dx * 2.5;
+      worldRef.current.y += dy * 2.5;
+      miniPadDragRef.current.x = e.clientX;
+      miniPadDragRef.current.y = e.clientY;
+    }
+  };
+
+  const handleMiniPadPointerUp = (e: React.PointerEvent) => {
+    if (!miniPadDragRef.current) return;
+    if (!miniPadDragRef.current.moved) {
+      // It was a click/tap
+      setShowFullImage(true);
+    }
+    miniPadDragRef.current = null;
+    e.currentTarget.releasePointerCapture(e.pointerId);
+  };
+
   return (
     <div className="w-full h-full relative" style={{ backgroundColor: bgColor }}>
       <div className="absolute top-0 left-0 w-full z-50 bg-slate-900/80 backdrop-blur-sm border-b border-slate-700/50 p-2 sm:p-4 flex flex-col sm:flex-row items-center justify-between gap-2 sm:gap-4 text-white shadow-lg">
@@ -2967,6 +3005,41 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mini Image Pad */}
+      <div
+        className="fixed bottom-4 left-4 sm:bottom-6 sm:left-6 z-40 rounded-xl border-2 border-slate-600/50 shadow-2xl overflow-hidden cursor-pointer touch-none bg-slate-800/80 backdrop-blur-md p-1.5 transition-transform hover:scale-105"
+        onPointerDown={handleMiniPadPointerDown}
+        onPointerMove={handleMiniPadPointerMove}
+        onPointerUp={handleMiniPadPointerUp}
+        onPointerCancel={handleMiniPadPointerUp}
+        title="Drag to pan, Click to view full image"
+      >
+        <img src={imageUrl} alt="Puzzle Thumbnail" className="w-24 sm:w-32 h-auto rounded-lg opacity-90 hover:opacity-100 transition-opacity pointer-events-none object-cover" />
+      </div>
+
+      {/* Full Image Modal */}
+      {showFullImage && (
+        <div 
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 animate-in fade-in duration-200" 
+          onClick={() => setShowFullImage(false)}
+        >
+          <div className="relative max-w-[95vw] max-h-[95vh] flex items-center justify-center">
+            <button
+              className="absolute -top-4 -right-4 sm:-top-6 sm:-right-6 bg-slate-800 text-white rounded-full p-2 hover:bg-slate-700 shadow-xl border border-slate-600 transition-colors z-10"
+              onClick={(e) => { e.stopPropagation(); setShowFullImage(false); }}
+            >
+              <X size={20} className="sm:w-6 sm:h-6" />
+            </button>
+            <img 
+              src={imageUrl} 
+              alt="Full Puzzle" 
+              className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl" 
+              onClick={(e) => e.stopPropagation()}
+            />
           </div>
         </div>
       )}
