@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as PIXI from 'pixi.js';
-import { BevelFilter, DropShadowFilter } from 'pixi-filters';
+import { BevelFilter } from 'pixi-filters';
 import { createClient } from '@supabase/supabase-js';
 import { throttle } from 'lodash';
 import { Clock, Users, Trophy, ChevronLeft, X, Palette, LayoutGrid, Zap, Heart, Image as ImageIcon, Bot, Maximize, Minimize, RotateCcw } from 'lucide-react';
@@ -21,7 +21,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
   const pieces = useRef<Map<number, PIXI.Container>>(new Map());
   const channelRef = useRef<any>(null);
   const socketRef = useRef<Socket | null>(null);
-  const textureAliasRef = useRef<string | null>(null);
+  const textureRef = useRef<PIXI.Texture | null>(null);
   const gatherBordersRef = useRef<(() => void) | null>(null);
   const gatherByColorRef = useRef<((quick?: boolean) => void) | null>(null);
   const createMosaicFromImageRef = useRef<((imageUrl: string, quick?: boolean, gapMultiplier?: number) => void) | null>(null);
@@ -30,6 +30,8 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
   const isColorBotRunningRef = useRef(false);
   const isCompletedRef = useRef(false);
   const worldRef = useRef<PIXI.Container | null>(null);
+  const minZoomRef = useRef<number>(0.1);
+  const maxZoomRef = useRef<number>(5.0);
   const miniPadDragRef = useRef<{ x: number, y: number, isDragging: boolean, moved: boolean } | null>(null);
   const zoomPadDragRef = useRef<{ x: number, isDragging: boolean } | null>(null);
 
@@ -195,7 +197,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
         });
 
         if (!isMounted) {
-          app.destroy(true);
+          app.destroy(true, { children: true, texture: true });
           return;
         }
 
@@ -272,7 +274,6 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             selectedCluster.forEach(id => {
               const p = pieces.current.get(id)!;
               p.zIndex = topZIndex;
-              p.filters = [new DropShadowFilter({ offset: { x: 4, y: 4 }, blur: 4, alpha: 0.5, color: 0x000000, quality: 3, resolution: Math.min(window.devicePixelRatio || 1, 2) })];
               selectedOffsets.set(id, { x: localPos.x - p.x, y: localPos.y - p.y });
               targetPositions.delete(id);
             });
@@ -343,7 +344,6 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                 selectedCluster.forEach(id => {
                   const p = pieces.current.get(id)!;
                   p.zIndex = 999999;
-                  p.filters = [new DropShadowFilter({ offset: { x: 4, y: 4 }, blur: 4, alpha: 0.5, color: 0x000000, quality: 3, resolution: Math.min(window.devicePixelRatio || 1, 2) })];
                   // Update offset so the piece starts moving smoothly from its current position without jumping
                   selectedOffsets.set(id, { x: currentLocalPos.x - p.x, y: currentLocalPos.y - p.y });
                 });
@@ -394,7 +394,6 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                 dragCluster.forEach(id => {
                   const p = pieces.current.get(id)!;
                   p.zIndex = 999999;
-                  p.filters = [new DropShadowFilter({ offset: { x: 4, y: 4 }, blur: 4, alpha: 0.5, color: 0x000000, quality: 3, resolution: Math.min(window.devicePixelRatio || 1, 2) })];
                   p.y -= currentShiftY;
                   updates.push({ pieceId: id, x: p.x, y: p.y });
                 });
@@ -468,7 +467,6 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             dragCluster.forEach(id => {
               const p = pieces.current.get(id)!;
               p.zIndex = topZIndex;
-              p.filters = [];
             });
 
             const snapped = snapCluster(dragCluster);
@@ -492,7 +490,6 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
               selectedCluster.forEach(id => {
                 const p = pieces.current.get(id)!;
                 p.zIndex = topZIndex;
-                p.filters = [];
               });
             }
 
@@ -687,7 +684,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           const worldX = (x - world.x) / world.scale.x;
           const worldY = (y - world.y) / world.scale.y;
 
-          const newScale = Math.max(0.1, Math.min(world.scale.x * scaleMultiplier, 5));
+          const newScale = Math.max(minZoomRef.current, Math.min(world.scale.x * scaleMultiplier, maxZoomRef.current));
           world.scale.set(newScale);
 
           world.x = x - worldX * world.scale.x;
@@ -753,7 +750,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             
             // 위로 드래그하면 축소, 아래로 드래그하면 확대
             const scaleMultiplier = Math.exp(deltaY * 0.01);
-            const newScale = Math.max(0.1, Math.min(doubleTapInitialScale * scaleMultiplier, 5));
+            const newScale = Math.max(minZoomRef.current, Math.min(doubleTapInitialScale * scaleMultiplier, maxZoomRef.current));
             world.scale.set(newScale);
 
             const rect = canvas.getBoundingClientRect();
@@ -766,7 +763,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             e.preventDefault();
             const currentDistance = getDistance(e.touches);
             const scaleMultiplier = currentDistance / initialDistance;
-            const newScale = Math.max(0.1, Math.min(initialScale * scaleMultiplier, 5));
+            const newScale = Math.max(minZoomRef.current, Math.min(initialScale * scaleMultiplier, maxZoomRef.current));
             
             world.scale.set(newScale);
 
@@ -787,32 +784,34 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
         canvas.addEventListener('touchcancel', updateTouches, { passive: false });
 
         // 2. 이미지 로드 및 조각 생성
-        const alias = `puzzleImage_${roomId}_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-        textureAliasRef.current = alias;
-        
         let texture;
-        try {
-          PIXI.Assets.add({ alias, src: imageUrl, data: { crossOrigin: 'anonymous' } });
-          texture = await PIXI.Assets.load(alias);
-        } catch (e) {
-          console.error('Error loading texture:', e);
-        }
-        
-        if (!isMounted) return;
-        if (!texture) {
-          console.error('Failed to load texture');
-          return;
-        }
+        let img: HTMLImageElement;
 
-        // Calculate optimal background color based on image brightness
         try {
-          const img = new Image();
+          img = new Image();
           img.crossOrigin = 'anonymous';
           img.src = imageUrl;
           await new Promise((resolve, reject) => {
             img.onload = resolve;
             img.onerror = reject;
           });
+          
+          if (!isMounted) return;
+          
+          texture = PIXI.Texture.from(img);
+          textureRef.current = texture;
+        } catch (e) {
+          console.error('Error loading texture:', e);
+        }
+        
+        if (!isMounted) return;
+        if (!texture || !img) {
+          console.error('Failed to load texture');
+          return;
+        }
+
+        // Calculate optimal background color based on image brightness
+        try {
           const colorCanvas = document.createElement('canvas');
           colorCanvas.width = 50;
           colorCanvas.height = 50;
@@ -918,12 +917,24 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
         const paddedWidth = contentWidth + paddingX * 2;
         const paddedHeight = contentHeight + paddingY * 2 + (topMenuHeight / (app.screen.height / contentHeight));
         
-        const initialFitScale = Math.min(app.screen.width / paddedWidth, app.screen.height / paddedHeight, 1);
-        world.scale.set(initialFitScale);
+        // 1. 최소 줌 배율: 전체 퍼즐판이 화면에 다 들어오는 배율 (여유를 위해 0.8 곱함)
+        const minFitScale = Math.min(app.screen.width / paddedWidth, app.screen.height / paddedHeight);
+        minZoomRef.current = minFitScale * 0.8;
+        
+        // 2. 조각의 시각적 목표 크기 (화면에서 150px 정도로 보이게)
+        const TARGET_VISUAL_SIZE = 150;
+        const pieceBaseScale = TARGET_VISUAL_SIZE / Math.min(pieceWidth, pieceHeight);
+        
+        // 3. 최대 줌 배율: 목표 크기의 1배까지 확대 허용
+        maxZoomRef.current = pieceBaseScale * 1.0;
+        
+        // 4. 초기 줌 배율: 퍼즐방 입장 시 전체 퍼즐판이 다 보이는 최소 줌 수준으로 시작
+        const startingScale = minFitScale;
+        world.scale.set(startingScale);
         
         // Center the content, shifting down slightly to account for the top menu
-        world.x = (app.screen.width - contentWidth * initialFitScale) / 2 - minX * initialFitScale;
-        world.y = (app.screen.height - contentHeight * initialFitScale) / 2 - minY * initialFitScale + (topMenuHeight / 2);
+        world.x = (app.screen.width - contentWidth * startingScale) / 2 - minX * startingScale;
+        world.y = (app.screen.height - contentHeight * startingScale) / 2 - minY * startingScale + (topMenuHeight / 2);
 
         // 퍼즐 판 배경 그리기
         const boardBg = new PIXI.Graphics();
@@ -1035,7 +1046,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
         const zoomToCompletedPuzzle = (animate = true) => {
           const maxDim = Math.max(boardWidth, boardHeight);
           const boundingBoxSize = maxDim * 1.1; // 좀 더 타이트하게 줌인
-          const targetScale = Math.min(app.screen.width / boundingBoxSize, app.screen.height / boundingBoxSize, 5);
+          const targetScale = Math.min(app.screen.width / boundingBoxSize, app.screen.height / boundingBoxSize, maxZoomRef.current);
           const targetX = (app.screen.width - boardWidth * targetScale) / 2;
           const targetY = (app.screen.height - boardHeight * targetScale) / 2;
 
@@ -1690,7 +1701,6 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             // Grab piece
             topZIndex++;
             p.zIndex = topZIndex;
-            p.filters = [new DropShadowFilter({ offset: { x: 4, y: 4 }, blur: 4, alpha: 0.5, color: 0x000000, quality: 3, resolution: Math.min(window.devicePixelRatio || 1, 2) })];
             
             // Move cursor and piece to target
             const startX = p.x;
@@ -1702,6 +1712,10 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             
             await new Promise<void>(resolve => {
               const animate = () => {
+                if (!isBotRunningRef.current) {
+                  resolve();
+                  return;
+                }
                 const now = Date.now();
                 const progress = Math.min(1, (now - startTime) / duration);
                 const ease = progress < 0.5 ? 2 * progress * progress : -1 + (4 - 2 * progress) * progress;
@@ -1737,7 +1751,6 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             });
             
             // Drop piece
-            p.filters = [];
             const updates = [{ pieceId: id, x: p.x, y: p.y }];
             sendMoveBatch(updates);
             batchedDbUpdates.push({ piece_index: id, x: p.x, y: p.y, is_locked: false });
@@ -2019,7 +2032,6 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
 
             topZIndex++;
             p.zIndex = topZIndex;
-            p.filters = [new DropShadowFilter({ offset: { x: 4, y: 4 }, blur: 4, alpha: 0.5, color: 0x000000, quality: 3, resolution: Math.min(window.devicePixelRatio || 1, 2) })];
             
             const distToTarget = Math.hypot(target.x - p.x, target.y - p.y);
             const startX = cursorData!.container.x;
@@ -2067,7 +2079,6 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
               requestAnimationFrame(animate);
             });
             
-            p.filters = [];
             const updates = [{ pieceId: targetPieceId, x: p.x, y: p.y }];
             sendMoveBatch(updates);
             batchedDbUpdates.push({ piece_index: targetPieceId, x: p.x, y: p.y, is_locked: false });
@@ -2412,6 +2423,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
         createMosaicFromImageRef.current = createMosaicFromImage;
 
         const { data: existingPieces } = await supabase.from('pixi_pieces').select('*').eq('room_id', roomId);
+        if (!isMounted) return;
         const hasExistingState = existingPieces && existingPieces.length > 0;
         const pieceStates = new Map<number, any>();
         if (hasExistingState) {
@@ -2534,6 +2546,8 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           }
         }
 
+        if (!isMounted) return;
+
         let initialPlacedCount = 0;
         for (let i = 0; i < PIECE_COUNT; i++) {
           const col = i % GRID_COLS;
@@ -2556,35 +2570,79 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           const matrix = new PIXI.Matrix();
           matrix.translate(-col * pieceWidth, -row * pieceHeight);
           
+          // 1. 조각의 기본 크기를 기준으로 상대적인 비율(%) 계산
+          // 조각 크기에 비례하여 입체감을 주면, 어떤 해상도나 조각 수에서도 조각 대비 일정한 비율의 입체감이 유지됩니다.
+          const baseSize = Math.min(pieceWidth, pieceHeight);
+          
+          // 2. 조각 크기 대비 퍼센트(%)로 두께 설정
+          // 테두리는 조각 크기의 0.5%, 베벨(입체)은 3.0%(기존 1.5%의 2배), 하이라이트는 3%
+          const strokeWidth = Math.max(0.2, baseSize * 0.005);
+          const bevelThickness = Math.max(1.0, baseSize * 0.03);
+          const highlightStrokeWidth = Math.max(1, baseSize * 0.03);
+
+          // 3. 텍스처 해상도 계산 (조각당 200px 목표)
+          // 원본 이미지를 그대로 사용하되, 렌더링 시 해상도를 높여서 선명하게 만듭니다.
+          const TARGET_PIECE_PIXELS = 200;
+          const baseDpr = Math.min(window.devicePixelRatio || 1, 2);
+          // 조각의 실제 픽셀 크기가 목표(200px)보다 작으면, 그 비율만큼 해상도를 높입니다.
+          const textureResolution = Math.max(baseDpr, TARGET_PIECE_PIXELS / Math.max(pieceWidth, pieceHeight));
+          const filterResolution = textureResolution * 2; // 필터 해상도를 2배로 높여 안티앨리어싱 효과 강화
+
           pieceGraphics.fill({ texture: texture, matrix: matrix, textureSpace: 'global' });
-          pieceGraphics.stroke({ width: 2, color: 0x000000, alpha: 0.3 });
+          pieceGraphics.stroke({ width: strokeWidth, color: 0x000000, alpha: 0.2 });
 
-          // 입체감을 위한 필터 적용 (Bevel + DropShadow)
-          const filterResolution = Math.min(window.devicePixelRatio || 1, 2);
-          
-          // 외곽선을 미세하게 뭉개어 베벨(입체) 효과가 부드럽게 먹히도록 유도 (계단 현상 제거)
-          const edgeSmoothFilter = new PIXI.BlurFilter({ strength: 0.5, quality: 4 });
-          edgeSmoothFilter.resolution = filterResolution;
+          // 입체감을 위한 필터 적용 (Bevel) - 기존 BevelFilter 대신 직접 그려서 블러 처리
+          // 흰색 라인을 3% 이동시켜서 그리기 위한 컨테이너 구성
+          const renderContainer = new PIXI.Container();
+          renderContainer.addChild(pieceGraphics);
 
-          const bevelFilter = new BevelFilter({
-            thickness: 2,
-            lightColor: 0xffffff,
-            lightAlpha: 0.6,
-            shadowColor: 0x000000,
-            shadowAlpha: 0.6,
-          });
-          bevelFilter.resolution = filterResolution;
+          const whiteLineGraphics = new PIXI.Graphics();
+          // 왼쪽 아래에서 시작하여 왼쪽 변을 타고 올라간 뒤, 위쪽 변을 타고 오른쪽으로 이동
+          whiteLineGraphics.moveTo(0, pieceHeight);
+          drawEdge(whiteLineGraphics, 0, pieceHeight, 0, 0, leftTab, tabDepth);
+          drawEdge(whiteLineGraphics, 0, 0, pieceWidth, 0, topTab, tabDepth);
+          // 오른쪽과 아래쪽 변은 그리지 않음 (오른쪽 아래 흰색 라인 제거)
           
-          const dropShadowFilter = new DropShadowFilter({
-            offset: { x: 2, y: 2 },
-            blur: 2,
-            alpha: 0.4,
-            color: 0x000000,
-            quality: 3,
-            resolution: filterResolution,
-          });
-          
-          pieceGraphics.filters = [edgeSmoothFilter, bevelFilter, dropShadowFilter];
+          const lineOffset = baseSize * 0.03; // 3% 이동
+          whiteLineGraphics.x = lineOffset;
+          whiteLineGraphics.y = lineOffset;
+          whiteLineGraphics.stroke({ width: bevelThickness, color: 0xffffff, alpha: 0.175 });
+
+          // 흰색 라인에 블러(Blur) 효과 적용하여 부드럽게 만들기
+          const blurFilter = new PIXI.BlurFilter();
+          blurFilter.blur = Math.max(0.5, baseSize * 0.0075); // 기존 0.015의 절반으로 블러 강도 조절
+          whiteLineGraphics.filters = [blurFilter];
+
+          const blackLineGraphics = new PIXI.Graphics();
+          // 위쪽 오른쪽에서 시작하여 오른쪽 변을 타고 내려간 뒤, 아래쪽 변을 타고 왼쪽으로 이동
+          blackLineGraphics.moveTo(pieceWidth, 0);
+          drawEdge(blackLineGraphics, pieceWidth, 0, pieceWidth, pieceHeight, rightTab, tabDepth);
+          drawEdge(blackLineGraphics, pieceWidth, pieceHeight, 0, pieceHeight, bottomTab, tabDepth);
+          // 왼쪽과 위쪽 변은 그리지 않음
+
+          blackLineGraphics.x = -lineOffset;
+          blackLineGraphics.y = -lineOffset;
+          blackLineGraphics.stroke({ width: bevelThickness, color: 0x000000, alpha: 0.2 });
+
+          // 검은색 라인(그림자)에도 블러(Blur) 효과 적용
+          const blackBlurFilter = new PIXI.BlurFilter();
+          blackBlurFilter.blur = Math.max(0.5, baseSize * 0.0075);
+          blackLineGraphics.filters = [blackBlurFilter];
+
+          const maskGraphics = new PIXI.Graphics();
+          maskGraphics.moveTo(0, 0);
+          drawEdge(maskGraphics, 0, 0, pieceWidth, 0, topTab, tabDepth);
+          drawEdge(maskGraphics, pieceWidth, 0, pieceWidth, pieceHeight, rightTab, tabDepth);
+          drawEdge(maskGraphics, pieceWidth, pieceHeight, 0, pieceHeight, bottomTab, tabDepth);
+          drawEdge(maskGraphics, 0, pieceHeight, 0, 0, leftTab, tabDepth);
+          maskGraphics.closePath();
+          maskGraphics.fill({ color: 0xffffff });
+
+          whiteLineGraphics.mask = maskGraphics;
+          blackLineGraphics.mask = maskGraphics;
+          renderContainer.addChild(maskGraphics);
+          renderContainer.addChild(whiteLineGraphics);
+          renderContainer.addChild(blackLineGraphics);
 
           const highlightGraphics = new PIXI.Graphics();
           highlightGraphics.moveTo(0, 0);
@@ -2593,13 +2651,17 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           drawEdge(highlightGraphics, pieceWidth, pieceHeight, 0, pieceHeight, bottomTab, tabDepth);
           drawEdge(highlightGraphics, 0, pieceHeight, 0, 0, leftTab, tabDepth);
           highlightGraphics.closePath();
-          highlightGraphics.stroke({ width: 4, color: 0x00ff00, alpha: 0.8 });
+          highlightGraphics.stroke({ width: highlightStrokeWidth, color: 0x00ff00, alpha: 0.8 });
+
+          const bounds = pieceGraphics.getLocalBounds();
+          const offsetX = bounds.minX !== undefined ? bounds.minX : bounds.x;
+          const offsetY = bounds.minY !== undefined ? bounds.minY : bounds.y;
+          const frame = new PIXI.Rectangle(offsetX, offsetY, bounds.width, bounds.height);
 
           // 렌더링 최적화: 벡터 그래픽을 텍스처로 변환하여 Sprite로 사용
-          // 메모리 부족(OOM) 방지를 위해 해상도는 기기 해상도(최대 2배)로 제한
-          const textureResolution = Math.min(window.devicePixelRatio || 1, 2);
           const pieceTexture = app.renderer.generateTexture({
-            target: pieceGraphics,
+            target: renderContainer,
+            frame: frame,
             resolution: textureResolution,
             antialias: true
           });
@@ -2607,14 +2669,11 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           
           const highlightTexture = app.renderer.generateTexture({
             target: highlightGraphics,
+            frame: frame,
             resolution: textureResolution,
             antialias: true
           });
           const highlightSprite = new PIXI.Sprite(highlightTexture);
-          
-          const bounds = pieceGraphics.getLocalBounds();
-          const offsetX = bounds.minX !== undefined ? bounds.minX : bounds.x;
-          const offsetY = bounds.minY !== undefined ? bounds.minY : bounds.y;
           
           pieceSprite.x = offsetX;
           pieceSprite.y = offsetY;
@@ -2628,7 +2687,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           pieceContainer.addChild(pieceSprite);
 
           // 메모리 누수 방지를 위해 원본 그래픽 파괴
-          pieceGraphics.destroy();
+          renderContainer.destroy({ children: true });
           highlightGraphics.destroy();
 
           // 퍼즐판 바깥에 겹치지 않게 배치
@@ -2716,7 +2775,6 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
               dragCluster.forEach(id => {
                 const p = pieces.current.get(id)!;
                 p.zIndex = 999999;
-                p.filters = [new DropShadowFilter({ offset: { x: 4, y: 4 }, blur: 4, alpha: 0.5, color: 0x000000, quality: 3, resolution: Math.min(window.devicePixelRatio || 1, 2) })];
                 updates.push({ pieceId: id, x: p.x, y: p.y });
               });
               sendLockBatch(Array.from(dragCluster));
@@ -2849,7 +2907,6 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                 
                 pieceContainer.alpha = 0.5;
                 pieceContainer.eventMode = 'none';
-                pieceContainer.filters = [new DropShadowFilter({ offset: { x: 4, y: 4 }, blur: 4, alpha: 0.5, color: 0x000000, quality: 3, resolution: Math.min(window.devicePixelRatio || 1, 2) })];
               }
             });
           })
@@ -2858,7 +2915,6 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
               const pieceContainer = pieces.current.get(id);
               if (pieceContainer) {
                 pieceContainer.alpha = 1;
-                pieceContainer.filters = [];
                 
                 // 완전히 맞춰진 조각이 아니라면 다시 상호작용 가능하게 복구
                 const col = id % GRID_COLS;
@@ -2960,15 +3016,15 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
       isMounted = false;
       isBotRunningRef.current = false;
       isColorBotRunningRef.current = false;
+      if (textureRef.current) {
+        textureRef.current.destroy(true);
+        textureRef.current = null;
+      }
       if (appInstance) {
-        appInstance.destroy(true);
+        appInstance.destroy(true, { children: true, texture: true });
       }
       if (channelRef.current) {
         channelRef.current.unsubscribe();
-      }
-      if (textureAliasRef.current) {
-        PIXI.Assets.unload(textureAliasRef.current).catch(() => {});
-        textureAliasRef.current = null;
       }
     };
   }, [imageUrl]);
@@ -3002,7 +3058,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
       const worldX = (centerX - world.x) / world.scale.x;
       const worldY = (centerY - world.y) / world.scale.y;
       
-      const newScale = Math.max(0.1, Math.min(world.scale.x * zoomFactor, 5));
+      const newScale = Math.max(minZoomRef.current, Math.min(world.scale.x * zoomFactor, maxZoomRef.current));
       world.scale.set(newScale);
       
       world.x = centerX - worldX * world.scale.x;
