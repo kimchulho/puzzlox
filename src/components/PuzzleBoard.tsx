@@ -862,12 +862,13 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
         const PIECE_COUNT = GRID_COLS * GRID_ROWS;
         setTotalPieces(PIECE_COUNT);
 
-        const pieceWidth = texture.width / GRID_COLS;
-        const pieceHeight = texture.height / GRID_ROWS;
+        const TARGET_PIECE_SIZE = 100;
+        const pieceWidth = TARGET_PIECE_SIZE;
+        const boardWidth = pieceWidth * GRID_COLS;
+        const boardHeight = boardWidth / aspectRatio;
+        const pieceHeight = boardHeight / GRID_ROWS;
+        
         const tabDepth = Math.min(pieceWidth, pieceHeight) * 0.2;
-
-        const boardWidth = texture.width;
-        const boardHeight = texture.height;
         const boardStartX = 0;
         const boardStartY = 0;
 
@@ -2544,13 +2545,14 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           drawEdge(pieceGraphics, 0, pieceHeight, 0, 0, leftTab, tabDepth);
           
           const matrix = new PIXI.Matrix();
+          matrix.scale(boardWidth / texture.width, boardHeight / texture.height);
           matrix.translate(-col * pieceWidth, -row * pieceHeight);
           
           // 조각 크기에 비례하는 두께 계산 (조각 너비의 약 1.5%)
           const strokeWidth = Math.max(1.5, pieceWidth * 0.015);
           
           pieceGraphics.fill({ texture: texture, matrix: matrix, textureSpace: 'global' });
-          pieceGraphics.stroke({ width: strokeWidth, color: 0x000000, alpha: 0.3 });
+          // 외곽선 제거 요청으로 인해 stroke 부분 삭제
 
           const highlightGraphics = new PIXI.Graphics();
           highlightGraphics.moveTo(0, 0);
@@ -2562,8 +2564,8 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           highlightGraphics.stroke({ width: strokeWidth * 2, color: 0x00ff00, alpha: 0.8 });
 
           // 렌더링 최적화: 벡터 그래픽을 텍스처로 변환하여 Sprite로 사용
-          // 퍼즐 조각 텍스처 해상도를 100px 수준으로 제한하여 메모리/성능 최적화
-          const targetResolution = 100 / pieceWidth;
+          // 퍼즐 조각 텍스처 해상도를 기기 픽셀 밀도에 맞춰 동적으로 설정하여 항상 선명하게 유지
+          const targetResolution = window.devicePixelRatio || 1;
           
           const pieceTexture = app.renderer.generateTexture({
             target: pieceGraphics,
