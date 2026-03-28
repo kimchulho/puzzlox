@@ -2559,10 +2559,19 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           highlightGraphics.stroke({ width: 4, color: 0x00ff00, alpha: 0.8 });
 
           // 렌더링 최적화: 벡터 그래픽을 텍스처로 변환하여 Sprite로 사용
-          const pieceTexture = app.renderer.generateTexture(pieceGraphics);
+          // 퍼즐 조각 텍스처 해상도를 100px 수준으로 제한하여 메모리/성능 최적화
+          const targetResolution = 100 / pieceWidth;
+          
+          const pieceTexture = app.renderer.generateTexture({
+            target: pieceGraphics,
+            resolution: targetResolution
+          });
           const pieceSprite = new PIXI.Sprite(pieceTexture);
           
-          const highlightTexture = app.renderer.generateTexture(highlightGraphics);
+          const highlightTexture = app.renderer.generateTexture({
+            target: highlightGraphics,
+            resolution: targetResolution
+          });
           const highlightSprite = new PIXI.Sprite(highlightTexture);
           
           const bounds = pieceGraphics.getLocalBounds();
