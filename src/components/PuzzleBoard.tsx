@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import * as PIXI from 'pixi.js';
 import { createClient } from '@supabase/supabase-js';
 import { throttle } from 'lodash';
-import { Clock, Users, Trophy, ChevronLeft, X, Palette, LayoutGrid, Zap, Heart, Image as ImageIcon, Bot, Maximize, Minimize, RotateCcw } from 'lucide-react';
+import { Clock, Users, Trophy, ChevronLeft, X, Palette, LayoutGrid, Zap, Heart, Image as ImageIcon, Bot, Maximize, Minimize, RotateCcw, Share2, Check } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 import confetti from 'canvas-confetti';
 
@@ -51,6 +51,15 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
   const [mosaicGap, setMosaicGap] = useState(1.6);
   const [bgColor, setBgColor] = useState('#1e293b'); // default slate-800
   const [maxPlayers, setMaxPlayers] = useState(8);
+  const [isCopied, setIsCopied] = useState(false);
+
+  const handleShareLink = () => {
+    const url = `${window.location.origin}/?room=${roomId}`;
+    navigator.clipboard.writeText(url).then(() => {
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 2000);
+    });
+  };
 
   const PRESET_COLORS = [
     '#0f172a', // slate-900
@@ -261,6 +270,18 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           if (activeTouches > 1 || isDoubleTapZooming) return;
           
           if (selectedCluster) {
+            if (e.pointerType === 'mouse') {
+              const snapped = snapCluster(selectedCluster);
+              sendUnlockBatch(Array.from(selectedCluster));
+              selectedCluster.forEach(id => {
+                const p = pieces.current.get(id)!;
+                const lockIcon = p.getChildByName('lockIcon');
+                if (lockIcon) lockIcon.visible = false;
+              });
+              selectedCluster = null;
+              return;
+            }
+            
             isDraggingSelected = true;
             selectedMoved = false;
             selectedTouchStartPos = { x: e.global.x, y: e.global.y };
@@ -327,6 +348,22 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             }
           }
 
+          if (selectedCluster && e.pointerType === 'mouse' && !isDraggingSelected && !isDragging) {
+            const localPos = e.getLocalPosition(world);
+            const updates: any[] = [];
+            
+            selectedCluster.forEach(id => {
+              const p = pieces.current.get(id)!;
+              const offset = selectedOffsets.get(id)!;
+              p.x = localPos.x - offset.x;
+              p.y = localPos.y - offset.y;
+              updates.push({ pieceId: id, x: p.x, y: p.y });
+            });
+            
+            sendMoveBatch(updates);
+            return;
+          }
+
           if (isDraggingSelected && selectedCluster) {
             if (activeTouches > 1) {
               isDraggingSelected = false;
@@ -370,60 +407,45 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
               return;
             }
             
-            if (e.pointerType === 'touch') {
-              const dx = e.global.x - touchStartPos.x;
-              const dy = e.global.y - touchStartPos.y;
+            const dx = e.global.x - touchStartPos.x;
+            const dy = e.global.y - touchStartPos.y;
+            
+            if (!isTouchDraggingPiece && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
+              isTouchDraggingPiece = true;
+              topZIndex++;
+              currentShiftY = e.pointerType === 'touch' ? pieceHeight * 1.6 : 0;
               
-              if (!isTouchDraggingPiece && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
-                isTouchDraggingPiece = true;
-                topZIndex++;
-                currentShiftY = pieceHeight * 1.6;
-                
-                if (selectedCluster) {
-                  selectedCluster.forEach(id => {
-                    const p = pieces.current.get(id)!;
-                    const lockIcon = p.getChildByName('lockIcon');
-                    if (lockIcon) lockIcon.visible = false;
-                  });
-                  selectedCluster = null;
-                }
-                
-                const updates: any[] = [];
-                dragCluster.forEach(id => {
+              if (selectedCluster) {
+                selectedCluster.forEach(id => {
                   const p = pieces.current.get(id)!;
-                  p.zIndex = 999999;
-                  p.y -= currentShiftY;
-                  updates.push({ pieceId: id, x: p.x, y: p.y });
+                  const lockIcon = p.getChildByName('lockIcon');
+                  if (lockIcon) lockIcon.visible = false;
                 });
-                
-                sendLockBatch(Array.from(dragCluster));
-                sendMoveBatch(updates);
+                selectedCluster = null;
               }
               
-              if (isTouchDraggingPiece) {
-                const localPos = e.getLocalPosition(world);
-                const updates: any[] = [];
-                dragCluster.forEach(id => {
-                  const p = pieces.current.get(id)!;
-                  const offset = dragOffsets.get(id)!;
-                  p.x = localPos.x - offset.x;
-                  p.y = localPos.y - offset.y - currentShiftY;
-                  updates.push({ pieceId: id, x: p.x, y: p.y });
-                });
-                sendMoveBatch(updates);
-              }
-            } else {
+              const updates: any[] = [];
+              dragCluster.forEach(id => {
+                const p = pieces.current.get(id)!;
+                p.zIndex = 999999;
+                p.y -= currentShiftY;
+                updates.push({ pieceId: id, x: p.x, y: p.y });
+              });
+              
+              sendLockBatch(Array.from(dragCluster));
+              sendMoveBatch(updates);
+            }
+            
+            if (isTouchDraggingPiece) {
               const localPos = e.getLocalPosition(world);
               const updates: any[] = [];
-              
               dragCluster.forEach(id => {
                 const p = pieces.current.get(id)!;
                 const offset = dragOffsets.get(id)!;
                 p.x = localPos.x - offset.x;
-                p.y = localPos.y - offset.y;
+                p.y = localPos.y - offset.y - currentShiftY;
                 updates.push({ pieceId: id, x: p.x, y: p.y });
               });
-              
               sendMoveBatch(updates);
             }
             return;
@@ -452,6 +474,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                 const lockIcon = p.getChildByName('lockIcon');
                 if (lockIcon) lockIcon.visible = true;
                 p.zIndex = topZIndex;
+                selectedOffsets.set(id, dragOffsets.get(id)!);
               });
               
               sendLockBatch(Array.from(selectedCluster));
@@ -2736,6 +2759,19 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             if (activeTouches > 1 || isDoubleTapZooming) return; // 핀치 줌/더블탭 줌 중에는 드래그 시작 방지
             
             if (selectedCluster) {
+              if (e.pointerType === 'mouse') {
+                const snapped = snapCluster(selectedCluster);
+                sendUnlockBatch(Array.from(selectedCluster));
+                selectedCluster.forEach(id => {
+                  const p = pieces.current.get(id)!;
+                  const lockIcon = p.getChildByName('lockIcon');
+                  if (lockIcon) lockIcon.visible = false;
+                });
+                selectedCluster = null;
+                e.stopPropagation();
+                return;
+              }
+              
               // 선택된 조각이 있을 때는 무조건 배경(stage)으로 이벤트를 넘겨서
               // 아무 곳이나 드래그/터치 시 선택된 조각이 제어되도록 함
               
@@ -2766,26 +2802,13 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             });
             currentShiftY = 0;
             
-            if (e.pointerType !== 'touch') {
-              isTouchDraggingPiece = true;
-              topZIndex++;
-              const updates: any[] = [];
-              dragCluster.forEach(id => {
-                const p = pieces.current.get(id)!;
-                p.zIndex = 999999;
-                updates.push({ pieceId: id, x: p.x, y: p.y });
-              });
-              sendLockBatch(Array.from(dragCluster));
-              sendMoveBatch(updates);
-            } else {
-              // On touch, we don't start dragging immediately, but we should bring the piece to the top
-              // so it's visible if it's selected.
-              topZIndex++;
-              dragCluster.forEach(id => {
-                const p = pieces.current.get(id)!;
-                p.zIndex = topZIndex;
-              });
-            }
+            // On both touch and mouse, we don't start dragging immediately.
+            // We wait for movement to distinguish between tap and drag.
+            topZIndex++;
+            dragCluster.forEach(id => {
+              const p = pieces.current.get(id)!;
+              p.zIndex = topZIndex;
+            });
           });
 
           world.addChild(pieceContainer);
@@ -3128,13 +3151,25 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
       <div className="absolute top-0 left-0 w-full z-50 bg-slate-900/80 backdrop-blur-sm border-b border-slate-700/50 p-1.5 sm:p-2 flex flex-col sm:flex-row items-center justify-between gap-1.5 sm:gap-2 text-white">
         {/* Top Row (Mobile) / Left Side (Desktop) */}
         <div className="flex items-center justify-between w-full sm:w-auto gap-1.5 sm:gap-2">
-          <button 
-            onClick={onBack}
-            className="flex items-center justify-center bg-slate-800 hover:bg-slate-700 w-8 h-8 sm:w-9 sm:h-9 rounded-lg transition-colors border border-slate-600 shrink-0"
-            title="Back to Lobby"
-          >
-            <ChevronLeft size={20} className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button 
+              onClick={onBack}
+              className="flex items-center justify-center bg-slate-800 hover:bg-slate-700 w-8 h-8 sm:w-9 sm:h-9 rounded-lg transition-colors border border-slate-600 shrink-0"
+              title="Back to Lobby"
+            >
+              <ChevronLeft size={20} className="w-5 h-5" />
+            </button>
+            <div className="flex items-center gap-1.5 bg-slate-800/50 px-2 h-8 sm:h-9 rounded-lg border border-slate-700/50 shrink-0">
+              <span className="text-xs sm:text-sm font-medium text-slate-300">#{roomId}</span>
+              <button
+                onClick={handleShareLink}
+                className="flex items-center justify-center hover:text-white text-slate-400 transition-colors"
+                title="Share Link"
+              >
+                {isCopied ? <Check size={14} className="text-emerald-400" /> : <Share2 size={14} />}
+              </button>
+            </div>
+          </div>
           
           <div className="flex items-center gap-2 bg-slate-800/50 px-2 sm:px-3 h-8 sm:h-9 rounded-lg border border-slate-700/50 flex-1 sm:flex-none justify-center">
             <div className="w-full max-w-[60px] sm:max-w-none sm:w-32 bg-slate-700 rounded-full h-2 overflow-hidden">
