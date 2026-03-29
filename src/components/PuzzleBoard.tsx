@@ -382,8 +382,8 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                 if (selectedCluster) {
                   selectedCluster.forEach(id => {
                     const p = pieces.current.get(id)!;
-                    const highlight = p.getChildByName('highlight');
-                    if (highlight) highlight.visible = false;
+                    const lockIcon = p.getChildByName('lockIcon');
+                    if (lockIcon) lockIcon.visible = false;
                     const shadow = (p as any).shadowSprite;
                     if (shadow) shadow.visible = false;
                   });
@@ -451,10 +451,10 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
               topZIndex++;
               selectedCluster.forEach(id => {
                 const p = pieces.current.get(id)!;
-                const highlight = p.getChildByName('highlight');
-                if (highlight) highlight.visible = true;
+                const lockIcon = p.getChildByName('lockIcon');
+                if (lockIcon) lockIcon.visible = true;
                 const shadow = (p as any).shadowSprite;
-                if (shadow) shadow.visible = true;
+                if (shadow) shadow.visible = false;
                 p.zIndex = topZIndex;
               });
               
@@ -475,8 +475,8 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             if (snapped && selectedCluster && dragCluster.has(Array.from(selectedCluster)[0])) {
               selectedCluster.forEach(id => {
                 const p = pieces.current.get(id)!;
-                const highlight = p.getChildByName('highlight');
-                if (highlight) highlight.visible = false;
+                const lockIcon = p.getChildByName('lockIcon');
+                if (lockIcon) lockIcon.visible = false;
                 const shadow = (p as any).shadowSprite;
                 if (shadow) shadow.visible = false;
               });
@@ -484,8 +484,8 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             } else if (!selectedCluster || !dragCluster.has(Array.from(selectedCluster)[0])) {
               dragCluster.forEach(id => {
                 const p = pieces.current.get(id)!;
-                const highlight = p.getChildByName('highlight');
-                if (highlight) highlight.visible = false;
+                const lockIcon = p.getChildByName('lockIcon');
+                if (lockIcon) lockIcon.visible = false;
                 const shadow = (p as any).shadowSprite;
                 if (shadow) shadow.visible = false;
               });
@@ -512,8 +512,8 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                 sendUnlockBatch(Array.from(selectedCluster));
                 selectedCluster.forEach(id => {
                   const p = pieces.current.get(id)!;
-                  const highlight = p.getChildByName('highlight');
-                  if (highlight) highlight.visible = false;
+                  const lockIcon = p.getChildByName('lockIcon');
+                  if (lockIcon) lockIcon.visible = false;
                   const shadow = (p as any).shadowSprite;
                   if (shadow) shadow.visible = false;
                 });
@@ -533,8 +533,8 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                   sendUnlockBatch(Array.from(selectedCluster));
                   selectedCluster.forEach(id => {
                     const p = pieces.current.get(id)!;
-                    const highlight = p.getChildByName('highlight');
-                    if (highlight) highlight.visible = false;
+                    const lockIcon = p.getChildByName('lockIcon');
+                    if (lockIcon) lockIcon.visible = false;
                     const shadow = (p as any).shadowSprite;
                     if (shadow) shadow.visible = false;
                   });
@@ -556,10 +556,10 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                       sendLockBatch(newPieces);
                       newPieces.forEach(id => {
                         const p = pieces.current.get(id)!;
-                        const highlight = p.getChildByName('highlight');
-                        if (highlight) highlight.visible = true;
+                        const lockIcon = p.getChildByName('lockIcon');
+                        if (lockIcon) lockIcon.visible = true;
                         const shadow = (p as any).shadowSprite;
-                        if (shadow) shadow.visible = true;
+                        if (shadow) shadow.visible = false;
                         selectedCluster!.add(id);
                       });
                     }
@@ -578,6 +578,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           cursors.forEach((cursorData, username) => {
             cursorData.container.scale.set(1 / world.scale.x);
             
+            let isHoldingPiece = false;
             const lockedPieces = remoteLockedPieces.get(username);
             if (lockedPieces && lockedPieces.size > 0) {
               let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -593,12 +594,17 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
               if (minX !== Infinity) {
                 cursorData.targetX = (minX + maxX) / 2;
                 cursorData.targetY = (minY + maxY) / 2;
+                isHoldingPiece = true;
               }
             }
 
             const dx = cursorData.targetX - cursorData.container.x;
             const dy = cursorData.targetY - cursorData.container.y;
-            if (Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1) {
+            
+            if (isHoldingPiece) {
+              cursorData.container.x = cursorData.targetX;
+              cursorData.container.y = cursorData.targetY;
+            } else if (Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1) {
               cursorData.container.x += dx * 0.3;
               cursorData.container.y += dy * 0.3;
             }
@@ -1034,12 +1040,16 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             }
             
             // If it's selected or dragged, it already has a shadow
-            const highlight = p1.getChildByName('highlight');
+            const lockIcon = p1.getChildByName('lockIcon');
             const isBeingDragged = (isDragging && dragCluster && dragCluster.has(id)) || 
                                    (isDraggingSelected && selectedCluster && selectedCluster.has(id));
-            if ((highlight && highlight.visible) || isBeingDragged) {
+            if (isBeingDragged) {
               const shadow = (p1 as any).shadowSprite;
               if (shadow) shadow.visible = true;
+              return;
+            } else if (lockIcon && lockIcon.visible) {
+              const shadow = (p1 as any).shadowSprite;
+              if (shadow) shadow.visible = false;
               return;
             }
 
@@ -1076,22 +1086,32 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           }
         }, 50);
 
-        const sendLockBatch = (pieceIds: number[]) => {
+        const sendBotCursorMove = throttle((username: string, x: number, y: number) => {
+          if (channelRef.current) {
+            channelRef.current.send({
+              type: 'broadcast',
+              event: 'cursorMove',
+              payload: { username, x, y }
+            });
+          }
+        }, 100);
+
+        const sendLockBatch = (pieceIds: number[], userId?: string) => {
           if (channelRef.current) {
             channelRef.current.send({
               type: 'broadcast',
               event: 'lock',
-              payload: { pieceIds, userId: localStorage.getItem('puzzle_username') || 'unknown' }
+              payload: { pieceIds, userId: userId || localStorage.getItem('puzzle_username') || 'unknown' }
             });
           }
         };
 
-        const sendUnlockBatch = (pieceIds: number[]) => {
+        const sendUnlockBatch = (pieceIds: number[], userId?: string) => {
           if (channelRef.current) {
             channelRef.current.send({
               type: 'broadcast',
               event: 'unlock',
-              payload: { pieceIds, userId: localStorage.getItem('puzzle_username') || 'unknown' }
+              payload: { pieceIds, userId: userId || localStorage.getItem('puzzle_username') || 'unknown' }
             });
           }
         };
@@ -1443,8 +1463,8 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             if (Math.abs(p.x - targetX) < 1 && Math.abs(p.y - targetY) < 1) {
               p.eventMode = 'none';
               p.zIndex = 0;
-              const highlight = p.getChildByName('highlight');
-              if (highlight) highlight.visible = false;
+              const lockIcon = p.getChildByName('lockIcon');
+              if (lockIcon) lockIcon.visible = false;
               const shadow = (p as any).shadowSprite;
               if (shadow) shadow.visible = false;
               isLocked = true;
@@ -1474,8 +1494,8 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           sendUnlockBatch(Array.from(selectedCluster));
           selectedCluster.forEach(id => {
             const p = pieces.current.get(id)!;
-            const highlight = p.getChildByName('highlight');
-            if (highlight) highlight.visible = false;
+            const lockIcon = p.getChildByName('lockIcon');
+            if (lockIcon) lockIcon.visible = false;
             const shadow = (p as any).shadowSprite;
             if (shadow) shadow.visible = false;
           });
@@ -1690,15 +1710,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                 cursorData!.targetX = currentX;
                 cursorData!.targetY = currentY;
                 
-                channelRef.current?.send({
-                  type: 'broadcast',
-                  event: 'cursorMove',
-                  payload: {
-                    username: botUsername,
-                    x: currentX,
-                    y: currentY
-                  }
-                });
+                sendBotCursorMove(botUsername, currentX, currentY);
                 
                 if (progress < 1) {
                   requestAnimationFrame(animate);
@@ -1778,6 +1790,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             // Grab piece
             topZIndex++;
             p.zIndex = topZIndex;
+            sendLockBatch([id], botUsername);
             
             // Move cursor and piece to target
             const startX = p.x;
@@ -1804,16 +1817,6 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                 cursorData!.targetX = currentX;
                 cursorData!.targetY = currentY;
                 
-                channelRef.current?.send({
-                  type: 'broadcast',
-                  event: 'cursorMove',
-                  payload: {
-                    username: botUsername,
-                    x: currentX,
-                    y: currentY
-                  }
-                });
-                
                 sendMoveBatch([{ pieceId: id, x: currentX, y: currentY }]);
                 
                 if (progress < 1) {
@@ -1828,6 +1831,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             // Drop piece
             const updates = [{ pieceId: id, x: p.x, y: p.y }];
             sendMoveBatch(updates);
+            sendUnlockBatch([id], botUsername);
             batchedDbUpdates.push({ piece_index: id, x: p.x, y: p.y, is_locked: false });
             
             if (batchedDbUpdates.length >= 10) {
@@ -2048,15 +2052,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                 cursorData!.targetX = currentX;
                 cursorData!.targetY = currentY;
                 
-                channelRef.current?.send({
-                  type: 'broadcast',
-                  event: 'cursorMove',
-                  payload: {
-                    username: botUsername,
-                    x: currentX,
-                    y: currentY
-                  }
-                });
+                sendBotCursorMove(botUsername, currentX, currentY);
                 
                 if (progress < 1 && isColorBotRunningRef.current) {
                   requestAnimationFrame(animate);
@@ -2107,6 +2103,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
 
             topZIndex++;
             p.zIndex = topZIndex;
+            sendLockBatch([targetPieceId], botUsername);
             
             const distToTarget = Math.hypot(target.x - p.x, target.y - p.y);
             const startX = cursorData!.container.x;
@@ -2135,16 +2132,6 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                 cursorData!.targetX = currentX;
                 cursorData!.targetY = currentY;
                 
-                channelRef.current?.send({
-                  type: 'broadcast',
-                  event: 'cursorMove',
-                  payload: {
-                    username: botUsername,
-                    x: currentX,
-                    y: currentY
-                  }
-                });
-                
                 sendMoveBatch([{ pieceId: targetPieceId, x: currentX, y: currentY }]);
                 
                 if (progress < 1) {
@@ -2158,6 +2145,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             
             const updates = [{ pieceId: targetPieceId, x: p.x, y: p.y }];
             sendMoveBatch(updates);
+            sendUnlockBatch([targetPieceId], botUsername);
             batchedDbUpdates.push({ piece_index: targetPieceId, x: p.x, y: p.y, is_locked: false });
             
             if (batchedDbUpdates.length >= 10) {
@@ -2708,10 +2696,12 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           }
           // -----------------------------
 
-          const highlightGraphics = new PIXI.Graphics();
-          applyPieceShape(highlightGraphics);
-          highlightGraphics.stroke({ width: strokeWidth * 2, color: 0x00ff00, alpha: 0.8 });
-
+          const lockIconGraphics = new PIXI.Graphics();
+          lockIconGraphics.roundRect(-10, -10, 20, 16, 4);
+          lockIconGraphics.fill({ color: 0xffffff, alpha: 0.8 });
+          lockIconGraphics.roundRect(-6, -16, 12, 10, 4);
+          lockIconGraphics.stroke({ width: 3, color: 0xffffff, alpha: 0.8 });
+          
           const shadowGraphics = new PIXI.Graphics();
           applyPieceShape(shadowGraphics);
           shadowGraphics.fill({ color: 0x000000, alpha: 0.4 });
@@ -2728,8 +2718,8 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           
           const targetResolution = Math.min(window.devicePixelRatio || 1, maxRes);
           
-          // 외곽선이 잘리지 않도록 highlightGraphics의 bounds를 기준으로 패딩을 추가하여 프레임 설정
-          const bounds = highlightGraphics.getLocalBounds();
+          // 외곽선이 잘리지 않도록 bounds를 기준으로 패딩을 추가하여 프레임 설정
+          const bounds = pieceGraphics.getLocalBounds();
           const minX = bounds.minX !== undefined ? bounds.minX : bounds.x;
           const minY = bounds.minY !== undefined ? bounds.minY : bounds.y;
           const maxX = bounds.maxX !== undefined ? bounds.maxX : bounds.x + bounds.width;
@@ -2750,12 +2740,11 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           });
           const pieceSprite = new PIXI.Sprite(pieceTexture);
           
-          const highlightTexture = app.renderer.generateTexture({
-            target: highlightGraphics,
+          const lockIconTexture = app.renderer.generateTexture({
+            target: lockIconGraphics,
             resolution: targetResolution,
-            frame: frame
           });
-          const highlightSprite = new PIXI.Sprite(highlightTexture);
+          const lockIconSprite = new PIXI.Sprite(lockIconTexture);
 
           const shadowTexture = app.renderer.generateTexture({
             target: shadowGraphics,
@@ -2767,10 +2756,11 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           pieceSprite.x = frame.x;
           pieceSprite.y = frame.y;
           
-          highlightSprite.x = frame.x;
-          highlightSprite.y = frame.y;
-          highlightSprite.visible = false;
-          highlightSprite.name = 'highlight';
+          lockIconSprite.anchor.set(0.5);
+          lockIconSprite.x = pieceWidth / 2;
+          lockIconSprite.y = pieceHeight / 2;
+          lockIconSprite.visible = false;
+          lockIconSprite.name = 'lockIcon';
 
           shadowSprite.visible = false;
           shadowSprite.name = 'shadow';
@@ -2779,7 +2769,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           (pieceContainer as any).shadowSprite = shadowSprite;
           world.addChild(shadowSprite);
 
-          pieceContainer.addChild(highlightSprite);
+          pieceContainer.addChild(lockIconSprite);
           pieceContainer.addChild(pieceSprite);
           
           // 렌더링 최적화: 화면 밖에 있는 조각은 그리지 않도록 설정
@@ -2791,7 +2781,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           } else {
             pieceGraphics.destroy();
           }
-          highlightGraphics.destroy();
+          lockIconGraphics.destroy();
           shadowGraphics.destroy();
 
           // 퍼즐판 바깥에 겹치지 않게 배치
