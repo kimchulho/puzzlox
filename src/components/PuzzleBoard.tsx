@@ -681,7 +681,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           const worldX = (x - world.x) / world.scale.x;
           const worldY = (y - world.y) / world.scale.y;
 
-          const newScale = Math.max(0.1, Math.min(world.scale.x * scaleMultiplier, 5));
+          const newScale = Math.max(0.1, Math.min(world.scale.x * scaleMultiplier, 1));
           world.scale.set(newScale);
 
           world.x = x - worldX * world.scale.x;
@@ -747,7 +747,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             
             // 위로 드래그하면 축소, 아래로 드래그하면 확대
             const scaleMultiplier = Math.exp(deltaY * 0.01);
-            const newScale = Math.max(0.1, Math.min(doubleTapInitialScale * scaleMultiplier, 5));
+            const newScale = Math.max(0.1, Math.min(doubleTapInitialScale * scaleMultiplier, 1));
             world.scale.set(newScale);
 
             const rect = canvas.getBoundingClientRect();
@@ -760,7 +760,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             e.preventDefault();
             const currentDistance = getDistance(e.touches);
             const scaleMultiplier = currentDistance / initialDistance;
-            const newScale = Math.max(0.1, Math.min(initialScale * scaleMultiplier, 5));
+            const newScale = Math.max(0.1, Math.min(initialScale * scaleMultiplier, 1));
             
             world.scale.set(newScale);
 
@@ -923,7 +923,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
         // 퍼즐 판 배경 그리기
         const boardBg = new PIXI.Graphics();
         boardBg.rect(boardStartX, boardStartY, boardWidth, boardHeight);
-        boardBg.fill({ color: 0x000000, alpha: 0.3 });
+        boardBg.fill({ color: 0x000000, alpha: 0.15 });
         boardBg.stroke({ width: 2, color: 0xffffff, alpha: 0.8 });
         boardBg.zIndex = -1;
         world.addChild(boardBg);
@@ -1030,7 +1030,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
         const zoomToCompletedPuzzle = (animate = true) => {
           const maxDim = Math.max(boardWidth, boardHeight);
           const boundingBoxSize = maxDim * 1.1; // 좀 더 타이트하게 줌인
-          const targetScale = Math.min(app.screen.width / boundingBoxSize, app.screen.height / boundingBoxSize, 5);
+          const targetScale = Math.min(app.screen.width / boundingBoxSize, app.screen.height / boundingBoxSize, 1);
           const targetX = (app.screen.width - boardWidth * targetScale) / 2;
           const targetY = (app.screen.height - boardHeight * targetScale) / 2;
 
@@ -2558,12 +2558,12 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           matrix.scale(boardWidth / texture.width, boardHeight / texture.height);
           matrix.translate(-col * pieceWidth, -row * pieceHeight);
           
-          // 조각 외곽선 두께 0.25px
-          const strokeWidth = 0.25;
+          // 조각 외곽선 두께 1px
+          const strokeWidth = 1;
           
           pieceGraphics.fill({ texture: texture, matrix: matrix, textureSpace: 'global' });
-          // 퍼즐 조각 외곽선 (검은색 25%)
-          pieceGraphics.stroke({ color: 0x000000, alpha: 0.25, width: strokeWidth });
+          // 퍼즐 조각 외곽선 (검은색 20%)
+          pieceGraphics.stroke({ color: 0x000000, alpha: 0.2, width: strokeWidth });
 
           // --- 베벨(입체) 효과 적용 ---
           const ENABLE_BEVEL = true; // 베벨 효과 켜기/끄기 옵션
@@ -3042,7 +3042,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
       const worldX = (centerX - world.x) / world.scale.x;
       const worldY = (centerY - world.y) / world.scale.y;
       
-      const newScale = Math.max(0.1, Math.min(world.scale.x * zoomFactor, 5));
+      const newScale = Math.max(0.1, Math.min(world.scale.x * zoomFactor, 1));
       world.scale.set(newScale);
       
       world.x = centerX - worldX * world.scale.x;
