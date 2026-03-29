@@ -211,6 +211,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
         cursorsContainer.zIndex = 2000;
         world.addChild(cursorsContainer);
         const cursors = new Map<string, { container: PIXI.Container, targetX: number, targetY: number }>();
+        const remoteLockedPieces = new Map<string, Set<number>>();
 
         // 배경 패닝 로직
         let isPanning = false;
@@ -574,8 +575,27 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
         app.stage.on('pointerupoutside', stopPanning);
 
         app.ticker.add(() => {
-          cursors.forEach(cursorData => {
+          cursors.forEach((cursorData, username) => {
             cursorData.container.scale.set(1 / world.scale.x);
+            
+            const lockedPieces = remoteLockedPieces.get(username);
+            if (lockedPieces && lockedPieces.size > 0) {
+              let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+              lockedPieces.forEach(id => {
+                const p = pieces.current.get(id);
+                if (p) {
+                  minX = Math.min(minX, p.x);
+                  minY = Math.min(minY, p.y);
+                  maxX = Math.max(maxX, p.x + pieceWidth);
+                  maxY = Math.max(maxY, p.y + pieceHeight);
+                }
+              });
+              if (minX !== Infinity) {
+                cursorData.targetX = (minX + maxX) / 2;
+                cursorData.targetY = (minY + maxY) / 2;
+              }
+            }
+
             const dx = cursorData.targetX - cursorData.container.x;
             const dy = cursorData.targetY - cursorData.container.y;
             if (Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1) {
@@ -1794,6 +1814,8 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                   }
                 });
                 
+                sendMoveBatch([{ pieceId: id, x: currentX, y: currentY }]);
+                
                 if (progress < 1) {
                   requestAnimationFrame(animate);
                 } else {
@@ -2122,6 +2144,8 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                     y: currentY
                   }
                 });
+                
+                sendMoveBatch([{ pieceId: targetPieceId, x: currentX, y: currentY }]);
                 
                 if (progress < 1) {
                   requestAnimationFrame(animate);
@@ -3002,6 +3026,15 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             });
           })
           .on('broadcast', { event: 'lock' }, ({ payload }) => {
+            const userId = payload.userId;
+            if (userId) {
+              if (!remoteLockedPieces.has(userId)) {
+                remoteLockedPieces.set(userId, new Set());
+              }
+              const userLocked = remoteLockedPieces.get(userId)!;
+              payload.pieceIds.forEach((id: number) => userLocked.add(id));
+            }
+
             payload.pieceIds.forEach((id: number) => {
               const pieceContainer = pieces.current.get(id);
               if (pieceContainer) {
@@ -3015,6 +3048,12 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             updateShadows();
           })
           .on('broadcast', { event: 'unlock' }, ({ payload }) => {
+            const userId = payload.userId;
+            if (userId && remoteLockedPieces.has(userId)) {
+              const userLocked = remoteLockedPieces.get(userId)!;
+              payload.pieceIds.forEach((id: number) => userLocked.delete(id));
+            }
+
             payload.pieceIds.forEach((id: number) => {
               const pieceContainer = pieces.current.get(id);
               if (pieceContainer) {
@@ -3100,6 +3139,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
               if (!users.has(username) && username !== 'bot') {
                 cursorData.container.destroy();
                 cursors.delete(username);
+                remoteLockedPieces.delete(username);
               }
             });
           })
