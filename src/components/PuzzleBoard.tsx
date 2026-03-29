@@ -383,6 +383,8 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                     const p = pieces.current.get(id)!;
                     const highlight = p.getChildByName('highlight');
                     if (highlight) highlight.visible = false;
+                    const shadow = p.getChildByName('shadow');
+                    if (shadow) shadow.visible = false;
                   });
                   selectedCluster = null;
                 }
@@ -450,6 +452,8 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                 const p = pieces.current.get(id)!;
                 const highlight = p.getChildByName('highlight');
                 if (highlight) highlight.visible = true;
+                const shadow = p.getChildByName('shadow');
+                if (shadow) shadow.visible = true;
                 p.zIndex = topZIndex;
               });
               
@@ -472,10 +476,21 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                 const p = pieces.current.get(id)!;
                 const highlight = p.getChildByName('highlight');
                 if (highlight) highlight.visible = false;
+                const shadow = p.getChildByName('shadow');
+                if (shadow) shadow.visible = false;
               });
               selectedCluster = null;
+            } else if (!selectedCluster || !dragCluster.has(Array.from(selectedCluster)[0])) {
+              dragCluster.forEach(id => {
+                const p = pieces.current.get(id)!;
+                const highlight = p.getChildByName('highlight');
+                if (highlight) highlight.visible = false;
+                const shadow = p.getChildByName('shadow');
+                if (shadow) shadow.visible = false;
+              });
             }
             currentShiftY = 0;
+            updateShadows();
             return;
           }
 
@@ -498,8 +513,11 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                   const p = pieces.current.get(id)!;
                   const highlight = p.getChildByName('highlight');
                   if (highlight) highlight.visible = false;
+                  const shadow = p.getChildByName('shadow');
+                  if (shadow) shadow.visible = false;
                 });
                 selectedCluster = null;
+                updateShadows();
               }
             } else {
               // Drag ended -> snap but KEEP selected
@@ -516,8 +534,11 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                     const p = pieces.current.get(id)!;
                     const highlight = p.getChildByName('highlight');
                     if (highlight) highlight.visible = false;
+                    const shadow = p.getChildByName('shadow');
+                    if (shadow) shadow.visible = false;
                   });
                   selectedCluster = null;
+                  updateShadows();
                 } else if (snapped) {
                   // Re-evaluate the cluster to see if it grew
                   const firstId = Array.from(selectedCluster)[0];
@@ -536,6 +557,8 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                         const p = pieces.current.get(id)!;
                         const highlight = p.getChildByName('highlight');
                         if (highlight) highlight.visible = true;
+                        const shadow = p.getChildByName('shadow');
+                        if (shadow) shadow.visible = true;
                         selectedCluster!.add(id);
                       });
                     }
@@ -572,6 +595,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                 p.y = target.y;
                 targetPositions.delete(id);
                 checkCompletion();
+                updateShadows();
               } else {
                 p.x += dx * 0.3;
                 p.y += dy * 0.3;
@@ -923,8 +947,8 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
         // 퍼즐 판 배경 그리기
         const boardBg = new PIXI.Graphics();
         boardBg.rect(boardStartX, boardStartY, boardWidth, boardHeight);
-        boardBg.fill({ color: 0x000000, alpha: 0.15 });
-        boardBg.stroke({ width: 2, color: 0xffffff, alpha: 0.8 });
+        boardBg.fill({ color: 0x000000, alpha: 0.1 });
+        boardBg.stroke({ width: 2, color: 0x000000, alpha: 0.5 });
         boardBg.zIndex = -1;
         world.addChild(boardBg);
 
@@ -976,6 +1000,48 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           drawC(p(0.627, 0.195), p(0.671, 0.171), p(0.671, 0.118));
           drawC(p(0.671, 0.066), p(0.604, 0.038), p(0.607, -0.045));
           drawC(p(0.610, -0.127), p(0.807, 0), p(1.000, 0));
+        };
+
+        const updateShadows = () => {
+          if (!pieces.current) return;
+          const pieceArray = Array.from(pieces.current.values());
+          
+          pieceArray.forEach(p1 => {
+            if (p1.eventMode === 'none') {
+              const shadow = p1.getChildByName('shadow');
+              if (shadow) shadow.visible = false;
+              return;
+            }
+            
+            // If it's selected or dragged, it already has a shadow
+            const highlight = p1.getChildByName('highlight');
+            if (highlight && highlight.visible) {
+              const shadow = p1.getChildByName('shadow');
+              if (shadow) shadow.visible = true;
+              return;
+            }
+
+            let overlaps = false;
+            for (let i = 0; i < pieceArray.length; i++) {
+              const p2 = pieceArray[i];
+              if (p1 === p2) continue;
+              
+              const dx = p1.x - p2.x;
+              const dy = p1.y - p2.y;
+              // Simple bounding circle overlap check (using 70% of piece size to avoid edge cases)
+              const minSize = Math.min(pieceWidth, pieceHeight);
+              const threshold = (minSize * 0.7) * (minSize * 0.7);
+              if (dx * dx + dy * dy < threshold) {
+                if (p1.zIndex > p2.zIndex) {
+                  overlaps = true;
+                  break;
+                }
+              }
+            }
+            
+            const shadow = p1.getChildByName('shadow');
+            if (shadow) shadow.visible = overlaps;
+          });
         };
 
         const sendMoveBatch = throttle((updates: {pieceId: number, x: number, y: number}[]) => {
@@ -1357,6 +1423,8 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
               p.zIndex = 0;
               const highlight = p.getChildByName('highlight');
               if (highlight) highlight.visible = false;
+              const shadow = p.getChildByName('shadow');
+              if (shadow) shadow.visible = false;
               isLocked = true;
             }
             dbUpdates.push({ piece_index: id, x: p.x, y: p.y, is_locked: isLocked });
@@ -1386,12 +1454,15 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             const p = pieces.current.get(id)!;
             const highlight = p.getChildByName('highlight');
             if (highlight) highlight.visible = false;
+            const shadow = p.getChildByName('shadow');
+            if (shadow) shadow.visible = false;
           });
 
           snapCluster(selectedCluster);
           
           selectedCluster = null;
           isDraggingSelected = false;
+          updateShadows();
         };
 
         const gatherBorders = async () => {
@@ -2615,6 +2686,13 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           applyPieceShape(highlightGraphics);
           highlightGraphics.stroke({ width: strokeWidth * 2, color: 0x00ff00, alpha: 0.8 });
 
+          const shadowGraphics = new PIXI.Graphics();
+          applyPieceShape(shadowGraphics);
+          shadowGraphics.fill({ color: 0x000000, alpha: 0.4 });
+          const blurFilter = new PIXI.BlurFilter();
+          blurFilter.blur = 3;
+          shadowGraphics.filters = [blurFilter];
+
           // 렌더링 최적화: 벡터 그래픽을 텍스처로 변환하여 Sprite로 사용
           // 저사양 기기 최적화: 조각 개수가 많을수록 텍스처 해상도를 낮춰 VRAM 메모리 초과(OOM) 방지
           let maxRes = 2;
@@ -2630,7 +2708,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           const maxX = bounds.maxX !== undefined ? bounds.maxX : bounds.x + bounds.width;
           const maxY = bounds.maxY !== undefined ? bounds.maxY : bounds.y + bounds.height;
           
-          const padding = 2;
+          const padding = 15;
           const frame = new PIXI.Rectangle(
             minX - padding,
             minY - padding,
@@ -2651,6 +2729,13 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             frame: frame
           });
           const highlightSprite = new PIXI.Sprite(highlightTexture);
+
+          const shadowTexture = app.renderer.generateTexture({
+            target: shadowGraphics,
+            resolution: targetResolution,
+            frame: frame
+          });
+          const shadowSprite = new PIXI.Sprite(shadowTexture);
           
           pieceSprite.x = frame.x;
           pieceSprite.y = frame.y;
@@ -2660,6 +2745,12 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           highlightSprite.visible = false;
           highlightSprite.name = 'highlight';
 
+          shadowSprite.x = frame.x + 5;
+          shadowSprite.y = frame.y + 5;
+          shadowSprite.visible = false;
+          shadowSprite.name = 'shadow';
+
+          pieceContainer.addChild(shadowSprite);
           pieceContainer.addChild(highlightSprite);
           pieceContainer.addChild(pieceSprite);
           
@@ -2673,6 +2764,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             pieceGraphics.destroy();
           }
           highlightGraphics.destroy();
+          shadowGraphics.destroy();
 
           // 퍼즐판 바깥에 겹치지 않게 배치
           let state = pieceStates.get(i);
@@ -2749,6 +2841,9 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
               const p = pieces.current.get(id)!;
               dragOffsets.set(id, { x: localPos.x - p.x, y: localPos.y - p.y });
               targetPositions.delete(id);
+              
+              const shadow = p.getChildByName('shadow');
+              if (shadow) shadow.visible = true;
             });
             currentShiftY = 0;
             
@@ -2823,9 +2918,12 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             
             if (allDone) {
               app.ticker.remove(fallTicker);
+              updateShadows();
             }
           };
           app.ticker.add(fallTicker);
+        } else {
+          updateShadows();
         }
 
         setPlacedPieces(initialPlacedCount);
@@ -2893,6 +2991,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                 pieceContainer.eventMode = 'none';
               }
             });
+            updateShadows();
           })
           .on('broadcast', { event: 'unlock' }, ({ payload }) => {
             payload.pieceIds.forEach((id: number) => {
@@ -2911,6 +3010,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                 }
               }
             });
+            updateShadows();
           })
           .on('broadcast', { event: 'scoreUpdate' }, ({ payload }) => {
             setScores(prev => {
