@@ -24,7 +24,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
   const objectUrlRef = useRef<string | null>(null);
   const gatherBordersRef = useRef<(() => void) | null>(null);
   const gatherByColorRef = useRef<((quick?: boolean) => void) | null>(null);
-  const createMosaicFromImageRef = useRef<((imageUrl: string, quick?: boolean, gapMultiplier?: number) => void) | null>(null);
+  const createMosaicFromImageRef = useRef<((imageUrl: string, quick?: boolean, gapMultiplier?: number) => Promise<void>) | null>(null);
   const initialPositionsRef = useRef<{x: number, y: number}[]>([]);
   const isBotRunningRef = useRef(false);
   const isColorBotRunningRef = useRef(false);
@@ -38,6 +38,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
   const [playerCount, setPlayerCount] = useState(1);
   const [playTime, setPlayTime] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
+  const [imageLoadError, setImageLoadError] = useState<string | null>(null);
   const [isColorBotLoading, setIsColorBotLoading] = useState(false);
   const [scores, setScores] = useState<{username: string, score: number}[]>([]);
   const [activeUsers, setActiveUsers] = useState<Set<string>>(new Set());
@@ -45,6 +46,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [showBotMenu, setShowBotMenu] = useState(false);
   const [showMosaicModal, setShowMosaicModal] = useState(false);
+  const [mosaicError, setMosaicError] = useState<string | null>(null);
   const [showFullImage, setShowFullImage] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [mosaicUrl, setMosaicUrl] = useState("https://ewbjogsolylcbfmpmyfa.supabase.co/storage/v1/object/public/checki/2.jpg");
@@ -858,6 +860,26 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           return { objectUrl: objUrl, img: testImg };
         };
 
+        const tryLoadImageAllOriginsGet = async (url: string): Promise<{ objectUrl: string, img: HTMLImageElement }> => {
+          const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+          const response = await fetch(proxyUrl, { mode: 'cors' });
+          if (!response.ok) throw new Error(`Network response was not ok: ${response.status}`);
+          const data = await response.json();
+          if (!data.contents) throw new Error('No contents in allorigins response');
+          
+          const res = await fetch(data.contents);
+          const blob = await res.blob();
+          const objUrl = URL.createObjectURL(blob);
+          
+          const testImg = new Image();
+          testImg.src = objUrl;
+          await new Promise((resolve, reject) => {
+            testImg.onload = resolve;
+            testImg.onerror = () => reject(new Error('Image failed to load from object URL'));
+          });
+          return { objectUrl: objUrl, img: testImg };
+        };
+
         try {
           const result = await tryLoadImage(imageUrl);
           objectUrl = result.objectUrl;
@@ -884,7 +906,22 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                 objectUrl = result.objectUrl;
                 img = result.img;
               } catch (e4) {
-                console.error('Error fetching image via corsproxy.io:', e4);
+                console.error('Error fetching image via corsproxy.io, trying proxy 4:', e4);
+                try {
+                  const proxyUrl4 = `https://wsrv.nl/?url=${encodeURIComponent(imageUrl)}`;
+                  const result = await tryLoadImage(proxyUrl4);
+                  objectUrl = result.objectUrl;
+                  img = result.img;
+                } catch (e5) {
+                  console.error('Error fetching image via wsrv.nl, trying proxy 5:', e5);
+                  try {
+                    const result = await tryLoadImageAllOriginsGet(imageUrl);
+                    objectUrl = result.objectUrl;
+                    img = result.img;
+                  } catch (e6) {
+                    console.error('Error fetching image via allorigins get:', e6);
+                  }
+                }
               }
             }
           }
@@ -893,6 +930,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
         if (!isMounted) return;
         if (!objectUrl || !img) {
           console.error('Failed to load texture');
+          setImageLoadError('Failed to load image. The image URL might be invalid or blocking access.');
           setIsLoading(false);
           return;
         }
@@ -910,6 +948,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
         if (!isMounted) return;
         if (!texture) {
           console.error('Failed to load texture');
+          setImageLoadError('Failed to create texture from image.');
           setIsLoading(false);
           return;
         }
@@ -2312,8 +2351,23 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                     tempObjectUrl = result.objectUrl;
                     img = result.img;
                   } catch (e4) {
-                    console.error('Error fetching mosaic image via corsproxy.io:', e4);
-                    throw e4;
+                    console.error('Error fetching mosaic image via corsproxy.io, trying proxy 4:', e4);
+                    try {
+                      const proxyUrl4 = `https://wsrv.nl/?url=${encodeURIComponent(targetImageUrl)}`;
+                      const result = await tryLoadMosaicImage(proxyUrl4);
+                      tempObjectUrl = result.objectUrl;
+                      img = result.img;
+                    } catch (e5) {
+                      console.error('Error fetching mosaic image via wsrv.nl, trying proxy 5:', e5);
+                      try {
+                        const result = await tryLoadImageAllOriginsGet(targetImageUrl);
+                        tempObjectUrl = result.objectUrl;
+                        img = result.img;
+                      } catch (e6) {
+                        console.error('Error fetching mosaic image via allorigins get:', e6);
+                        throw e6;
+                      }
+                    }
                   }
                 }
               }
@@ -2530,8 +2584,9 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             console.error("Failed to load image for mosaic:", error);
             setIsColorBotLoading(false);
             isColorBotRunningRef.current = false;
+            setMosaicError("Failed to load image for mosaic. The URL might be invalid or blocking access.");
             if (tempObjectUrl) URL.revokeObjectURL(tempObjectUrl);
-            // We can't use alert in iframe, so we'll just log it.
+            throw error;
           }
         };
 
@@ -3153,15 +3208,15 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
       isMounted = false;
       isBotRunningRef.current = false;
       isColorBotRunningRef.current = false;
+      if (mainTextureRef.current) {
+        mainTextureRef.current.destroy(true);
+        mainTextureRef.current = null;
+      }
       if (appInstance) {
         appInstance.destroy(true);
       }
       if (channelRef.current) {
         channelRef.current.unsubscribe();
-      }
-      if (mainTextureRef.current) {
-        mainTextureRef.current.destroy(true);
-        mainTextureRef.current = null;
       }
       if (objectUrlRef.current) {
         URL.revokeObjectURL(objectUrlRef.current);
@@ -3245,7 +3300,22 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
 
   return (
     <div className="w-full h-full relative" style={{ backgroundColor: bgColor }}>
-      {isLoading && (
+      {imageLoadError && (
+        <div className="absolute inset-0 z-[100] flex flex-col items-center justify-center bg-slate-900/90 backdrop-blur-sm text-white p-4 text-center">
+          <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mb-4">
+            <X className="w-8 h-8 text-red-500" />
+          </div>
+          <h2 className="text-xl font-bold text-red-400 mb-2">Image Load Error</h2>
+          <p className="text-slate-300 max-w-md mb-6">{imageLoadError}</p>
+          <button
+            onClick={onBack}
+            className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 rounded-lg font-medium transition-colors"
+          >
+            Return to Lobby
+          </button>
+        </div>
+      )}
+      {isLoading && !imageLoadError && (
         <div className="absolute inset-0 z-[100] flex flex-col items-center justify-center bg-slate-900/90 backdrop-blur-sm text-white">
           <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mb-4"></div>
           <h2 className="text-xl font-bold animate-pulse">Loading Puzzle...</h2>
@@ -3530,13 +3600,21 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                 <input
                   type="text"
                   value={mosaicUrl}
-                  onChange={(e) => setMosaicUrl(e.target.value)}
+                  onChange={(e) => {
+                    setMosaicUrl(e.target.value);
+                    setMosaicError(null);
+                  }}
                   placeholder="https://example.com/image.jpg"
                   className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
                 <p className="text-xs text-slate-500 mt-2">
                   Enter a direct link to an image. CORS must be enabled on the image host.
                 </p>
+                {mosaicError && (
+                  <p className="text-xs text-red-400 mt-2">
+                    {mosaicError}
+                  </p>
+                )}
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1">Piece Gap Multiplier</label>
@@ -3561,16 +3639,29 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                   Cancel
                 </button>
                 <button
-                  onClick={() => {
-                    setShowMosaicModal(false);
+                  onClick={async () => {
                     if (mosaicUrl) {
-                      createMosaicFromImageRef.current?.(mosaicUrl, mosaicQuick, mosaicGap);
+                      setMosaicError(null);
+                      try {
+                        await createMosaicFromImageRef.current?.(mosaicUrl, mosaicQuick, mosaicGap);
+                        setShowMosaicModal(false);
+                      } catch (err) {
+                        // Error is handled inside createMosaicFromImage, which sets mosaicError
+                        // We just want to prevent closing the modal if it fails
+                      }
                     }
                   }}
-                  className="px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-500 transition-colors flex items-center gap-2"
+                  disabled={isColorBotLoading}
+                  className="px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-500 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {mosaicQuick ? <Zap size={14} /> : <ImageIcon size={14} />}
-                  Create Mosaic
+                  {isColorBotLoading ? (
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                  ) : mosaicQuick ? (
+                    <Zap size={14} />
+                  ) : (
+                    <ImageIcon size={14} />
+                  )}
+                  {isColorBotLoading ? 'Creating...' : 'Create Mosaic'}
                 </button>
               </div>
             </div>
