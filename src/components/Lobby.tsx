@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Trophy, Grid3X3, RefreshCw, Users, Lock, Image as ImageIcon, Play, Plus, Grid, Clock, Maximize, Minimize, RotateCcw, LogOut, ShieldAlert, LogIn } from 'lucide-react';
+import { Trophy, Grid3X3, RefreshCw, Users, Lock, Image as ImageIcon, Play, Plus, Grid, Clock, Maximize, Minimize, RotateCcw, LogOut, ShieldAlert, LogIn, ChevronDown } from 'lucide-react';
 import { supabase } from '../lib/supabaseClient';
 import { motion } from 'motion/react';
+import { encodeRoomId } from '../lib/roomCode';
+import { ImageSelectorModal } from './ImageSelectorModal';
 
 const formatPlayTime = (seconds: number) => {
   if (!seconds) return '00:00:00';
@@ -18,6 +20,7 @@ const Lobby = ({ onJoinRoom, user, onLogout, onAdmin, onLoginClick }: { onJoinRo
   const [imageUrl, setImageUrl] = useState('https://ewbjogsolylcbfmpmyfa.supabase.co/storage/v1/object/public/checki/2.jpg');
   const [imageSource, setImageSource] = useState<'public' | 'custom'>('public');
   const [publicImages, setPublicImages] = useState<any[]>([]);
+  const [isImageModalOpen, setIsImageModalOpen] = useState(false);
 
   useEffect(() => {
     const fetchPublicImages = async () => {
@@ -264,11 +267,11 @@ const Lobby = ({ onJoinRoom, user, onLogout, onAdmin, onLoginClick }: { onJoinRo
       .select();
     
     if (data && data.length > 0) {
-      const roomCode = data[0].room_code;
+      const roomId = data[0].id;
       const recentRooms = JSON.parse(localStorage.getItem('puzzle_recent_rooms') || '[]');
-      const newRecent = [roomCode, ...recentRooms.filter((code: string) => code !== roomCode)].slice(0, 10);
+      const newRecent = [roomId, ...recentRooms.filter((id: number) => id !== roomId)].slice(0, 10);
       localStorage.setItem('puzzle_recent_rooms', JSON.stringify(newRecent));
-      onJoinRoom(roomCode, data[0].image_url, data[0].piece_count);
+      onJoinRoom(roomId, data[0].image_url, data[0].piece_count);
     } else if (error) {
       console.error('Error creating room:', error);
       alert("방 생성에 실패했습니다.");
@@ -410,13 +413,27 @@ const Lobby = ({ onJoinRoom, user, onLogout, onAdmin, onLoginClick }: { onJoinRo
                 <button onClick={() => setImageSource('custom')} className={`flex-1 py-2 rounded-lg text-sm ${imageSource === 'custom' ? 'bg-indigo-500 text-white' : 'bg-slate-800 text-slate-400'}`}>Custom</button>
               </div>
               {imageSource === 'public' ? (
-                <select 
-                  value={imageUrl} 
-                  onChange={(e) => setImageUrl(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white focus:outline-none focus:border-indigo-500 text-sm"
+                <button
+                  onClick={() => setIsImageModalOpen(true)}
+                  className="w-full bg-slate-950 border border-slate-800 hover:border-indigo-500 rounded-xl p-2 text-white transition-colors flex items-center justify-between group"
                 >
-                  {publicImages.map(img => <option key={img.id} value={img.url}>{img.category} - {img.style}</option>)}
-                </select>
+                  <div className="flex items-center gap-3 overflow-hidden">
+                    <div className="w-12 h-12 rounded-lg overflow-hidden bg-slate-900 shrink-0">
+                      <img 
+                        src={imageUrl} 
+                        alt="Selected puzzle" 
+                        className="w-full h-full object-cover"
+                        referrerPolicy="no-referrer"
+                      />
+                    </div>
+                    <span className="text-sm font-medium truncate">
+                      {publicImages.find(img => img.url === imageUrl)?.title || 
+                       publicImages.find(img => img.url === imageUrl)?.category + ' - ' + publicImages.find(img => img.url === imageUrl)?.style || 
+                       'Select an image'}
+                    </span>
+                  </div>
+                  <ChevronDown className="w-5 h-5 text-slate-500 group-hover:text-indigo-400 shrink-0 mr-2" />
+                </button>
               ) : (
                 <input
                   type="file"
@@ -519,25 +536,20 @@ const Lobby = ({ onJoinRoom, user, onLogout, onAdmin, onLoginClick }: { onJoinRo
                 const aPlayers = a.currentPlayers || 0;
                 const bPlayers = b.currentPlayers || 0;
                 
+                // 1. 현재 플레이어가 있는 방을 맨 위로
                 if (aPlayers > 0 && bPlayers === 0) return -1;
                 if (bPlayers > 0 && aPlayers === 0) return 1;
                 
-                if (aPlayers > 0 && bPlayers > 0) {
+                // 2. 플레이어가 있는 방들끼리는 플레이어 수가 많은 순
+                if (aPlayers > 0 && bPlayers > 0 && aPlayers !== bPlayers) {
                   return bPlayers - aPlayers;
                 }
                 
-                const recentRooms = JSON.parse(localStorage.getItem('puzzle_recent_rooms') || '[]');
-                const aRecentIndex = recentRooms.indexOf(a.id);
-                const bRecentIndex = recentRooms.indexOf(b.id);
+                // 3. 최근 활동 시간 기준으로 정렬 (created_at 사용)
+                const aTime = new Date(a.created_at).getTime();
+                const bTime = new Date(b.created_at).getTime();
                 
-                const aIsRecent = aRecentIndex !== -1;
-                const bIsRecent = bRecentIndex !== -1;
-                
-                if (aIsRecent && !bIsRecent) return -1;
-                if (bIsRecent && !aIsRecent) return 1;
-                if (aIsRecent && bIsRecent) return aRecentIndex - bRecentIndex;
-                
-                return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+                return bTime - aTime;
               }).map((room) => (
                 <div 
                   key={room.id}
@@ -578,7 +590,7 @@ const Lobby = ({ onJoinRoom, user, onLogout, onAdmin, onLoginClick }: { onJoinRo
                   <div className="p-3 flex items-center justify-between">
                     <div className="text-left">
                       <p className="text-sm font-medium text-slate-300 flex items-center gap-2">
-                        Room #{room.id}
+                        Room #{encodeRoomId(room.id)}
                         {room.currentPlayers !== undefined && room.max_players !== undefined && (
                           <span className={`text-xs px-1.5 py-0.5 rounded-md ${room.currentPlayers >= room.max_players ? 'bg-red-500/20 text-red-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
                             {room.currentPlayers}/{room.max_players}
@@ -663,7 +675,7 @@ const Lobby = ({ onJoinRoom, user, onLogout, onAdmin, onLoginClick }: { onJoinRo
                     <div className="p-3 flex items-center justify-between">
                       <div className="text-left">
                         <p className="text-sm font-medium text-slate-300 flex items-center gap-2">
-                          Room #{room.id}
+                          Room #{encodeRoomId(room.id)}
                         </p>
                         <p className="text-xs text-amber-400 font-medium mt-1">
                           100% Complete
@@ -690,6 +702,14 @@ const Lobby = ({ onJoinRoom, user, onLogout, onAdmin, onLoginClick }: { onJoinRo
           </div>
         </div>
       </motion.div>
+
+      <ImageSelectorModal
+        isOpen={isImageModalOpen}
+        onClose={() => setIsImageModalOpen(false)}
+        images={publicImages}
+        selectedUrl={imageUrl}
+        onSelect={setImageUrl}
+      />
     </div>
   );
 };

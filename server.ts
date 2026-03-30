@@ -66,6 +66,10 @@ async function startServer() {
           if (oldRoom.users.size === 0 && !oldRoom.isCompleted && oldRoom.lastResumeTime) {
             oldRoom.accumulatedTime += (Date.now() - oldRoom.lastResumeTime) / 1000;
             oldRoom.lastResumeTime = null;
+            
+            supabase.from("pixi_rooms").update({ 
+              total_play_time_seconds: Math.floor(oldRoom.accumulatedTime)
+            }).eq("id", currentRoomId).then();
           }
         }
       }
@@ -145,7 +149,9 @@ async function startServer() {
           
           supabase
             .from("pixi_rooms")
-            .update({ total_play_time_seconds: Math.floor(room.accumulatedTime) })
+            .update({ 
+              total_play_time_seconds: Math.floor(room.accumulatedTime)
+            })
             .eq("id", currentRoomId)
             .then(({ error }) => {
               if (error) console.error(`DB Update Error on disconnect:`, error);
@@ -163,7 +169,9 @@ async function startServer() {
         const currentPlayTime = Math.floor(getCurrentPlayTime(room));
         supabase
           .from("pixi_rooms")
-          .update({ total_play_time_seconds: currentPlayTime })
+          .update({ 
+            total_play_time_seconds: currentPlayTime
+          })
           .eq("id", roomId)
           .then(({ error }) => {
             if (error) console.error(`DB Backup Error for room ${roomId}:`, error);

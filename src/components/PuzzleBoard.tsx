@@ -36,6 +36,8 @@ const isHardwareAccelerationEnabled = () => {
   }
 };
 
+import { encodeRoomId } from '../lib/roomCode';
+
 export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack, user, setUser }: { roomId: number, imageUrl: string, pieceCount: number, onBack: () => void, user: any, setUser: (user: any) => void }) {
   const pixiContainer = useRef<HTMLDivElement>(null);
   const app = useRef<PIXI.Application | null>(null);
@@ -79,7 +81,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack, user
   const [isCopied, setIsCopied] = useState(false);
 
   const handleShareLink = () => {
-    const url = `${window.location.origin}/?room=${roomId}`;
+    const url = `${window.location.origin}/?room=${encodeRoomId(roomId)}`;
     navigator.clipboard.writeText(url).then(() => {
       setIsCopied(true);
       setTimeout(() => setIsCopied(false), 2000);
@@ -3454,7 +3456,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack, user
               <ChevronLeft size={20} className="w-5 h-5" />
             </button>
             <div className="flex items-center gap-1.5 bg-slate-800/50 px-2 h-8 sm:h-9 rounded-lg border border-slate-700/50 shrink-0">
-              <span className="text-xs sm:text-sm font-medium text-slate-300">#{roomId}</span>
+              <span className="text-xs sm:text-sm font-medium text-slate-300">#{encodeRoomId(roomId)}</span>
               <button
                 onClick={handleShareLink}
                 className="flex items-center justify-center hover:text-white text-slate-400 transition-colors"

@@ -9,6 +9,7 @@ import Lobby from './components/Lobby';
 import Auth from './components/Auth';
 import Admin from './components/Admin';
 import { supabase } from './lib/supabaseClient';
+import { encodeRoomId, decodeRoomId } from './lib/roomCode';
 
 export default function App() {
   const [currentRoom, setCurrentRoom] = useState<{id: number, imageUrl: string, pieceCount: number} | null>(null);
@@ -22,26 +23,44 @@ export default function App() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const roomId = params.get('room');
+    const roomParam = params.get('room');
     
-    if (roomId) {
-      supabase.from('pixi_rooms').select('*').eq('id', roomId).single().then(({ data, error }) => {
-        if (data && !error) {
-          setCurrentRoom({ id: data.id, imageUrl: data.image_url, pieceCount: data.piece_count });
-        } else {
-          window.history.replaceState({}, '', '/');
-        }
+    if (roomParam) {
+      const isNumeric = /^\d+$/.test(roomParam);
+      const decodedId = isNumeric ? parseInt(roomParam, 10) : decodeRoomId(roomParam);
+
+      if (decodedId) {
+        supabase.from('pixi_rooms').select('*').eq('id', decodedId).single().then(({ data, error }) => {
+          if (data && !error) {
+            setCurrentRoom({ id: data.id, imageUrl: data.image_url, pieceCount: data.piece_count });
+          } else {
+            window.history.replaceState({}, '', '/');
+          }
+          setLoading(false);
+        });
+      } else {
+        window.history.replaceState({}, '', '/');
         setLoading(false);
-      });
+      }
     } else {
       setLoading(false);
     }
 
     const handlePopState = () => {
       const params = new URLSearchParams(window.location.search);
-      const roomId = params.get('room');
-      if (!roomId) {
+      const roomParam = params.get('room');
+      if (!roomParam) {
         setCurrentRoom(null);
+      } else {
+        const isNumeric = /^\d+$/.test(roomParam);
+        const decodedId = isNumeric ? parseInt(roomParam, 10) : decodeRoomId(roomParam);
+        if (decodedId) {
+          supabase.from('pixi_rooms').select('*').eq('id', decodedId).single().then(({ data, error }) => {
+            if (data && !error) {
+              setCurrentRoom({ id: data.id, imageUrl: data.image_url, pieceCount: data.piece_count });
+            }
+          });
+        }
       }
     };
     
@@ -50,7 +69,8 @@ export default function App() {
   }, []);
 
   const handleJoinRoom = (roomId: number, imageUrl: string, pieceCount: number) => {
-    window.history.pushState({}, '', `/?room=${roomId}`);
+    const roomCode = encodeRoomId(roomId);
+    window.history.pushState({}, '', `/?room=${roomCode}`);
     setCurrentRoom({ id: roomId, imageUrl, pieceCount });
   };
 
