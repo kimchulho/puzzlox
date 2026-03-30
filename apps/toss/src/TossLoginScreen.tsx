@@ -9,6 +9,7 @@ import {
   TextField,
 } from "@toss/tds-mobile";
 import { useCallback, useState } from "react";
+import { getApiBase } from "./lib/apiBase";
 import {
   clearSession,
   fetchAuthMe,
@@ -106,8 +107,20 @@ export default function TossLoginScreen({
         color="adaptive.grey600"
         style={{ marginTop: 8, marginBottom: 24 }}
       >
-        로컬: npm run dev:server 후 npm run dev:toss. 배포 시 VITE_API_BASE_URL을 설정하세요.
+        로컬: npm run dev:server 후 npm run dev:toss. AIT/배포 번들은 루트 .env에 VITE_API_BASE_URL(예: Render URL)을 넣은 뒤{" "}
+        npm run ait:build로 다시 만들어야 로그인 API가 동작합니다.
       </Text>
+      {import.meta.env.PROD && !getApiBase() ? (
+        <Text
+          display="block"
+          typography="t6"
+          color="adaptive.red500"
+          fontWeight="semibold"
+          style={{ marginTop: -16, marginBottom: 24 }}
+        >
+          오류: 이 번들에 API 주소가 없습니다. 루트 .env에 VITE_API_BASE_URL을 넣고 ait 빌드를 다시 하세요.
+        </Text>
+      ) : null}
 
       {s ? (
         <section style={{ marginBottom: 16 }}>
