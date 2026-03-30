@@ -8,10 +8,12 @@ import PuzzleBoard from './components/PuzzleBoard';
 import Lobby from './components/Lobby';
 import Auth from './components/Auth';
 import Admin from './components/Admin';
+import TermsOfService from './components/TermsOfService';
 import { supabase } from './lib/supabaseClient';
 import { encodeRoomId, decodeRoomId } from './lib/roomCode';
 
 export default function App() {
+  const [pathname, setPathname] = useState(() => window.location.pathname);
   const [currentRoom, setCurrentRoom] = useState<{id: number, imageUrl: string, pieceCount: number} | null>(null);
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<any>(() => {
@@ -20,6 +22,17 @@ export default function App() {
   });
   const [showAdmin, setShowAdmin] = useState(false);
   const [showAuth, setShowAuth] = useState(false);
+
+  const navigateToPath = (path: string) => {
+    window.history.pushState({}, '', path);
+    setPathname(path);
+  };
+
+  useEffect(() => {
+    const onPop = () => setPathname(window.location.pathname);
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -93,8 +106,21 @@ export default function App() {
     );
   }
 
+  if (pathname === '/terms') {
+    return <TermsOfService onBack={() => navigateToPath('/')} />;
+  }
+
   if (showAuth) {
-    return <Auth onLogin={(u) => { setUser(u); setShowAuth(false); }} onClose={() => setShowAuth(false)} />;
+    return (
+      <Auth
+        onLogin={(u) => { setUser(u); setShowAuth(false); }}
+        onClose={() => setShowAuth(false)}
+        onOpenTerms={() => {
+          navigateToPath('/terms');
+          setShowAuth(false);
+        }}
+      />
+    );
   }
 
   if (showAdmin && user?.role === 'admin') {
@@ -116,5 +142,14 @@ export default function App() {
     );
   }
 
-  return <Lobby onJoinRoom={handleJoinRoom} user={user} onLogout={handleLogout} onAdmin={() => setShowAdmin(true)} onLoginClick={() => setShowAuth(true)} />;
+  return (
+    <Lobby
+      onJoinRoom={handleJoinRoom}
+      user={user}
+      onLogout={handleLogout}
+      onAdmin={() => setShowAdmin(true)}
+      onLoginClick={() => setShowAuth(true)}
+      onOpenTerms={() => navigateToPath('/terms')}
+    />
+  );
 }

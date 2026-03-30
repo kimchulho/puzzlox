@@ -1,5 +1,6 @@
 {
   "compilerOptions": {
+    "baseUrl": ".",
     "target": "ES2022",
     "experimentalDecorators": true,
     "useDefineForClassFields": false,
@@ -17,7 +18,13 @@
     "jsx": "react-jsx",
     "paths": {
       "@/*": [
-        "./*"
+        "./apps/web/src/*"
+      ],
+      "@contracts/*": [
+        "./packages/contracts/*"
+      ],
+      "@web/*": [
+        "./apps/web/src/*"
       ]
     },
     "allowImportingTsExtensions": true,

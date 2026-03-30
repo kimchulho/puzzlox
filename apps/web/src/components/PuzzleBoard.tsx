@@ -5,6 +5,7 @@ import { throttle } from 'lodash';
 import { Clock, Users, Trophy, ChevronLeft, X, Palette, LayoutGrid, Zap, Heart, Image as ImageIcon, Bot, Maximize, Minimize, RotateCcw, Share2, Check } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 import confetti from 'canvas-confetti';
+import { ROOM_EVENTS, SyncTimePayload } from "@contracts/realtime";
 
 // Supabase 클라이언트 초기화
 const supabase = createClient(
@@ -179,9 +180,9 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack, user
     const socket = backendUrl ? io(backendUrl) : io();
     socketRef.current = socket;
 
-    socket.emit("join_room", roomId);
+    socket.emit(ROOM_EVENTS.JoinRoom, roomId);
 
-    socket.on("sync_time", (data: { accumulatedTime: number, isRunning: boolean }) => {
+    socket.on(ROOM_EVENTS.SyncTime, (data: SyncTimePayload) => {
       accumulatedTimeRef.current = data.accumulatedTime;
       isRunningRef.current = data.isRunning;
       localStartTimeRef.current = Date.now();
@@ -1414,7 +1415,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack, user
             }
 
             if (socketRef.current) {
-              socketRef.current.emit("puzzle_completed", roomId);
+              socketRef.current.emit(ROOM_EVENTS.PuzzleCompleted, roomId);
             }
             triggerFireworks();
             zoomToCompletedPuzzle(true);
@@ -3148,7 +3149,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack, user
           triggerFireworks();
           playShineEffect();
           if (socketRef.current) {
-            socketRef.current.emit("puzzle_completed", roomId);
+            socketRef.current.emit(ROOM_EVENTS.PuzzleCompleted, roomId);
           }
           supabase.from('pixi_rooms').update({ status: 'completed' }).eq('id', roomId).then(({error}) => {
             if (error) console.error("Failed to update room status:", error);

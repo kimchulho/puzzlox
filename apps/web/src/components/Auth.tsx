@@ -1,9 +1,16 @@
 import React, { useState } from 'react';
-import { supabase } from '../lib/supabaseClient';
 import { LogIn, UserPlus, Lock, User, X } from 'lucide-react';
 import { motion } from 'motion/react';
 
-export default function Auth({ onLogin, onClose }: { onLogin: (user: any) => void, onClose?: () => void }) {
+export default function Auth({
+  onLogin,
+  onClose,
+  onOpenTerms,
+}: {
+  onLogin: (user: any) => void;
+  onClose?: () => void;
+  onOpenTerms?: () => void;
+}) {
   const [isLogin, setIsLogin] = useState(true);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -16,62 +23,28 @@ export default function Auth({ onLogin, onClose }: { onLogin: (user: any) => voi
     setLoading(true);
 
     try {
-      if (isLogin) {
-        // Login
-        const { data, error: fetchError } = await supabase
-          .from('pixi_users')
-          .select('*')
-          .eq('username', username)
-          .eq('password', password)
-          .single();
+      const endpoint = isLogin ? '/api/auth/web/login' : '/api/auth/web/signup';
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      const result = await response.json();
 
-        if (fetchError || !data) {
-          setError('아이디 또는 비밀번호가 일치하지 않습니다.');
-        } else {
-          await supabase.from('pixi_users').update({ last_active_at: new Date().toISOString() }).eq('id', data.id);
-          localStorage.setItem('puzzle_user', JSON.stringify(data));
-          onLogin(data);
-        }
-      } else {
-        // Register
-        // Check if username exists
-        const { data: existingUser } = await supabase
-          .from('pixi_users')
-          .select('id')
-          .eq('username', username)
-          .single();
-
-        if (existingUser) {
-          setError('이미 존재하는 아이디입니다.');
-          setLoading(false);
-          return;
-        }
-
-        const role = username === 'admin' ? 'admin' : 'user';
-
-        const { data, error: insertError } = await supabase
-          .from('pixi_users')
-          .insert([
-            {
-              username,
-              password,
-              role,
-              completed_puzzles: 0,
-              placed_pieces: 0
-            }
-          ])
-          .select()
-          .single();
-
-        if (insertError) {
-          console.error(insertError);
-          setError(`회원가입 오류: ${insertError.message || '서버 오류가 발생했습니다.'}`);
-        } else if (data) {
-          await supabase.from('pixi_users').update({ last_active_at: new Date().toISOString() }).eq('id', data.id);
-          localStorage.setItem('puzzle_user', JSON.stringify(data));
-          onLogin(data);
-        }
+      if (!response.ok) {
+        setError(result?.message || '인증 처리 중 오류가 발생했습니다.');
+        return;
       }
+
+      const { accessToken, user } = result;
+      if (!accessToken || !user) {
+        setError('로그인 응답이 올바르지 않습니다.');
+        return;
+      }
+
+      localStorage.setItem('puzzle_access_token', accessToken);
+      localStorage.setItem('puzzle_user', JSON.stringify(user));
+      onLogin(user);
     } catch (err) {
       console.error(err);
       setError('서버 오류가 발생했습니다.');
@@ -163,16 +136,25 @@ export default function Auth({ onLogin, onClose }: { onLogin: (user: any) => voi
           </button>
         </form>
 
-        <div className="mt-6 text-center">
+        <div className="mt-6 text-center space-y-3">
           <button
             onClick={() => {
               setIsLogin(!isLogin);
               setError('');
             }}
-            className="text-slate-400 hover:text-indigo-400 text-sm transition-colors"
+            className="text-slate-400 hover:text-indigo-400 text-sm transition-colors block w-full"
           >
             {isLogin ? '계정이 없으신가요? 회원가입' : '이미 계정이 있으신가요? 로그인'}
           </button>
+          {onOpenTerms && (
+            <button
+              type="button"
+              onClick={onOpenTerms}
+              className="text-slate-500 hover:text-slate-300 text-xs underline underline-offset-2"
+            >
+              서비스 이용약관
+            </button>
+          )}
         </div>
       </motion.div>
     </div>

@@ -13,7 +13,7 @@ const formatPlayTime = (seconds: number) => {
   return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 };
 
-const Lobby = ({ onJoinRoom, user, onLogout, onAdmin, onLoginClick }: { onJoinRoom: (roomId: number, imageUrl: string, pieceCount: number) => void, user?: any, onLogout: () => void, onAdmin: () => void, onLoginClick: () => void }) => {
+const Lobby = ({ onJoinRoom, user, onLogout, onAdmin, onLoginClick, onOpenTerms }: { onJoinRoom: (roomId: number, imageUrl: string, pieceCount: number) => void, user?: any, onLogout: () => void, onAdmin: () => void, onLoginClick: () => void, onOpenTerms?: () => void }) => {
   const [activeRooms, setActiveRooms] = useState<any[]>([]);
   const [completedRooms, setCompletedRooms] = useState<any[]>([]);
   const [pieceCount, setPieceCount] = useState(100);
@@ -750,6 +750,18 @@ const Lobby = ({ onJoinRoom, user, onLogout, onAdmin, onLoginClick }: { onJoinRo
         selectedUrl={imageUrl}
         onSelect={setImageUrl}
       />
+
+      {onOpenTerms && (
+        <footer className="w-full max-w-6xl mx-auto mt-8 pt-4 border-t border-slate-800/80 text-center">
+          <button
+            type="button"
+            onClick={onOpenTerms}
+            className="text-xs text-slate-500 hover:text-indigo-400 transition-colors"
+          >
+            서비스 이용약관
+          </button>
+        </footer>
+      )}
     </div>
   );
 };
