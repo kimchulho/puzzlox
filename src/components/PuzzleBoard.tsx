@@ -810,7 +810,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack, user
           
           if (e.touches.length === 1) {
             const timeDiff = currentTime - lastTapTime;
-            if (timeDiff > 0 && timeDiff < 300) {
+            if (timeDiff > 0 && timeDiff < 150) {
               isDoubleTapZooming = true;
               doubleTapZoomStartY = e.touches[0].clientY;
               doubleTapInitialScale = world.scale.x;
