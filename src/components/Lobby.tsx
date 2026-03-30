@@ -1,16 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Trophy, Grid3X3, RefreshCw, Users, Lock, Image as ImageIcon, Play, Plus, Grid, Clock, Maximize, Minimize, RotateCcw } from 'lucide-react';
+import { Trophy, Grid3X3, RefreshCw, Users, Lock, Image as ImageIcon, Play, Plus, Grid, Clock, Maximize, Minimize, RotateCcw, LogOut, ShieldAlert, LogIn } from 'lucide-react';
 import { supabase } from '../lib/supabaseClient';
 import { motion } from 'motion/react';
-
-const getBrowserTag = () => {
-  let tag = localStorage.getItem('puzzle_user_tag');
-  if (!tag) {
-    tag = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
-    localStorage.setItem('puzzle_user_tag', tag);
-  }
-  return tag;
-};
 
 const formatPlayTime = (seconds: number) => {
   if (!seconds) return '00:00:00';
@@ -20,18 +11,80 @@ const formatPlayTime = (seconds: number) => {
   return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 };
 
-const Lobby = ({ onJoinRoom }: { onJoinRoom: (roomId: number, imageUrl: string, pieceCount: number) => void }) => {
+const Lobby = ({ onJoinRoom, user, onLogout, onAdmin, onLoginClick }: { onJoinRoom: (roomId: number, imageUrl: string, pieceCount: number) => void, user?: any, onLogout: () => void, onAdmin: () => void, onLoginClick: () => void }) => {
   const [activeRooms, setActiveRooms] = useState<any[]>([]);
   const [completedRooms, setCompletedRooms] = useState<any[]>([]);
   const [pieceCount, setPieceCount] = useState(100);
   const [imageUrl, setImageUrl] = useState('https://ewbjogsolylcbfmpmyfa.supabase.co/storage/v1/object/public/checki/2.jpg');
-  const [username, setUsername] = useState(() => {
-    return localStorage.getItem('puzzle_username') || `익명#${getBrowserTag()}`;
-  });
+  const [imageSource, setImageSource] = useState<'public' | 'custom'>('public');
+  const [publicImages, setPublicImages] = useState<any[]>([]);
+
+  useEffect(() => {
+    const fetchPublicImages = async () => {
+      const { data } = await supabase.from('puzzle_images').select('*').eq('is_public', true);
+      if (data) setPublicImages(data);
+    };
+    fetchPublicImages();
+  }, []);
+
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const file = e.target.files[0];
+    const fileExt = file.name.split('.').pop();
+    const fileName = `${Math.random()}.${fileExt}`;
+    const filePath = `private/${fileName}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from('puzzle_images')
+      .upload(filePath, file);
+
+    if (uploadError) {
+      console.error('Error uploading image:', uploadError);
+      return;
+    }
+
+    const { data } = supabase.storage.from('puzzle_images').getPublicUrl(filePath);
+    console.log('Uploaded image URL:', data.publicUrl);
+    setImageUrl(data.publicUrl);
+    setImageSource('custom');
+  };
+
+  const handleAdminUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const file = e.target.files[0];
+    const fileExt = file.name.split('.').pop();
+    const fileName = `${Math.random()}.${fileExt}`;
+    const filePath = `public/${fileName}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from('puzzle_images')
+      .upload(filePath, file);
+
+    if (uploadError) {
+      console.error('Error uploading admin image:', uploadError);
+      return;
+    }
+
+    const { data } = supabase.storage.from('puzzle_images').getPublicUrl(filePath);
+    await supabase.from('puzzle_images').insert([
+        { url: data.publicUrl, is_public: true, created_by: user.id }
+    ]);
+    alert('Admin image uploaded and set to public.');
+  };
   const [maxPlayers, setMaxPlayers] = useState<number>(8);
   const [password, setPassword] = useState<string>('');
   const [isCreating, setIsCreating] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [guestName, setGuestName] = useState(() => {
+    return localStorage.getItem('puzzle_guest_name') || `익명#${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
+  });
+
+  useEffect(() => {
+    if (!user) {
+      localStorage.setItem('puzzle_guest_name', guestName);
+    }
+  }, [guestName, user]);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -74,21 +127,19 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (roomId: number, imageUrl: string, 
     }
   };
 
-  useEffect(() => {
-    localStorage.setItem('puzzle_username', username);
-  }, [username]);
-
   const fetchRooms = async () => {
     const { data: active } = await supabase
       .from('pixi_rooms')
       .select('*')
       .eq('status', 'active')
+      .eq('is_private', false)
       .order('created_at', { ascending: false });
     
     const { data: completed } = await supabase
       .from('pixi_rooms')
       .select('*')
       .eq('status', 'completed')
+      .eq('is_private', false)
       .order('created_at', { ascending: false });
 
     if (active && active.length > 0) {
@@ -181,37 +232,43 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (roomId: number, imageUrl: string, 
   }, [activeRooms.map(r => r.id).join(',')]);
 
   const handleCreateRoom = async () => {
-    let finalUsername = username.trim();
-    if (!finalUsername) return;
-    
-    if (!finalUsername.includes('#')) {
-      finalUsername = `${finalUsername}#${getBrowserTag()}`;
-      setUsername(finalUsername);
-      localStorage.setItem('puzzle_username', finalUsername);
-    }
+    const currentImageUrl = imageUrl;
+    console.log('Creating room with image URL:', currentImageUrl);
+    const creatorName = user ? user.username : guestName.trim();
+    if (!creatorName) return;
     
     setIsCreating(true);
+
+    // If custom image, save it to puzzle_images
+    const isPrivate = imageSource === 'custom';
+    if (imageSource === 'custom') {
+        const insertData: any = { url: currentImageUrl, is_public: false };
+        if (user) insertData.created_by = user.id;
+        
+        await supabase.from('puzzle_images').insert([insertData]);
+    }
 
     const { data, error } = await supabase
       .from('pixi_rooms')
       .insert([
         { 
-          creator_name: finalUsername, 
-          image_url: imageUrl, 
+          creator_name: creatorName, 
+          image_url: currentImageUrl, 
           piece_count: pieceCount, 
           max_players: maxPlayers, 
           status: 'active',
-          has_password: !!password.trim()
+          has_password: !!password.trim(),
+          is_private: isPrivate
         }
       ])
       .select();
     
     if (data && data.length > 0) {
-      const roomId = data[0].id;
+      const roomCode = data[0].room_code;
       const recentRooms = JSON.parse(localStorage.getItem('puzzle_recent_rooms') || '[]');
-      const newRecent = [roomId, ...recentRooms.filter((id: number) => id !== roomId)].slice(0, 10);
+      const newRecent = [roomCode, ...recentRooms.filter((code: string) => code !== roomCode)].slice(0, 10);
       localStorage.setItem('puzzle_recent_rooms', JSON.stringify(newRecent));
-      onJoinRoom(roomId, data[0].image_url, data[0].piece_count);
+      onJoinRoom(roomCode, data[0].image_url, data[0].piece_count);
     } else if (error) {
       console.error('Error creating room:', error);
       alert("방 생성에 실패했습니다.");
@@ -220,18 +277,6 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (roomId: number, imageUrl: string, 
   };
 
   const handleJoinSpecificRoom = (room: any) => {
-    let finalUsername = username.trim();
-    if (!finalUsername) {
-      alert('Please enter your name first!');
-      return;
-    }
-    
-    if (!finalUsername.includes('#')) {
-      finalUsername = `${finalUsername}#${getBrowserTag()}`;
-      setUsername(finalUsername);
-      localStorage.setItem('puzzle_username', finalUsername);
-    }
-    
     if (room.has_password) {
       const pwd = prompt('Enter room password:');
       if (pwd === null) return;
@@ -254,9 +299,58 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (roomId: number, imageUrl: string, 
           <div className="flex items-center justify-center bg-indigo-500/10 w-8 h-8 sm:w-9 sm:h-9 rounded-lg border border-indigo-500/20 shrink-0">
             <Grid3X3 size={18} className="text-indigo-400" />
           </div>
-          <span className="font-bold text-sm sm:text-base">Web Puzzle</span>
+          <span className="font-bold text-sm sm:text-base hidden sm:block">Web Puzzle</span>
         </div>
         <div className="flex items-center gap-1.5 sm:gap-2">
+          {user ? (
+            <>
+              <div className="hidden md:flex items-center gap-4 mr-2 text-sm">
+                <div className="flex items-center gap-1.5 text-slate-300">
+                  <span className="text-slate-500">환영합니다,</span>
+                  <span className="font-medium text-indigo-400">{user.username}</span>
+                  <span className="text-slate-500">님</span>
+                </div>
+                <div className="flex items-center gap-3 text-slate-400">
+                  <span title="완성한 퍼즐" className="flex items-center gap-1">
+                    <Trophy className="w-4 h-4 text-yellow-500" />
+                    {user.completed_puzzles || 0}
+                  </span>
+                  <span title="맞춘 조각" className="flex items-center gap-1">
+                    <Grid className="w-4 h-4 text-indigo-400" />
+                    {user.placed_pieces || 0}
+                  </span>
+                </div>
+              </div>
+
+              {user.role === 'admin' && (
+                <button 
+                  onClick={onAdmin}
+                  className="flex items-center justify-center gap-2 px-3 h-8 sm:h-9 bg-indigo-500/10 hover:bg-indigo-500/20 rounded-lg transition-colors border border-indigo-500/20 text-indigo-400 shrink-0 text-sm font-medium"
+                  title="관리자 페이지"
+                >
+                  <ShieldAlert size={16} />
+                  <span className="hidden sm:inline">관리자</span>
+                </button>
+              )}
+
+              <button 
+                onClick={onLogout}
+                className="flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 bg-slate-800/50 hover:bg-red-500/20 hover:text-red-400 rounded-lg transition-colors border border-slate-700/50 text-slate-400 shrink-0"
+                title="로그아웃"
+              >
+                <LogOut size={18} />
+              </button>
+            </>
+          ) : (
+            <button 
+              onClick={onLoginClick}
+              className="flex items-center justify-center gap-2 px-4 h-8 sm:h-9 bg-indigo-500 hover:bg-indigo-600 rounded-lg transition-colors text-white text-sm font-medium shrink-0"
+            >
+              <LogIn size={16} />
+              <span className="hidden sm:inline">로그인 / 가입</span>
+            </button>
+          )}
+
           <button 
             onClick={toggleOrientation}
             className="flex lg:hidden items-center justify-center w-8 h-8 sm:w-9 sm:h-9 bg-slate-800/50 hover:bg-slate-700 rounded-lg transition-colors border border-slate-700/50 text-slate-400 hover:text-white shrink-0"
@@ -292,29 +386,44 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (roomId: number, imageUrl: string, 
           <p className="text-slate-400 mb-4">
             Create a new puzzle room and invite friends!
           </p>
-          
-          <div className="mb-4">
-            <input
-              type="text"
-              placeholder="Enter your name"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
-            />
-          </div>
+
+          {!user && (
+            <div className="mb-4">
+              <input
+                type="text"
+                placeholder="사용할 닉네임을 입력하세요"
+                value={guestName}
+                onChange={(e) => setGuestName(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+          )}
+
 
           <div className="space-y-4 mb-4 text-left">
             <div>
               <label className="block text-sm font-medium text-slate-300 mb-2 flex items-center gap-2">
-                <ImageIcon className="w-4 h-4" /> Image URL
+                <ImageIcon className="w-4 h-4" /> Image
               </label>
-              <input
-                type="text"
-                placeholder="https://example.com/image.jpg"
-                value={imageUrl}
-                onChange={(e) => setImageUrl(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500 text-sm"
-              />
+              <div className="flex gap-2 mb-2">
+                <button onClick={() => setImageSource('public')} className={`flex-1 py-2 rounded-lg text-sm ${imageSource === 'public' ? 'bg-indigo-500 text-white' : 'bg-slate-800 text-slate-400'}`}>Public</button>
+                <button onClick={() => setImageSource('custom')} className={`flex-1 py-2 rounded-lg text-sm ${imageSource === 'custom' ? 'bg-indigo-500 text-white' : 'bg-slate-800 text-slate-400'}`}>Custom</button>
+              </div>
+              {imageSource === 'public' ? (
+                <select 
+                  value={imageUrl} 
+                  onChange={(e) => setImageUrl(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white focus:outline-none focus:border-indigo-500 text-sm"
+                >
+                  {publicImages.map(img => <option key={img.id} value={img.url}>{img.category} - {img.style}</option>)}
+                </select>
+              ) : (
+                <input
+                  type="file"
+                  onChange={handleFileUpload}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500 text-sm"
+                />
+              )}
             </div>
             
             <div>
@@ -374,7 +483,7 @@ const Lobby = ({ onJoinRoom }: { onJoinRoom: (roomId: number, imageUrl: string, 
           
           <button
             onClick={handleCreateRoom}
-            disabled={isCreating || !username.trim()}
+            disabled={isCreating || (!user && !guestName.trim())}
             className="w-full bg-indigo-500 hover:bg-indigo-600 disabled:bg-slate-800 disabled:text-slate-500 text-white font-medium py-4 px-6 rounded-xl flex items-center justify-center gap-2 transition-colors"
           >
             <Plus className="w-5 h-5" />

@@ -6,11 +6,19 @@
 import React, { useState, useEffect } from 'react';
 import PuzzleBoard from './components/PuzzleBoard';
 import Lobby from './components/Lobby';
+import Auth from './components/Auth';
+import Admin from './components/Admin';
 import { supabase } from './lib/supabaseClient';
 
 export default function App() {
   const [currentRoom, setCurrentRoom] = useState<{id: number, imageUrl: string, pieceCount: number} | null>(null);
   const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState<any>(() => {
+    const storedUser = localStorage.getItem('puzzle_user');
+    return storedUser ? JSON.parse(storedUser) : null;
+  });
+  const [showAdmin, setShowAdmin] = useState(false);
+  const [showAuth, setShowAuth] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -51,12 +59,26 @@ export default function App() {
     setCurrentRoom(null);
   };
 
+  const handleLogout = () => {
+    localStorage.removeItem('puzzle_user');
+    setUser(null);
+    setShowAdmin(false);
+  };
+
   if (loading) {
     return (
       <div className="h-screen w-screen bg-slate-950 flex items-center justify-center text-white">
         <div className="text-2xl font-bold animate-pulse">Loading...</div>
       </div>
     );
+  }
+
+  if (showAuth) {
+    return <Auth onLogin={(u) => { setUser(u); setShowAuth(false); }} onClose={() => setShowAuth(false)} />;
+  }
+
+  if (showAdmin && user?.role === 'admin') {
+    return <Admin onBack={() => setShowAdmin(false)} />;
   }
 
   if (currentRoom) {
@@ -67,10 +89,12 @@ export default function App() {
           imageUrl={currentRoom.imageUrl} 
           pieceCount={currentRoom.pieceCount} 
           onBack={handleLeaveRoom}
+          user={user}
+          setUser={setUser}
         />
       </div>
     );
   }
 
-  return <Lobby onJoinRoom={handleJoinRoom} />;
+  return <Lobby onJoinRoom={handleJoinRoom} user={user} onLogout={handleLogout} onAdmin={() => setShowAdmin(true)} onLoginClick={() => setShowAuth(true)} />;
 }

@@ -14,7 +14,29 @@ const supabase = createClient(
 
 const SNAP_THRESHOLD = 30;
 
-export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { roomId: number, imageUrl: string, pieceCount: number, onBack: () => void }) {
+const isHardwareAccelerationEnabled = () => {
+  try {
+    const canvas = document.createElement('canvas');
+    const gl = (canvas.getContext('webgl') || canvas.getContext('experimental-webgl')) as WebGLRenderingContext | null;
+    if (!gl) return false;
+    
+    const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+    if (!debugInfo) return true;
+    
+    const renderer = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL).toLowerCase();
+    if (renderer.includes('swiftshader') || 
+        renderer.includes('llvmpipe') || 
+        renderer.includes('software') || 
+        renderer.includes('mesa offscreen')) {
+      return false;
+    }
+    return true;
+  } catch (e) {
+    return false;
+  }
+};
+
+export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack, user, setUser }: { roomId: number, imageUrl: string, pieceCount: number, onBack: () => void, user: any, setUser: (user: any) => void }) {
   const pixiContainer = useRef<HTMLDivElement>(null);
   const app = useRef<PIXI.Application | null>(null);
   const pieces = useRef<Map<number, PIXI.Container>>(new Map());
@@ -196,14 +218,35 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
     // 1. Pixi Application 초기화
     const initPixi = async () => {
       try {
+        setIsLoading(true);
+        const hwAccelEnabled = isHardwareAccelerationEnabled();
+        
+        // Update last active time when entering a room
+        if (user && user.id) {
+          supabase.from('pixi_users').update({ last_active_at: new Date().toISOString() }).eq('id', user.id).then();
+        }
+        
         const app = new PIXI.Application();
-        await app.init({ 
-          resizeTo: window, 
-          backgroundAlpha: 0,
-          antialias: true,
-          resolution: window.devicePixelRatio || 1,
-          autoDensity: true
-        });
+        try {
+          await app.init({ 
+            resizeTo: window, 
+            backgroundAlpha: 0,
+            antialias: true,
+            resolution: window.devicePixelRatio || 1,
+            autoDensity: true,
+            preference: 'webgl'
+          });
+        } catch (e) {
+          console.warn("WebGL failed, trying Canvas renderer", e);
+          await app.init({ 
+            resizeTo: window, 
+            backgroundAlpha: 0,
+            antialias: true,
+            resolution: window.devicePixelRatio || 1,
+            autoDensity: true,
+            preference: 'canvas'
+          });
+        }
 
         if (!isMounted) {
           app.destroy(true);
@@ -343,7 +386,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
                 type: 'broadcast',
                 event: 'cursorMove',
                 payload: {
-                  username: localStorage.getItem('puzzle_username') || 'Anonymous',
+                  username: user.username,
                   x: broadcastX,
                   y: broadcastY
                 }
@@ -1148,20 +1191,22 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
 
         const sendLockBatch = (pieceIds: number[], userId?: string) => {
           if (channelRef.current) {
+            const currentUsername = user ? user.username : localStorage.getItem('puzzle_guest_name');
             channelRef.current.send({
               type: 'broadcast',
               event: 'lock',
-              payload: { pieceIds, userId: userId || localStorage.getItem('puzzle_username') || 'unknown' }
+              payload: { pieceIds, userId: userId || currentUsername }
             });
           }
         };
 
         const sendUnlockBatch = (pieceIds: number[], userId?: string) => {
           if (channelRef.current) {
+            const currentUsername = user ? user.username : localStorage.getItem('puzzle_guest_name');
             channelRef.current.send({
               type: 'broadcast',
               event: 'unlock',
-              payload: { pieceIds, userId: userId || localStorage.getItem('puzzle_username') || 'unknown' }
+              payload: { pieceIds, userId: userId || currentUsername }
             });
           }
         };
@@ -1303,10 +1348,49 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
               }
             }
 
-            const { error } = await supabase.from('pixi_rooms').update({ status: 'completed' }).eq('id', roomId);
-            if (error) {
-              console.error("Failed to update room status to completed:", error);
+            // Check if we are the first to complete it
+            const { data: roomData } = await supabase.from('pixi_rooms').select('status').eq('id', roomId).single();
+            
+            if (roomData && roomData.status !== 'completed') {
+              const { error } = await supabase.from('pixi_rooms').update({ status: 'completed' }).eq('id', roomId);
+              if (error) {
+                console.error("Failed to update room status to completed:", error);
+              } else {
+                // Distribute rewards to all participants based on their actual placed pieces
+                const { data: roomScores } = await supabase.from('pixi_scores').select('*').eq('room_id', roomId);
+                if (roomScores) {
+                  for (const rs of roomScores) {
+                    // Find user by username (guests will safely fail this check)
+                    const { data: uData } = await supabase.from('pixi_users').select('id, completed_puzzles, placed_pieces').eq('username', rs.username).maybeSingle();
+                    if (uData) {
+                      const newCompleted = (uData.completed_puzzles || 0) + 1;
+                      const newPlaced = (uData.placed_pieces || 0) + rs.score;
+                      
+                      await supabase.from('pixi_users').update({
+                        completed_puzzles: newCompleted,
+                        placed_pieces: newPlaced
+                      }).eq('id', uData.id);
+
+                      // If this is the current user, update local state
+                      if (user && user.username === rs.username) {
+                        const updatedUser = { ...user, completed_puzzles: newCompleted, placed_pieces: newPlaced };
+                        localStorage.setItem('puzzle_user', JSON.stringify(updatedUser));
+                        setUser(updatedUser);
+                      }
+                    }
+                  }
+                }
+              }
+            } else if (user && user.id) {
+              // Room was already completed, just sync our local user state
+              const { data: uData } = await supabase.from('pixi_users').select('completed_puzzles, placed_pieces').eq('id', user.id).maybeSingle();
+              if (uData) {
+                const updatedUser = { ...user, completed_puzzles: uData.completed_puzzles, placed_pieces: uData.placed_pieces };
+                localStorage.setItem('puzzle_user', JSON.stringify(updatedUser));
+                setUser(updatedUser);
+              }
             }
+
             if (socketRef.current) {
               socketRef.current.emit("puzzle_completed", roomId);
             }
@@ -1344,7 +1428,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
 
         const updateScore = async (points: number) => {
           if (points <= 0) return;
-          const username = localStorage.getItem('puzzle_username') || 'Anonymous';
+          const username = user ? user.username : localStorage.getItem('puzzle_guest_name');
           
           // Optimistic UI update
           setScores(prev => {
@@ -1357,7 +1441,7 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           });
 
           // DB update
-          const { data } = await supabase.from('pixi_scores').select('score').eq('room_id', roomId).eq('username', username).single();
+          const { data } = await supabase.from('pixi_scores').select('score').eq('room_id', roomId).eq('username', username).maybeSingle();
           const newScore = (data?.score || 0) + points;
           await supabase.from('pixi_scores').upsert({ room_id: roomId, username, score: newScore }, { onConflict: 'room_id, username' });
           
@@ -2813,7 +2897,10 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           if (PIECE_COUNT > 500) maxRes = 1;
           else if (PIECE_COUNT > 200) maxRes = 1.5;
           
-          const targetResolution = Math.min(window.devicePixelRatio || 1, maxRes);
+          let targetResolution = Math.min(window.devicePixelRatio || 1, maxRes);
+          if (!hwAccelEnabled) {
+            targetResolution *= 0.5; // 하드웨어 가속 미사용 시 해상도 절반으로 감소
+          }
           
           // 외곽선이 잘리지 않도록 bounds를 기준으로 패딩을 추가하여 프레임 설정
           const bounds = pieceGraphics.getLocalBounds();
@@ -2855,6 +2942,9 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           pieceContainer.addChild(pieceSprite);
           pieceContainer.addChild(lockIconSprite);
           
+          // 조각의 실제 모양에 맞춰 hitArea 설정 (여백 제외)
+          pieceContainer.hitArea = new PIXI.Rectangle(minX, minY, maxX - minX, maxY - minY);
+          
           // 렌더링 최적화: 화면 밖에 있는 조각은 그리지 않도록 설정
           pieceContainer.cullable = true;
 
@@ -2893,20 +2983,28 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             pieceContainer.cursor = 'pointer';
             pieceContainer.zIndex = 1;
             
-            // Set initial falling state
-            pieceContainer.alpha = 0;
-            pieceContainer.scale.set(3);
-            pieceContainer.x = targetX - pieceWidth; // (3-1)/2 = 1, so 1 * pieceWidth
-            pieceContainer.y = targetY - 800 - pieceHeight;
+            if (hwAccelEnabled) {
+              // Set initial falling state
+              pieceContainer.alpha = 0;
+              pieceContainer.scale.set(3);
+              pieceContainer.x = targetX - pieceWidth; // (3-1)/2 = 1, so 1 * pieceWidth
+              pieceContainer.y = targetY - 800 - pieceHeight;
 
-            fallingPieces.push({
-              id: i,
-              container: pieceContainer,
-              targetX,
-              targetY,
-              progress: 0,
-              delay: Math.random() * 40 // 0 to ~0.6 seconds delay
-            });
+              fallingPieces.push({
+                id: i,
+                container: pieceContainer,
+                targetX,
+                targetY,
+                progress: 0,
+                delay: Math.random() * 40 // 0 to ~0.6 seconds delay
+              });
+            } else {
+              // 하드웨어 가속 미사용 시 떨어지는 애니메이션 생략
+              pieceContainer.alpha = 1;
+              pieceContainer.scale.set(1);
+              pieceContainer.x = targetX;
+              pieceContainer.y = targetY;
+            }
           }
 
           // 드래그 로직
@@ -3131,7 +3229,8 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           })
           .on('broadcast', { event: 'cursorMove' }, ({ payload }) => {
             const { username, x, y } = payload;
-            if (username === (localStorage.getItem('puzzle_username') || 'Anonymous')) return;
+            const currentUsername = user ? user.username : localStorage.getItem('puzzle_guest_name');
+            if (username === currentUsername) return;
 
             let cursorData = cursors.get(username);
             if (!cursorData) {
@@ -3192,7 +3291,8 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
           })
           .subscribe(async (status) => {
             if (status === 'SUBSCRIBED') {
-              await channel.track({ user: localStorage.getItem('puzzle_username') || 'Anonymous' });
+              const currentUsername = user ? user.username : localStorage.getItem('puzzle_guest_name');
+              await channel.track({ user: currentUsername });
             }
           });
 
@@ -3204,8 +3304,28 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
 
     initPixi();
 
+    // Track total play time
+    let playTimeInterval: any;
+    if (user && user.id) {
+      playTimeInterval = setInterval(async () => {
+        try {
+          // Fetch current total to avoid overwriting from other tabs
+          const { data } = await supabase.from('pixi_users').select('total_play_time').eq('id', user.id).single();
+          if (data) {
+            await supabase.from('pixi_users').update({
+              total_play_time: (data.total_play_time || 0) + 60,
+              last_active_at: new Date().toISOString()
+            }).eq('id', user.id);
+          }
+        } catch (err) {
+          console.error("Error updating play time:", err);
+        }
+      }, 60000); // Every 60 seconds
+    }
+
     return () => {
       isMounted = false;
+      if (playTimeInterval) clearInterval(playTimeInterval);
       isBotRunningRef.current = false;
       isColorBotRunningRef.current = false;
       if (mainTextureRef.current) {
@@ -3556,7 +3676,8 @@ export default function PuzzleBoard({ roomId, imageUrl, pieceCount, onBack }: { 
             ) : (
               <div className="space-y-1">
                 {scores.map((score, idx) => {
-                  const isMe = score.username === (localStorage.getItem('puzzle_username') || 'Anonymous');
+                  const currentUsername = user ? user.username : localStorage.getItem('puzzle_guest_name');
+                  const isMe = score.username === currentUsername;
                   return (
                   <div key={idx} className={`flex items-center justify-between p-2 rounded-lg transition-colors ${isMe ? 'bg-blue-500/20 border border-blue-500/30' : 'hover:bg-slate-700/50'}`}>
                     <div className="flex items-center gap-3">
