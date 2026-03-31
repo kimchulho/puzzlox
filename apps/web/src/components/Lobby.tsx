@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Trophy, Grid3X3, RefreshCw, Users, Lock, Image as ImageIcon, Play, Plus, Grid, Clock, RotateCcw, Maximize, Minimize, LogOut, ShieldAlert, LogIn, ChevronDown } from 'lucide-react';
+import { Trophy, Grid3X3, RefreshCw, Users, Lock, Image as ImageIcon, Play, Plus, Grid, Clock, RotateCcw, Maximize, Minimize, LogOut, ShieldAlert, LogIn, ChevronDown, Languages } from 'lucide-react';
 import { supabase } from '../lib/supabaseClient';
 import { motion } from 'motion/react';
 import { encodeRoomId } from '../lib/roomCode';
@@ -12,6 +12,9 @@ const formatPlayTime = (seconds: number) => {
   const s = Math.floor(seconds % 60);
   return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 };
+
+const isBotLikeUser = (name: unknown) =>
+  typeof name === 'string' && /(bot|봇)/i.test(name.trim());
 
 export type TossLobbyUi = {
   safeArea: { top: number; left: number; right: number; bottom: number };
@@ -27,6 +30,8 @@ const Lobby = ({
   onLoginClick,
   onOpenTerms,
   tossUi,
+  locale = 'ko',
+  onToggleLocale,
 }: {
   onJoinRoom: (roomId: number, imageUrl: string, pieceCount: number) => void;
   user?: any;
@@ -36,6 +41,8 @@ const Lobby = ({
   onOpenTerms?: () => void;
   /** 앱인토스: 상태바 인셋 + TDS 상단(내비 영역) */
   tossUi?: TossLobbyUi;
+  locale?: 'ko' | 'en';
+  onToggleLocale?: () => void;
 }) => {
   const [activeRooms, setActiveRooms] = useState<any[]>([]);
   const [completedRooms, setCompletedRooms] = useState<any[]>([]);
@@ -45,7 +52,10 @@ const Lobby = ({
   const [publicImages, setPublicImages] = useState<any[]>([]);
   const [isImageModalOpen, setIsImageModalOpen] = useState(false);
   const [showStatsModal, setShowStatsModal] = useState(false);
+  const [showRoomFullModal, setShowRoomFullModal] = useState(false);
+  const [roomFullInfo, setRoomFullInfo] = useState<{ roomCode: string; current: number; max: number } | null>(null);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(!!document.fullscreenElement);
+  const isKo = locale === 'ko';
 
   useEffect(() => {
     const fetchPublicImages = async () => {
@@ -266,7 +276,15 @@ const Lobby = ({
       const channel = supabase.channel(`room_${room.id}`);
       channel.on('presence', { event: 'sync' }, () => {
         const state = channel.presenceState();
-        const count = Object.keys(state).length;
+        // 세션 수는 재연결 시 부풀 수 있어, 고유 사용자 수 기준으로 표시합니다.
+        const users = new Set<string>();
+        Object.values(state).forEach((sessions: any) => {
+          sessions.forEach((s: any) => {
+            if (s?.user && !isBotLikeUser(s.user)) users.add(String(s.user));
+          });
+        });
+        // user 메타가 없는 레거시 presence만 있는 경우를 대비한 보수적 fallback
+        const count = users.size > 0 ? users.size : Object.keys(state).length;
         setActiveRooms(prev => prev.map(r => r.id === room.id ? { ...r, currentPlayers: count } : r));
       });
       channel.subscribe();
@@ -324,6 +342,18 @@ const Lobby = ({
   };
 
   const handleJoinSpecificRoom = (room: any) => {
+    const currentPlayers = room.currentPlayers ?? 0;
+    const maxPlayers = room.max_players ?? 0;
+    if (maxPlayers > 0 && currentPlayers >= maxPlayers) {
+      setRoomFullInfo({
+        roomCode: encodeRoomId(room.id),
+        current: currentPlayers,
+        max: maxPlayers,
+      });
+      setShowRoomFullModal(true);
+      return;
+    }
+
     if (room.has_password) {
       const pwd = prompt('Enter room password:');
       if (pwd === null) return;
@@ -457,16 +487,27 @@ const Lobby = ({
               className="flex items-center justify-center gap-2 px-4 h-8 sm:h-9 bg-indigo-500 hover:bg-indigo-600 rounded-lg transition-colors text-white text-sm font-medium shrink-0"
             >
               <LogIn size={16} />
-              <span className="hidden sm:inline">로그인 / 가입</span>
+              <span className="hidden sm:inline">{isKo ? "로그인 / 가입" : "Login / Sign up"}</span>
             </button>
           )}
 
           {!tossUi ? (
             <button
               type="button"
+              onClick={onToggleLocale}
+              className="flex items-center justify-center gap-1 w-14 h-8 sm:h-9 bg-slate-800/50 hover:bg-slate-700 rounded-lg transition-colors border border-slate-700/50 text-slate-300 hover:text-white shrink-0 text-xs font-semibold"
+              title={isKo ? "Switch to English" : "한국어로 전환"}
+            >
+              <Languages size={14} />
+              <span>{isKo ? 'KO' : 'EN'}</span>
+            </button>
+          ) : null}
+          {!tossUi ? (
+            <button
+              type="button"
               onClick={toggleOrientation}
               className="flex lg:hidden items-center justify-center w-8 h-8 sm:w-9 sm:h-9 bg-slate-800/50 hover:bg-slate-700 rounded-lg transition-colors border border-slate-700/50 text-slate-400 hover:text-white shrink-0"
-              title="Rotate Screen"
+              title={isKo ? "화면 회전" : "Rotate Screen"}
             >
               <RotateCcw size={18} />
             </button>
@@ -476,7 +517,7 @@ const Lobby = ({
               type="button"
               onClick={toggleFullscreen}
               className="flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 bg-slate-800/50 hover:bg-slate-700 rounded-lg transition-colors border border-slate-700/50 text-slate-400 hover:text-white shrink-0"
-              title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+              title={isFullscreen ? (isKo ? "전체화면 종료" : "Exit Fullscreen") : (isKo ? "전체화면" : "Enter Fullscreen")}
             >
               {isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}
             </button>
@@ -507,7 +548,7 @@ const Lobby = ({
             <div className="flex items-center justify-center bg-indigo-500/10 w-8 h-8 sm:w-9 sm:h-9 rounded-lg border border-indigo-500/20 shrink-0">
               <Grid3X3 size={18} className="text-indigo-400" />
             </div>
-            <span className="font-bold text-sm sm:text-base">Web Puzzle</span>
+            <span className="font-bold text-sm sm:text-base">{isKo ? "웹퍼즐" : "Web Puzzle"}</span>
           </div>
           {headerActions}
         </div>
@@ -532,10 +573,10 @@ const Lobby = ({
           </div>
           
           <h1 className="text-3xl font-bold text-white mb-2">
-            {tossUi ? "퍼즐 로비" : "Web Puzzle"}
+            {tossUi ? "퍼즐 로비" : (isKo ? "웹퍼즐" : "Web Puzzle")}
           </h1>
           <p className="text-slate-400 mb-4">
-            {tossUi ? "방을 만들고 친구를 초대해 같이 맞춰 보세요." : "Create a new puzzle room and invite friends!"}
+            {tossUi ? "방을 만들고 친구를 초대해 같이 맞춰 보세요." : (isKo ? "새 퍼즐방을 만들고 친구를 초대해 보세요!" : "Create a new puzzle room and invite friends!")}
           </p>
 
           {!user && (
@@ -554,11 +595,11 @@ const Lobby = ({
           <div className="space-y-4 mb-4 text-left">
             <div>
               <label className="block text-sm font-medium text-slate-300 mb-2 flex items-center gap-2">
-                <ImageIcon className="w-4 h-4" /> Image
+                <ImageIcon className="w-4 h-4" /> {isKo ? "이미지" : "Image"}
               </label>
               <div className="flex gap-2 mb-2">
-                <button onClick={() => setImageSource('public')} className={`flex-1 py-2 rounded-lg text-sm ${imageSource === 'public' ? 'bg-indigo-500 text-white' : 'bg-slate-800 text-slate-400'}`}>Public</button>
-                <button onClick={() => setImageSource('custom')} className={`flex-1 py-2 rounded-lg text-sm ${imageSource === 'custom' ? 'bg-indigo-500 text-white' : 'bg-slate-800 text-slate-400'}`}>Custom</button>
+                <button onClick={() => setImageSource('public')} className={`flex-1 py-2 rounded-lg text-sm ${imageSource === 'public' ? 'bg-indigo-500 text-white' : 'bg-slate-800 text-slate-400'}`}>{isKo ? "공개" : "Public"}</button>
+                <button onClick={() => setImageSource('custom')} className={`flex-1 py-2 rounded-lg text-sm ${imageSource === 'custom' ? 'bg-indigo-500 text-white' : 'bg-slate-800 text-slate-400'}`}>{isKo ? "직접 업로드" : "Custom"}</button>
               </div>
               {imageSource === 'public' ? (
                 <button
@@ -593,7 +634,7 @@ const Lobby = ({
             
             <div>
               <label className="block text-sm font-medium text-slate-300 mb-2 flex items-center gap-2">
-                <Grid className="w-4 h-4" /> Target Piece Count
+                <Grid className="w-4 h-4" /> {isKo ? "조각 수" : "Target Piece Count"}
               </label>
               <div className="grid grid-cols-6 gap-2">
                 {[20, 100, 150, 300, 500, 1000].map(count => (
@@ -618,7 +659,7 @@ const Lobby = ({
             <div className="flex gap-3">
               <div className="flex-1">
                 <label className="block text-sm font-medium text-slate-300 mb-2 flex items-center gap-2">
-                  <Users className="w-4 h-4" /> Max Players
+                  <Users className="w-4 h-4" /> {isKo ? "최대 인원" : "Max Players"}
                 </label>
                 <select
                   value={maxPlayers}
@@ -633,11 +674,11 @@ const Lobby = ({
               
               <div className="flex-1">
                 <label className="block text-sm font-medium text-slate-300 mb-2 flex items-center gap-2">
-                  <Lock className="w-4 h-4" /> Password (Optional)
+                  <Lock className="w-4 h-4" /> {isKo ? "비밀번호 (선택)" : "Password (Optional)"}
                 </label>
                 <input
                   type="text"
-                  placeholder="Leave empty for public"
+                  placeholder={isKo ? "비워두면 공개방" : "Leave empty for public"}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500 text-sm"
@@ -652,7 +693,7 @@ const Lobby = ({
             className="w-full bg-indigo-500 hover:bg-indigo-600 disabled:bg-slate-800 disabled:text-slate-500 text-white font-medium py-4 px-6 rounded-xl flex items-center justify-center gap-2 transition-colors"
           >
             <Plus className="w-5 h-5" />
-            {isCreating ? 'Creating...' : 'Create Room'}
+            {isCreating ? (isKo ? '생성 중...' : 'Creating...') : (isKo ? '방 만들기' : 'Create Room')}
           </button>
         </div>
 
@@ -661,12 +702,12 @@ const Lobby = ({
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xl font-bold text-white flex items-center gap-2">
               <Grid className="w-5 h-5 text-indigo-400" />
-              Active Puzzle Rooms
+              {isKo ? "진행 중인 퍼즐방" : "Active Puzzle Rooms"}
             </h2>
             <button 
               onClick={fetchRooms}
               className="text-slate-400 hover:text-white transition-colors p-2 rounded-lg hover:bg-slate-800"
-              title="Refresh room list"
+              title={isKo ? "목록 새로고침" : "Refresh room list"}
             >
               <RefreshCw size={18} />
             </button>
@@ -676,8 +717,8 @@ const Lobby = ({
             {activeRooms.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-slate-500">
                 <ImageIcon className="w-12 h-12 mb-3 opacity-20" />
-                <p>No active rooms yet.</p>
-                <p className="text-sm mt-1">Be the first to create one!</p>
+                <p>{isKo ? "아직 진행 중인 방이 없습니다." : "No active rooms yet."}</p>
+                <p className="text-sm mt-1">{isKo ? "첫 번째 방을 만들어 보세요!" : "Be the first to create one!"}</p>
               </div>
             ) : (
               [...activeRooms].sort((a, b) => {
@@ -714,7 +755,7 @@ const Lobby = ({
                     <div className="absolute bottom-3 left-3 right-3 flex justify-between items-end">
                       <div className="flex gap-2 items-center">
                         <span className="bg-slate-900/80 backdrop-blur-sm text-xs font-medium text-white px-2 py-1 rounded-md border border-slate-700">
-                          {room.totalPieces || room.piece_count} Pieces
+                          {room.totalPieces || room.piece_count} {isKo ? "조각" : "Pieces"}
                         </span>
                         {room.has_password && (
                           <span className="bg-slate-900/80 backdrop-blur-sm text-xs font-medium text-amber-400 px-2 py-1 rounded-md border border-slate-700 flex items-center gap-1">
@@ -723,7 +764,7 @@ const Lobby = ({
                         )}
                       </div>
                       <span className="text-xs text-slate-300 flex items-center gap-1">
-                        <Users className="w-3 h-3" /> Created by {room.creator_name}
+                        <Users className="w-3 h-3" /> {isKo ? "생성자" : "Created by"} {room.creator_name}
                       </span>
                     </div>
                   </div>
@@ -747,7 +788,7 @@ const Lobby = ({
                       </p>
                       {room.snappedCount !== undefined && room.totalPieces !== undefined && (
                         <p className="text-xs text-indigo-400 font-medium mt-1">
-                          {Math.round((room.snappedCount / room.totalPieces) * 100)}% Complete ({room.snappedCount}/{room.totalPieces})
+                          {Math.round((room.snappedCount / room.totalPieces) * 100)}% {isKo ? "완료" : "Complete"} ({room.snappedCount}/{room.totalPieces})
                         </p>
                       )}
                       <p className="text-xs text-slate-500 flex items-center mt-1">
@@ -762,7 +803,7 @@ const Lobby = ({
                       onClick={() => handleJoinSpecificRoom(room)}
                       className="bg-indigo-500/10 hover:bg-indigo-500 text-indigo-400 hover:text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors"
                     >
-                      Join
+                      {isKo ? "입장" : "Join"}
                     </button>
                   </div>
                 </div>
@@ -776,7 +817,7 @@ const Lobby = ({
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xl font-bold text-white flex items-center gap-2">
               <Trophy className="w-5 h-5 text-amber-400" />
-              Completed Puzzles
+              {isKo ? "완료된 퍼즐방" : "Completed Puzzles"}
             </h2>
           </div>
           
@@ -784,7 +825,7 @@ const Lobby = ({
             {completedRooms.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-slate-500">
                 <Trophy className="w-12 h-12 mb-3 opacity-20" />
-                <p>No completed puzzles yet.</p>
+                <p>{isKo ? "아직 완료된 퍼즐방이 없습니다." : "No completed puzzles yet."}</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-1 gap-3">
@@ -804,7 +845,7 @@ const Lobby = ({
                       <div className="absolute bottom-3 left-3 right-3 flex justify-between items-end">
                         <div className="flex gap-2 items-center">
                           <span className="bg-slate-900/80 backdrop-blur-sm text-xs font-medium text-white px-2 py-1 rounded-md border border-slate-700">
-                            {room.totalPieces || room.piece_count} Pieces
+                            {room.totalPieces || room.piece_count} {isKo ? "조각" : "Pieces"}
                           </span>
                           {room.has_password && (
                             <span className="bg-slate-900/80 backdrop-blur-sm text-xs font-medium text-amber-400 px-2 py-1 rounded-md border border-slate-700 flex items-center gap-1">
@@ -813,7 +854,7 @@ const Lobby = ({
                           )}
                         </div>
                         <span className="text-xs text-slate-300 flex items-center gap-1">
-                          <Users className="w-3 h-3" /> Created by {room.creator_name}
+                          <Users className="w-3 h-3" /> {isKo ? "생성자" : "Created by"} {room.creator_name}
                         </span>
                       </div>
                     </div>
@@ -826,7 +867,7 @@ const Lobby = ({
                           Room #{encodeRoomId(room.id)}
                         </p>
                         <p className="text-xs text-amber-400 font-medium mt-1">
-                          100% Complete
+                          100% {isKo ? "완료" : "Complete"}
                         </p>
                         <p className="text-xs text-slate-500 flex items-center mt-1">
                           <Clock className="w-3 h-3 mr-1" />
@@ -840,7 +881,7 @@ const Lobby = ({
                         onClick={() => handleJoinSpecificRoom(room)}
                         className="bg-amber-500/10 hover:bg-amber-500 text-amber-400 hover:text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors"
                       >
-                        View
+                        {isKo ? "보기" : "View"}
                       </button>
                     </div>
                   </div>
@@ -858,6 +899,28 @@ const Lobby = ({
         selectedUrl={imageUrl}
         onSelect={setImageUrl}
       />
+
+      {showRoomFullModal && roomFullInfo && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-sm rounded-2xl border border-slate-700 bg-slate-900 p-5 text-white shadow-2xl">
+            <h3 className="text-base font-bold mb-2">방 입장 불가</h3>
+            <p className="text-sm text-slate-300 leading-relaxed">
+              Room #{roomFullInfo.roomCode} 는 현재 정원이 가득 찼습니다.
+              <br />
+              ({roomFullInfo.current}/{roomFullInfo.max})
+            </p>
+            <div className="mt-4 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowRoomFullModal(false)}
+                className="rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-600 transition-colors"
+              >
+                확인
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {onOpenTerms && (
         <footer

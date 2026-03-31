@@ -280,6 +280,7 @@ export default function GameShell({
             setUser={setUser as (u: unknown) => void}
             onToggleOrientation={handleTossToggleOrientation}
             hostWebViewPadding={tossHostPadding}
+            locale="ko"
           />
         </div>
         {navLoginModal}
@@ -303,6 +304,7 @@ export default function GameShell({
           brandTitle: TOSS_APP_DISPLAY_NAME,
           brandIconUrl: TOSS_BRAND_ICON_URL,
         }}
+        locale="ko"
       />
       {navLoginModal}
     </>

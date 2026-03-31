@@ -24,6 +24,11 @@ function readStoredPuzzleUser(): unknown | null {
 }
 
 export default function App() {
+  const [locale, setLocale] = useState<'ko' | 'en'>(() => {
+    const saved = localStorage.getItem('webpuzzle_locale');
+    if (saved === 'ko' || saved === 'en') return saved;
+    return 'ko';
+  });
   const [pathname, setPathname] = useState(() => window.location.pathname);
   const [currentRoom, setCurrentRoom] = useState<{id: number, imageUrl: string, pieceCount: number} | null>(null);
   const [loading, setLoading] = useState(true);
@@ -106,6 +111,14 @@ export default function App() {
     setShowAdmin(false);
   };
 
+  const toggleLocale = () => {
+    setLocale((prev) => {
+      const next = prev === 'ko' ? 'en' : 'ko';
+      localStorage.setItem('webpuzzle_locale', next);
+      return next;
+    });
+  };
+
   if (loading) {
     return (
       <div className="h-screen w-screen bg-slate-950 flex items-center justify-center text-white">
@@ -145,6 +158,7 @@ export default function App() {
           onBack={handleLeaveRoom}
           user={user}
           setUser={setUser}
+          locale={locale}
         />
       </div>
     );
@@ -158,6 +172,8 @@ export default function App() {
       onAdmin={() => setShowAdmin(true)}
       onLoginClick={() => setShowAuth(true)}
       onOpenTerms={() => navigateToPath('/terms')}
+      locale={locale}
+      onToggleLocale={toggleLocale}
     />
   );
 }

@@ -1,7 +1,7 @@
 import React, { type MutableRefObject, useEffect, useRef, useState } from 'react';
 import * as PIXI from 'pixi.js';
 import { throttle } from 'lodash';
-import { Clock, Users, Trophy, ChevronLeft, X, Palette, LayoutGrid, Zap, Heart, Image as ImageIcon, Bot, Maximize, Minimize, RotateCcw, Share2, Check } from 'lucide-react';
+import { Clock, Users, Trophy, ChevronLeft, X, Palette, LayoutGrid, Zap, Heart, Image as ImageIcon, Bot, Maximize, Minimize, RotateCcw, Share2, Check, Plus, Minus } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 import confetti from 'canvas-confetti';
 import { ROOM_EVENTS, SyncTimePayload } from "@contracts/realtime";
@@ -9,6 +9,8 @@ import { supabase } from '../lib/supabaseClient';
 import { encodeRoomId } from '../lib/roomCode';
 
 const SNAP_THRESHOLD = 30;
+const isBotLikeUser = (name: unknown) =>
+  typeof name === 'string' && /(bot|봇)/i.test(name.trim());
 
 /** Pixi `RendererType.CANVAS` (pixi.js `rendering/renderers/types.d.ts`) */
 const PIXI_RENDERER_TYPE_CANVAS = 4;
@@ -28,6 +30,7 @@ export default function PuzzleBoard({
    * 앱인토스: 네비 액세서리 탭 시 리더보드 토글. 넘기면 인앱 트로피 버튼은 숨김(중복 방지).
    */
   hostLeaderboardToggleRef,
+  locale = 'ko',
 }: {
   roomId: number;
   imageUrl: string;
@@ -38,6 +41,7 @@ export default function PuzzleBoard({
   onToggleOrientation?: () => void | Promise<void>;
   hostWebViewPadding?: { top: number; right: number; left: number };
   hostLeaderboardToggleRef?: MutableRefObject<(() => void) | null>;
+  locale?: 'ko' | 'en';
 }) {
   const pixiContainer = useRef<HTMLDivElement>(null);
   const app = useRef<PIXI.Application | null>(null);
@@ -78,6 +82,7 @@ export default function PuzzleBoard({
   const [mosaicGap, setMosaicGap] = useState(1.6);
   const [bgColor, setBgColor] = useState('#1e293b'); // default slate-800
   const [maxPlayers, setMaxPlayers] = useState(8);
+  const isKo = locale === 'ko';
   const [isCopied, setIsCopied] = useState(false);
   const [isTossWideMode, setIsTossWideMode] = useState(false);
 
@@ -3372,15 +3377,13 @@ export default function PuzzleBoard({
           })
           .on('presence', { event: 'sync' }, () => {
             const state = channel.presenceState();
-            let count = 0;
             const users = new Set<string>();
             for (const key in state) {
-              count += state[key].length;
               state[key].forEach((p: any) => {
-                if (p.user) users.add(p.user);
+                if (p.user && !isBotLikeUser(p.user)) users.add(p.user);
               });
             }
-            setPlayerCount(count);
+            setPlayerCount(users.size);
             setActiveUsers(users);
             
             // Remove cursors for users who left
@@ -3439,6 +3442,8 @@ export default function PuzzleBoard({
         appInstance.destroy(true);
       }
       if (channelRef.current) {
+        // Presence ghost를 줄이기 위해 untrack 후 unsubscribe
+        channelRef.current.untrack?.();
         channelRef.current.unsubscribe();
       }
       if (objectUrlRef.current) {
@@ -3550,14 +3555,14 @@ export default function PuzzleBoard({
             onClick={onBack}
             className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 rounded-lg font-medium transition-colors"
           >
-            Return to Lobby
+            {isKo ? "로비로 돌아가기" : "Return to Lobby"}
           </button>
         </div>
       )}
       {isLoading && !imageLoadError && (
         <div className="absolute inset-0 z-[100] flex flex-col items-center justify-center bg-slate-900/90 backdrop-blur-sm text-white">
           <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-          <h2 className="text-xl font-bold animate-pulse">Loading Puzzle...</h2>
+          <h2 className="text-xl font-bold animate-pulse">{isKo ? "퍼즐 불러오는 중..." : "Loading Puzzle..."}</h2>
           <p className="text-slate-400 mt-2">Preparing pieces and board</p>
         </div>
       )}
@@ -3670,7 +3675,7 @@ export default function PuzzleBoard({
                   ? (isTossMode ? "bg-[#EAF2FF] text-[#2F6FE4]" : "bg-amber-500/20 border border-amber-500/50 text-amber-400")
                   : (isTossMode ? "bg-[#F4F8FF] text-[#2F6FE4]" : "bg-slate-800 hover:bg-slate-700 border border-slate-600")
               }`}
-              title="Rank"
+              title={isKo ? "순위" : "Rank"}
             >
               <Trophy size={16} className={showLeaderboard ? (isTossMode ? 'text-[#2F6FE4]' : 'text-amber-400') : (isTossMode ? 'text-[#2F6FE4]' : 'text-slate-400')} />
             </button>
@@ -3689,7 +3694,7 @@ export default function PuzzleBoard({
               className={`flex items-center gap-1 px-2 h-7 rounded-md border flex-1 sm:flex-none justify-center ${
                 isTossMode ? "bg-blue-50 border-blue-200" : "bg-slate-800/50 border-slate-700/50"
               }`}
-              title="Players"
+              title={isKo ? "인원" : "Players"}
             >
               <Users size={12} className={isTossMode ? "text-blue-700" : "text-slate-400"} />
               <span className={`text-xs font-medium whitespace-nowrap ${isTossMode ? "text-blue-700" : ""}`}>
@@ -3710,7 +3715,7 @@ export default function PuzzleBoard({
               className={`flex items-center gap-1 px-2 h-7 rounded-md border flex-1 sm:flex-none justify-center ${
                 isTossMode ? "bg-blue-50 border-blue-200" : "bg-slate-800/50 border-slate-700/50"
               }`}
-              title="Play Time"
+              title={isKo ? "플레이 시간" : "Play Time"}
             >
               <Clock size={12} className={isTossMode ? "text-blue-700" : "text-slate-400"} />
               <span className={`text-xs font-medium font-mono whitespace-nowrap ${isTossMode ? "text-blue-700" : ""}`}>
@@ -3825,7 +3830,7 @@ export default function PuzzleBoard({
                     ? "bg-blue-500/20 border-blue-500/50 text-blue-400"
                     : "bg-slate-800/50 border-slate-700/50 text-slate-400 hover:bg-slate-700"
                 }`}
-                title="Change Background Color"
+                title={isKo ? "배경색 변경" : "Change Background Color"}
               >
                 <Palette size={14} />
                 <div className="w-3 h-3 rounded-full border border-slate-600" style={{ backgroundColor: bgColor }} />
@@ -3837,7 +3842,7 @@ export default function PuzzleBoard({
                 isTossMode ? "bg-white text-[#2F6FE4] shadow-[0_8px_20px_rgba(47,111,228,0.12)]" : "bg-slate-800 border border-slate-700"
               }`}>
                 <div className="flex items-center justify-between mb-2">
-                  <span className={`text-xs font-medium ${isTossMode ? "text-[#2F6FE4]" : "text-slate-300"}`}>Background</span>
+                  <span className={`text-xs font-medium ${isTossMode ? "text-[#2F6FE4]" : "text-slate-300"}`}>{isKo ? "배경" : "Background"}</span>
                   <button onClick={() => setShowColorPicker(false)} className={isTossMode ? "text-[#2F6FE4]" : "text-slate-500 hover:text-white"}>
                     <X size={14} />
                   </button>
@@ -3857,14 +3862,14 @@ export default function PuzzleBoard({
                   ))}
                 </div>
                 <div className={`mt-3 pt-3 flex items-center justify-between ${isTossMode ? "" : "border-t border-slate-700"}`}>
-                  <span className={`text-xs ${isTossMode ? "text-[#2F6FE4]" : "text-slate-400"}`}>Custom</span>
+                  <span className={`text-xs ${isTossMode ? "text-[#2F6FE4]" : "text-slate-400"}`}>{isKo ? "직접 선택" : "Custom"}</span>
                   <div className={`relative w-6 h-6 rounded overflow-hidden ${isTossMode ? "bg-[#F4F8FF]" : "border border-slate-600"}`}>
                     <input 
                       type="color" 
                       value={bgColor} 
                       onChange={(e) => setBgColor(e.target.value)}
                       className="absolute -top-2 -left-2 w-10 h-10 cursor-pointer"
-                      title="Custom Color"
+                      title={isKo ? "사용자 색상" : "Custom Color"}
                     />
                   </div>
                 </div>
@@ -3880,7 +3885,7 @@ export default function PuzzleBoard({
                   ? (isTossMode ? "bg-[#EAF2FF] text-[#2F6FE4]" : "bg-amber-500/20 border border-amber-500/50 text-amber-400")
                   : (isTossMode ? "bg-[#F4F8FF] text-[#2F6FE4]" : "bg-slate-800 hover:bg-slate-700 border border-slate-600")
               }`}
-              title="Leaderboard"
+              title={isKo ? "순위표" : "Leaderboard"}
             >
               <Trophy size={14} className={showLeaderboard ? (isTossMode ? 'text-[#2F6FE4]' : 'text-amber-400') : (isTossMode ? 'text-[#2F6FE4]' : 'text-slate-400')} />
             </button>
@@ -3900,7 +3905,7 @@ export default function PuzzleBoard({
                 ? "bg-[#F4F8FF] text-[#2F6FE4] border-none"
                 : "bg-slate-800/50 hover:bg-slate-700 border-slate-700/50 text-slate-400 hover:text-white"
             }`}
-            title={isTossMode ? (isTossWideMode ? "일반 모드" : "와이드 모드") : "Rotate Screen"}
+            title={isTossMode ? (isTossWideMode ? "일반 모드" : "와이드 모드") : (isKo ? "화면 회전" : "Rotate Screen")}
           >
             <RotateCcw size={14} />
           </button>
@@ -3909,7 +3914,7 @@ export default function PuzzleBoard({
             <button 
               onClick={toggleFullscreen}
               className="flex items-center justify-center w-7 h-7 bg-slate-800/50 hover:bg-slate-700 rounded-md transition-colors border border-slate-700/50 text-slate-400 hover:text-white shrink-0"
-              title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+              title={isFullscreen ? (isKo ? "전체화면 종료" : "Exit Fullscreen") : (isKo ? "전체화면" : "Enter Fullscreen")}
             >
               {isFullscreen ? <Minimize size={14} /> : <Maximize size={14} />}
             </button>
@@ -3919,41 +3924,41 @@ export default function PuzzleBoard({
 
       {showLeaderboard && (
         <div
-          className={`absolute z-50 w-64 bg-slate-800 border border-slate-700 rounded-xl overflow-hidden animate-in fade-in slide-in-from-top-4 duration-200 ${leaderboardOffset ? "" : "top-20 right-4"}`}
+          className={`absolute z-50 w-56 bg-slate-800 border border-slate-700 rounded-xl overflow-hidden animate-in fade-in slide-in-from-top-4 duration-200 ${leaderboardOffset ? "" : "top-20 right-4"}`}
           style={leaderboardOffset}
         >
-          <div className="bg-slate-900/50 p-3 border-b border-slate-700 flex items-center justify-between">
+          <div className="bg-slate-900/50 p-2.5 border-b border-slate-700 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Trophy size={16} className="text-amber-400" />
-              <h3 className="font-bold text-white">Leaderboard</h3>
+              <h3 className="font-bold text-sm text-white">{isKo ? "순위표" : "Leaderboard"}</h3>
             </div>
             <button onClick={() => setShowLeaderboard(false)} className="text-slate-400 hover:text-white transition-colors">
               <X size={16} />
             </button>
           </div>
-          <div className="max-h-64 overflow-y-auto p-2">
+          <div className="max-h-56 overflow-y-auto p-1.5">
             {scores.length === 0 ? (
-              <div className="text-center text-slate-400 py-4 text-sm">No scores yet</div>
+              <div className="text-center text-slate-400 py-4 text-xs">{isKo ? "아직 점수가 없습니다." : "No scores yet"}</div>
             ) : (
               <div className="space-y-1">
                 {scores.map((score, idx) => {
                   const currentUsername = user ? user.username : localStorage.getItem('puzzle_guest_name');
                   const isMe = score.username === currentUsername;
                   return (
-                  <div key={idx} className={`flex items-center justify-between p-2 rounded-lg transition-colors ${isMe ? 'bg-blue-500/20 border border-blue-500/30' : 'hover:bg-slate-700/50'}`}>
+                  <div key={idx} className={`flex items-center justify-between p-1.5 rounded-lg transition-colors ${isMe ? 'bg-blue-500/20 border border-blue-500/30' : 'hover:bg-slate-700/50'}`}>
                     <div className="flex items-center gap-3">
                       <span className={`font-bold w-4 text-center ${idx === 0 ? 'text-amber-400' : idx === 1 ? 'text-slate-300' : idx === 2 ? 'text-amber-700' : 'text-slate-500'}`}>
                         {idx + 1}
                       </span>
                       <div className="flex items-center gap-1.5">
                         <div className={`w-2 h-2 rounded-full ${activeUsers.has(score.username) ? 'bg-emerald-500' : 'bg-slate-600'}`} title={activeUsers.has(score.username) ? 'Online' : 'Offline'} />
-                        <span className={`text-sm truncate max-w-[100px] ${isMe ? 'text-blue-300 font-bold' : activeUsers.has(score.username) ? 'text-slate-200' : 'text-slate-400'}`} title={score.username}>
+                        <span className={`text-xs truncate max-w-[100px] ${isMe ? 'text-blue-300 font-bold' : activeUsers.has(score.username) ? 'text-slate-200' : 'text-slate-400'}`} title={score.username}>
                           {score.username}
                         </span>
                         {isMe && <span className="text-[10px] font-bold text-blue-400 bg-blue-500/20 px-1.5 py-0.5 rounded-full ml-1">YOU</span>}
                       </div>
                     </div>
-                    <span className="font-bold text-blue-400">{score.score}</span>
+                    <span className="text-xs font-bold text-blue-400">{score.score}</span>
                   </div>
                 )})}
               </div>
@@ -4059,7 +4064,7 @@ export default function PuzzleBoard({
       <div
         className={
           isTossMode && isTossWideMode
-            ? "fixed bottom-3 right-2 z-40 flex flex-col gap-2"
+            ? "fixed bottom-8 right-5 z-40 flex flex-col gap-2"
             : "fixed bottom-4 left-4 sm:bottom-6 sm:left-6 z-40 flex flex-col gap-2"
         }
         style={isTossMode && isTossWideMode ? { transform: "rotate(-90deg)", transformOrigin: "center center" } : undefined}
@@ -4074,9 +4079,9 @@ export default function PuzzleBoard({
           title="Drag left/right to zoom"
         >
           <div className="flex items-center justify-between w-full px-3 text-slate-400 pointer-events-none">
-            <span className="text-lg font-bold leading-none mb-0.5">+</span>
+            <Plus size={16} />
             <div className="w-6 sm:w-10 h-1 bg-slate-600 rounded-full"></div>
-            <span className="text-lg font-bold leading-none mb-0.5">-</span>
+            <Minus size={16} />
           </div>
         </div>
 
