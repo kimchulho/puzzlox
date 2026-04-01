@@ -3353,6 +3353,8 @@ export default function PuzzleBoard({
             const g = new PIXI.Graphics();
             applyPieceShape(g);
             g.fill({ color: EASTER_SOLID_BACK_HEX });
+            // 겹칠 때 덩어리로 보이지 않게 퍼즐 윤곽선
+            g.stroke({ color: 0x475569, alpha: 0.92, width: 1.5 });
             g.label = 'easterSolidBack';
             return g;
           };
@@ -3581,7 +3583,7 @@ export default function PuzzleBoard({
             p.rotation = anim.fromRotation + (anim.toRotation - anim.fromRotation) * t;
             p.alpha = anim.fromAlpha + (anim.toAlpha - anim.fromAlpha) * t;
             const sprite = getPieceSprite(p);
-            if (sprite) {
+            if (sprite?.visible) {
               sprite.tint = lerpColor(anim.fromTint, anim.toTint, t);
               sprite.alpha = anim.fromSpriteAlpha + (anim.toSpriteAlpha - anim.fromSpriteAlpha) * t;
             }
@@ -3590,12 +3592,14 @@ export default function PuzzleBoard({
               if (!anim.keepEndTransform) {
                 p.scale.set(1, 1);
                 p.rotation = 0;
+                p.zIndex = 0;
                 if (sprite) {
                   sprite.tint = 0xffffff;
                   sprite.alpha = 1;
                 }
                 clearEasterSolidBack(p);
               } else {
+                p.zIndex = 0;
                 if (anim.solidGrayBackOnFinish) {
                   setEasterSolidBack(p, true);
                 } else {
@@ -3619,7 +3623,7 @@ export default function PuzzleBoard({
             setEasterSolidBack(p, false);
             p.visible = true;
             p.eventMode = 'none';
-            p.zIndex = 0;
+            p.zIndex = 3500 + i;
             p.scale.set(1, 1);
             p.rotation = 0;
             // 화면 위(정수리 방향)로 쏠리지 않게: 주로 좌우 퍼짐 + 약간 아래(손·얼굴 쪽)로
@@ -3679,14 +3683,33 @@ export default function PuzzleBoard({
             const finalRotation = Math.random() * Math.PI * 2; // 0~360도 랜덤 고정
             const finalFlipped = Math.random() < 0.2;
             const sprite = getPieceSprite(p);
-            p.visible = true;
-            p.eventMode = 'none';
-            p.zIndex = 0;
+            const delayFrames = Math.floor(Math.random() * 22);
             // 위에서 떨어지지 않게: 목표보다 아래(화면 좌표 +Y)에서 시작해 올라오듯 보임
             let fromY = targetY + pieceHeight * (2 + Math.random() * 5);
             fromY = Math.min(fromY, yMaxSpawn);
             fromY = Math.max(fromY, targetY + pieceHeight * 1.1);
             const fromX = targetX + (Math.random() - 0.5) * pieceWidth * 3.2;
+
+            p.visible = true;
+            p.eventMode = 'none';
+            // 이미 놓인 조각(zIndex 0)보다 앞에: 늠 나중에 시동한 조각이 더 위 레이어
+            p.zIndex = 5000 + delayFrames * 80 + i;
+
+            if (finalFlipped) {
+              setEasterSolidBack(p, true);
+            } else {
+              setEasterSolidBack(p, false);
+              if (sprite) {
+                sprite.alpha = 1;
+                sprite.tint = 0xffffff;
+              }
+            }
+            p.x = fromX;
+            p.y = fromY;
+            p.scale.set(startScale, startScale);
+            p.rotation = startRotation;
+            p.alpha = 1;
+
             pieceEasterAnims.set(i, {
               id: i,
               fromX,
@@ -3707,7 +3730,7 @@ export default function PuzzleBoard({
               toSpriteAlpha: 1,
               progress: 0,
               speed: 0.018 + Math.random() * 0.02,
-              delayFrames: Math.floor(Math.random() * 22),
+              delayFrames,
               keepEndTransform: true,
               solidGrayBackOnFinish: finalFlipped,
             });
