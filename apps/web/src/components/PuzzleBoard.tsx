@@ -3566,33 +3566,33 @@ export default function PuzzleBoard({
           easterState.animating = true;
           easterState.spilled = true;
           pieceEasterAnims.clear();
-          const centerX = boardStartX + boardWidth / 2;
-          const centerY = boardStartY + boardHeight / 2;
+          const riseY = boardStartY - pieceHeight * 6;
           for (let i = 0; i < PIECE_COUNT; i++) {
             const p = pieces.current.get(i);
             if (!p) continue;
             p.visible = true;
             p.eventMode = 'none';
             p.zIndex = 0;
-            const dx = p.x - centerX;
-            const dy = p.y - centerY;
-            const len = Math.max(1, Math.hypot(dx, dy));
-            const nx = dx / len;
-            const ny = dy / len;
-            const outward = Math.max(boardWidth, boardHeight) * (0.6 + Math.random() * 0.55);
+            const outwardX = boardWidth * (0.35 + Math.random() * 0.85);
+            const toX = p.x + (Math.random() < 0.5 ? -1 : 1) * outwardX + (Math.random() - 0.5) * pieceWidth * 1.5;
+            const toY = riseY - Math.random() * pieceHeight * 8;
+            const endScale = 2.2 + Math.random() * 1.8;
+            const endFlipped = Math.random() < 0.22;
+            const endScaleX = endFlipped ? -endScale : endScale;
+            const endRotation = (Math.random() < 0.5 ? -1 : 1) * (Math.PI * (0.8 + Math.random() * 1.8));
             const sprite = getPieceSprite(p);
             pieceEasterAnims.set(i, {
               id: i,
               fromX: p.x,
               fromY: p.y,
-              toX: p.x + nx * outward + (Math.random() - 0.5) * pieceWidth * 1.2,
-              toY: p.y + ny * outward + (Math.random() - 0.5) * pieceHeight * 1.2,
-              fromScaleX: 1,
-              fromScaleY: 1,
-              toScaleX: 2.8,
-              toScaleY: 2.8,
-              fromRotation: 0,
-              toRotation: (Math.random() - 0.5) * 1.2,
+              toX,
+              toY,
+              fromScaleX: p.scale.x,
+              fromScaleY: p.scale.y,
+              toScaleX: endScaleX,
+              toScaleY: endScale,
+              fromRotation: p.rotation,
+              toRotation: endRotation,
               fromAlpha: p.alpha,
               toAlpha: 0,
               fromTint: sprite?.tint ?? 0xffffff,
@@ -3652,7 +3652,7 @@ export default function PuzzleBoard({
               fromTint: sprite?.tint ?? 0xffffff,
               toTint: finalFlipped ? 0x808080 : 0xffffff,
               fromSpriteAlpha: sprite?.alpha ?? 1,
-              toSpriteAlpha: finalFlipped ? 0.5 : 1,
+              toSpriteAlpha: 1,
               progress: 0,
               speed: 0.018 + Math.random() * 0.02,
               delayFrames: Math.floor(Math.random() * 22),
