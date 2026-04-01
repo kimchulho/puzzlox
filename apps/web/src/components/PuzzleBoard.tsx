@@ -3683,7 +3683,8 @@ export default function PuzzleBoard({
             const finalRotation = Math.random() * Math.PI * 2; // 0~360도 랜덤 고정
             const finalFlipped = Math.random() < 0.2;
             const sprite = getPieceSprite(p);
-            const delayFrames = Math.floor(Math.random() * 22);
+            // 보이는 순간부터 바로 낙하(지연 없음 — 멈춘 것처럼 보이는 현상 방지)
+            const delayFrames = 0;
             // 위에서 떨어지지 않게: 목표보다 아래(화면 좌표 +Y)에서 시작해 올라오듯 보임
             let fromY = targetY + pieceHeight * (2 + Math.random() * 5);
             fromY = Math.min(fromY, yMaxSpawn);
@@ -3692,8 +3693,8 @@ export default function PuzzleBoard({
 
             p.visible = true;
             p.eventMode = 'none';
-            // 이미 놓인 조각(zIndex 0)보다 앞에: 늠 나중에 시동한 조각이 더 위 레이어
-            p.zIndex = 5000 + delayFrames * 80 + i;
+            // 이미 놓인 조각(zIndex 0)보다 앞에; 인덱스가 클수록 약간 더 위(겹침 시)
+            p.zIndex = 5000 + i;
 
             if (finalFlipped) {
               setEasterSolidBack(p, true);
@@ -4329,12 +4330,12 @@ export default function PuzzleBoard({
               onClick={() => setShowLeaderboard(!showLeaderboard)}
               className={`${isTossMode && isTossWideMode ? "hidden" : "flex sm:hidden"} items-center justify-center w-7 h-7 rounded-md transition-colors shrink-0 ${
                 showLeaderboard
-                  ? (isTossMode ? "bg-[#EAF2FF] text-[#2F6FE4]" : "bg-indigo-500/20 border border-indigo-500/50 text-indigo-400")
+                  ? (isTossMode ? "bg-[#EAF2FF] text-[#2F6FE4]" : "bg-amber-500/20 border border-amber-500/50 text-amber-400")
                   : (isTossMode ? "bg-[#F4F8FF] text-[#2F6FE4]" : "bg-slate-800 hover:bg-slate-700 border border-slate-600")
               }`}
               title={isKo ? "순위" : "Rank"}
             >
-              <Trophy size={16} className={showLeaderboard ? (isTossMode ? 'text-[#2F6FE4]' : 'text-indigo-400') : (isTossMode ? 'text-[#2F6FE4]' : 'text-slate-400')} />
+              <Trophy size={16} className={showLeaderboard ? (isTossMode ? 'text-[#2F6FE4]' : 'text-amber-400') : (isTossMode ? 'text-[#2F6FE4]' : 'text-slate-400')} />
             </button>
           ) : null}
         </div>
@@ -4583,12 +4584,12 @@ export default function PuzzleBoard({
               onClick={() => setShowLeaderboard(!showLeaderboard)}
               className={`${isTossMode && isTossWideMode ? "flex" : "hidden sm:flex"} items-center justify-center w-7 h-7 rounded-md transition-colors shrink-0 ${
                 showLeaderboard
-                  ? (isTossMode ? "bg-[#EAF2FF] text-[#2F6FE4]" : "bg-indigo-500/20 border border-indigo-500/50 text-indigo-400")
+                  ? (isTossMode ? "bg-[#EAF2FF] text-[#2F6FE4]" : "bg-amber-500/20 border border-amber-500/50 text-amber-400")
                   : (isTossMode ? "bg-[#F4F8FF] text-[#2F6FE4]" : "bg-slate-800 hover:bg-slate-700 border border-slate-600")
               }`}
               title={isKo ? "순위표" : "Leaderboard"}
             >
-              <Trophy size={14} className={showLeaderboard ? (isTossMode ? 'text-[#2F6FE4]' : 'text-indigo-400') : (isTossMode ? 'text-[#2F6FE4]' : 'text-slate-400')} />
+              <Trophy size={14} className={showLeaderboard ? (isTossMode ? 'text-[#2F6FE4]' : 'text-amber-400') : (isTossMode ? 'text-[#2F6FE4]' : 'text-slate-400')} />
             </button>
           ) : null}
 
@@ -4646,7 +4647,7 @@ export default function PuzzleBoard({
             isTossMode ? "bg-[#F4F8FF] border-[#D9E8FF]" : "bg-slate-900/50 border-slate-700"
           }`}>
             <div className="flex items-center gap-2">
-              <Trophy size={16} className={isTossMode ? "text-[#2F6FE4]" : "text-indigo-400"} />
+              <Trophy size={16} className={isTossMode ? "text-[#2F6FE4]" : "text-amber-400"} />
               <h3 className={`font-bold text-sm ${isTossMode ? "text-[#2F6FE4]" : "text-white"}`}>{isKo ? "순위표" : "Leaderboard"}</h3>
             </div>
             <button onClick={() => setShowLeaderboard(false)} className={`transition-colors ${isTossMode ? "text-[#2F6FE4] hover:text-[#1f5ec6]" : "text-slate-400 hover:text-white"}`}>
@@ -4670,11 +4671,11 @@ export default function PuzzleBoard({
                     <div className="flex items-center gap-3">
                       <span className={`font-bold w-4 text-center ${
                         idx === 0
-                          ? (isTossMode ? 'text-[#2F6FE4]' : 'text-indigo-400')
+                          ? (isTossMode ? 'text-[#2F6FE4]' : 'text-amber-400')
                           : idx === 1
                           ? (isTossMode ? 'text-[#4E5968]' : 'text-slate-300')
                           :                           idx === 2
-                          ? (isTossMode ? 'text-[#6B7684]' : 'text-indigo-300')
+                          ? (isTossMode ? 'text-[#6B7684]' : 'text-amber-700')
                           : (isTossMode ? 'text-[#8B95A1]' : 'text-slate-500')
                       }`}>
                         {idx + 1}
