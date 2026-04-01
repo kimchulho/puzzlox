@@ -64,7 +64,7 @@ function puzzleLoadingStageIndex(progress: number, stageCount: number) {
 
 function PuzzleLoadingSpinner({ toss }: { toss: boolean }) {
   const track = toss ? "#EAF2FF" : "rgba(148, 163, 184, 0.4)";
-  const head = toss ? "#3182F6" : "#a5b4fc";
+  const head = toss ? "#3182F6" : "#6366f1";
   return (
     <svg width="40" height="40" viewBox="0 0 40 40" style={{ display: "block" }} aria-hidden>
       <circle cx="20" cy="20" r="16" fill="none" stroke={track} strokeWidth="3" />
@@ -557,6 +557,8 @@ export default function PuzzleBoard({
           delayFrames: number;
           hideOnFinish?: boolean;
           keepEndTransform?: boolean;
+          /** true면 앞면 스프라이트 대신 조각 윤곽 단색 회색 뒷면 */
+          solidGrayBackOnFinish?: boolean;
         };
         const pieceEasterAnims = new Map<number, PieceEasterAnim>();
         const easterState = {
@@ -568,6 +570,35 @@ export default function PuzzleBoard({
         const getPieceSprite = (piece: PIXI.Container) => {
           const sprite = piece.getChildByLabel('pieceSprite');
           return sprite && sprite instanceof PIXI.Sprite ? sprite : null;
+        };
+        /** 퍼즐 뒷면(이스터 에그): 흰색·검정 중간 단색 회색 */
+        const EASTER_SOLID_BACK_HEX = 0x9ca3af;
+        const clearEasterSolidBack = (piece: PIXI.Container) => {
+          const g = piece.getChildByLabel('easterSolidBack');
+          if (g) {
+            piece.removeChild(g);
+            g.destroy();
+          }
+        };
+        const setEasterSolidBack = (piece: PIXI.Container, on: boolean) => {
+          const sprite = getPieceSprite(piece);
+          clearEasterSolidBack(piece);
+          const lockIcon = piece.getChildByLabel('lockIcon');
+          if (!on) {
+            if (sprite) {
+              sprite.visible = true;
+              sprite.tint = 0xffffff;
+              sprite.alpha = 1;
+            }
+            if (lockIcon) lockIcon.visible = false;
+            return;
+          }
+          if (sprite) sprite.visible = false;
+          const make = (piece as any).__makeEasterSolidBack as (() => PIXI.Graphics) | undefined;
+          if (make) {
+            piece.addChildAt(make(), 0);
+          }
+          if (lockIcon) lockIcon.visible = false;
         };
         const lerpColor = (from: number, to: number, t: number) => {
           const fr = (from >> 16) & 0xff;
@@ -3317,6 +3348,14 @@ export default function PuzzleBoard({
           
           // 조각의 실제 모양에 맞춰 hitArea 설정 (여백 제외)
           pieceContainer.hitArea = new PIXI.Rectangle(minX, minY, maxX - minX, maxY - minY);
+
+          (pieceContainer as any).__makeEasterSolidBack = () => {
+            const g = new PIXI.Graphics();
+            applyPieceShape(g);
+            g.fill({ color: EASTER_SOLID_BACK_HEX });
+            g.label = 'easterSolidBack';
+            return g;
+          };
           
           // 렌더링 최적화: 화면 밖에 있는 조각은 그리지 않도록 설정
           pieceContainer.cullable = true;
@@ -3555,6 +3594,13 @@ export default function PuzzleBoard({
                   sprite.tint = 0xffffff;
                   sprite.alpha = 1;
                 }
+                clearEasterSolidBack(p);
+              } else {
+                if (anim.solidGrayBackOnFinish) {
+                  setEasterSolidBack(p, true);
+                } else {
+                  setEasterSolidBack(p, false);
+                }
               }
               pieceEasterAnims.delete(id);
             }
@@ -3566,20 +3612,24 @@ export default function PuzzleBoard({
           easterState.animating = true;
           easterState.spilled = true;
           pieceEasterAnims.clear();
-          const riseY = boardStartY - pieceHeight * 6;
+          const yMax = boardStartY + boardHeight + pieceHeight * 2.5;
           for (let i = 0; i < PIECE_COUNT; i++) {
             const p = pieces.current.get(i);
             if (!p) continue;
+            setEasterSolidBack(p, false);
             p.visible = true;
             p.eventMode = 'none';
             p.zIndex = 0;
-            const outwardX = boardWidth * (0.35 + Math.random() * 0.85);
-            const toX = p.x + (Math.random() < 0.5 ? -1 : 1) * outwardX + (Math.random() - 0.5) * pieceWidth * 1.5;
-            const toY = riseY - Math.random() * pieceHeight * 8;
+            p.scale.set(1, 1);
+            p.rotation = 0;
+            // 화면 위(정수리 방향)로 쏠리지 않게: 주로 좌우 퍼짐 + 약간 아래(손·얼굴 쪽)로
+            const spread = pieceWidth * (1.4 + Math.random() * 4.2);
+            const toX = p.x + (Math.random() < 0.5 ? -1 : 1) * spread + (Math.random() - 0.5) * pieceWidth * 1.2;
+            let toY = p.y + pieceHeight * (0.08 + Math.random() * 0.95);
+            toY = Math.min(toY, yMax);
+            toY = Math.max(toY, p.y - pieceHeight * 0.2);
             const endScale = 2.2 + Math.random() * 1.8;
-            const endFlipped = Math.random() < 0.22;
-            const endScaleX = endFlipped ? -endScale : endScale;
-            const endRotation = (Math.random() < 0.5 ? -1 : 1) * (Math.PI * (0.8 + Math.random() * 1.8));
+            const endRotation = (Math.random() < 0.5 ? -1 : 1) * (Math.PI * (0.5 + Math.random() * 1.2));
             const sprite = getPieceSprite(p);
             pieceEasterAnims.set(i, {
               id: i,
@@ -3589,7 +3639,7 @@ export default function PuzzleBoard({
               toY,
               fromScaleX: p.scale.x,
               fromScaleY: p.scale.y,
-              toScaleX: endScaleX,
+              toScaleX: endScale,
               toScaleY: endScale,
               fromRotation: p.rotation,
               toRotation: endRotation,
@@ -3616,47 +3666,50 @@ export default function PuzzleBoard({
           easterState.animating = true;
           easterState.spilled = false;
           pieceEasterAnims.clear();
-          const spawnY = boardStartY - pieceHeight * 6;
           const spreadX = boardWidth * 1.4;
+          const yMaxSpawn = boardStartY + boardHeight + pieceHeight * 6;
           for (let i = 0; i < PIECE_COUNT; i++) {
             const p = pieces.current.get(i);
             if (!p) continue;
             const targetX = boardStartX - boardWidth * 0.2 + Math.random() * spreadX;
             const targetY = boardStartY - pieceHeight * 0.5 + Math.random() * (boardHeight + pieceHeight * 1.4);
             const startScale = 2.1 + Math.random() * 1.2;
-            const isFlipped = Math.random() < 0.28;
-            const startScaleX = isFlipped ? -startScale : startScale;
             const spinTurns = (Math.random() < 0.5 ? -1 : 1) * (Math.PI * (0.7 + Math.random() * 1.3));
             const startRotation = spinTurns + (Math.random() - 0.5) * 0.4;
             const finalRotation = Math.random() * Math.PI * 2; // 0~360도 랜덤 고정
             const finalFlipped = Math.random() < 0.2;
-            const finalScaleX = finalFlipped ? -1 : 1;
             const sprite = getPieceSprite(p);
             p.visible = true;
             p.eventMode = 'none';
             p.zIndex = 0;
+            // 위에서 떨어지지 않게: 목표보다 아래(화면 좌표 +Y)에서 시작해 올라오듯 보임
+            let fromY = targetY + pieceHeight * (2 + Math.random() * 5);
+            fromY = Math.min(fromY, yMaxSpawn);
+            fromY = Math.max(fromY, targetY + pieceHeight * 1.1);
+            const fromX = targetX + (Math.random() - 0.5) * pieceWidth * 3.2;
             pieceEasterAnims.set(i, {
               id: i,
-              fromX: targetX + (Math.random() - 0.5) * boardWidth * 0.55,
-              fromY: spawnY - Math.random() * pieceHeight * 8,
+              fromX,
+              fromY,
               toX: targetX,
               toY: targetY,
-              fromScaleX: startScaleX,
+              fromScaleX: startScale,
               fromScaleY: startScale,
-              toScaleX: finalScaleX,
+              toScaleX: 1,
               toScaleY: 1,
               fromRotation: startRotation,
               toRotation: finalRotation,
               fromAlpha: 1,
               toAlpha: 1,
               fromTint: sprite?.tint ?? 0xffffff,
-              toTint: finalFlipped ? 0x808080 : 0xffffff,
+              toTint: 0xffffff,
               fromSpriteAlpha: sprite?.alpha ?? 1,
               toSpriteAlpha: 1,
               progress: 0,
               speed: 0.018 + Math.random() * 0.02,
               delayFrames: Math.floor(Math.random() * 22),
               keepEndTransform: true,
+              solidGrayBackOnFinish: finalFlipped,
             });
           }
           if (!easterTicker) {
@@ -4050,7 +4103,7 @@ export default function PuzzleBoard({
   const puzzleLoadingSubtitle =
     puzzleLoadingStages[puzzleLoadingStageIndex(loadProgress, puzzleLoadingStages.length)];
   const loadBarTrack = isTossMode ? "#EAF2FF" : "rgba(148, 163, 184, 0.35)";
-  const loadBarFill = isTossMode ? "#3182F6" : "#818cf8";
+  const loadBarFill = isTossMode ? "#3182F6" : "#6366f1";
   const loadPct = Math.min(100, Math.round(loadProgress));
 
   return (
@@ -4236,12 +4289,12 @@ export default function PuzzleBoard({
               >
                 <div
                   className={`h-full rounded-full transition-all duration-500 ${
-                    isTossMode ? "bg-blue-500" : "bg-blue-500"
+                    isTossMode ? "bg-blue-500" : "bg-indigo-500"
                   }`}
                   style={{ width: `${(placedPieces / totalPieces) * 100}%` }}
                 />
               </div>
-              <span className={`text-xs font-medium whitespace-nowrap ${isTossMode ? "text-blue-700" : ""}`}>
+              <span className={`text-xs font-medium whitespace-nowrap ${isTossMode ? "text-blue-700" : "text-indigo-400"}`}>
                 {placedPieces} / {totalPieces}
               </span>
             </div>
@@ -4253,12 +4306,12 @@ export default function PuzzleBoard({
               onClick={() => setShowLeaderboard(!showLeaderboard)}
               className={`${isTossMode && isTossWideMode ? "hidden" : "flex sm:hidden"} items-center justify-center w-7 h-7 rounded-md transition-colors shrink-0 ${
                 showLeaderboard
-                  ? (isTossMode ? "bg-[#EAF2FF] text-[#2F6FE4]" : "bg-amber-500/20 border border-amber-500/50 text-amber-400")
+                  ? (isTossMode ? "bg-[#EAF2FF] text-[#2F6FE4]" : "bg-indigo-500/20 border border-indigo-500/50 text-indigo-400")
                   : (isTossMode ? "bg-[#F4F8FF] text-[#2F6FE4]" : "bg-slate-800 hover:bg-slate-700 border border-slate-600")
               }`}
               title={isKo ? "순위" : "Rank"}
             >
-              <Trophy size={16} className={showLeaderboard ? (isTossMode ? 'text-[#2F6FE4]' : 'text-amber-400') : (isTossMode ? 'text-[#2F6FE4]' : 'text-slate-400')} />
+              <Trophy size={16} className={showLeaderboard ? (isTossMode ? 'text-[#2F6FE4]' : 'text-indigo-400') : (isTossMode ? 'text-[#2F6FE4]' : 'text-slate-400')} />
             </button>
           ) : null}
         </div>
@@ -4369,7 +4422,7 @@ export default function PuzzleBoard({
                     disabled={isColorBotLoading}
                     className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-900/50 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors text-sm text-left disabled:opacity-50"
                   >
-                    <ImageIcon size={14} className="text-blue-400" />
+                    <ImageIcon size={14} className="text-indigo-400" />
                     <span>Image Mosaic</span>
                   </button>
 
@@ -4408,7 +4461,7 @@ export default function PuzzleBoard({
                 onClick={() => setShowColorPicker(!showColorPicker)}
                 className={`flex items-center gap-1 px-1.5 h-7 rounded-md border transition-colors shrink-0 ${
                   showColorPicker
-                    ? "bg-blue-500/20 border-blue-500/50 text-blue-400"
+                    ? "bg-indigo-500/20 border-indigo-500/50 text-indigo-400"
                     : "bg-slate-800/50 border-slate-700/50 text-slate-400 hover:bg-slate-700"
                 }`}
                 title={isKo ? "배경색 변경" : "Change Background Color"}
@@ -4436,7 +4489,7 @@ export default function PuzzleBoard({
                         setBgColor(color);
                         setShowColorPicker(false);
                       }}
-                      className={`w-5 h-5 rounded-full border-2 transition-transform hover:scale-110 ${bgColor === color ? 'border-blue-400 scale-110' : 'border-slate-600'}`}
+                      className={`w-5 h-5 rounded-full border-2 transition-transform hover:scale-110 ${bgColor === color ? (isTossMode ? 'border-blue-400 scale-110' : 'border-indigo-400 scale-110') : 'border-slate-600'}`}
                       style={{ backgroundColor: color }}
                       title={color}
                     />
@@ -4485,7 +4538,7 @@ export default function PuzzleBoard({
                 onClick={() => setShowMiniPad((v) => !v)}
                 className={`flex items-center justify-center w-7 h-7 rounded-md border transition-colors shrink-0 ${
                   showMiniPad
-                    ? "bg-blue-500/20 border-blue-500/50 text-blue-400"
+                    ? "bg-indigo-500/20 border-indigo-500/50 text-indigo-400"
                     : "bg-slate-800/50 border-slate-700/50 text-slate-400 hover:bg-slate-700"
                 }`}
                 title={isKo ? (showMiniPad ? "미니 패드 숨기기" : "미니 패드 보이기") : (showMiniPad ? "Hide mini pad" : "Show mini pad")}
@@ -4507,12 +4560,12 @@ export default function PuzzleBoard({
               onClick={() => setShowLeaderboard(!showLeaderboard)}
               className={`${isTossMode && isTossWideMode ? "flex" : "hidden sm:flex"} items-center justify-center w-7 h-7 rounded-md transition-colors shrink-0 ${
                 showLeaderboard
-                  ? (isTossMode ? "bg-[#EAF2FF] text-[#2F6FE4]" : "bg-amber-500/20 border border-amber-500/50 text-amber-400")
+                  ? (isTossMode ? "bg-[#EAF2FF] text-[#2F6FE4]" : "bg-indigo-500/20 border border-indigo-500/50 text-indigo-400")
                   : (isTossMode ? "bg-[#F4F8FF] text-[#2F6FE4]" : "bg-slate-800 hover:bg-slate-700 border border-slate-600")
               }`}
               title={isKo ? "순위표" : "Leaderboard"}
             >
-              <Trophy size={14} className={showLeaderboard ? (isTossMode ? 'text-[#2F6FE4]' : 'text-amber-400') : (isTossMode ? 'text-[#2F6FE4]' : 'text-slate-400')} />
+              <Trophy size={14} className={showLeaderboard ? (isTossMode ? 'text-[#2F6FE4]' : 'text-indigo-400') : (isTossMode ? 'text-[#2F6FE4]' : 'text-slate-400')} />
             </button>
           ) : null}
 
@@ -4570,7 +4623,7 @@ export default function PuzzleBoard({
             isTossMode ? "bg-[#F4F8FF] border-[#D9E8FF]" : "bg-slate-900/50 border-slate-700"
           }`}>
             <div className="flex items-center gap-2">
-              <Trophy size={16} className={isTossMode ? "text-[#2F6FE4]" : "text-amber-400"} />
+              <Trophy size={16} className={isTossMode ? "text-[#2F6FE4]" : "text-indigo-400"} />
               <h3 className={`font-bold text-sm ${isTossMode ? "text-[#2F6FE4]" : "text-white"}`}>{isKo ? "순위표" : "Leaderboard"}</h3>
             </div>
             <button onClick={() => setShowLeaderboard(false)} className={`transition-colors ${isTossMode ? "text-[#2F6FE4] hover:text-[#1f5ec6]" : "text-slate-400 hover:text-white"}`}>
@@ -4588,17 +4641,17 @@ export default function PuzzleBoard({
                   return (
                   <div key={idx} className={`flex items-center justify-between p-1.5 rounded-lg transition-colors ${
                     isMe
-                      ? (isTossMode ? 'bg-[#EAF2FF] border border-[#CFE2FF]' : 'bg-blue-500/20 border border-blue-500/30')
+                      ? (isTossMode ? 'bg-[#EAF2FF] border border-[#CFE2FF]' : 'bg-indigo-500/20 border border-indigo-500/35')
                       : (isTossMode ? 'hover:bg-[#F4F8FF]' : 'hover:bg-slate-700/50')
                   }`}>
                     <div className="flex items-center gap-3">
                       <span className={`font-bold w-4 text-center ${
                         idx === 0
-                          ? (isTossMode ? 'text-[#2F6FE4]' : 'text-amber-400')
+                          ? (isTossMode ? 'text-[#2F6FE4]' : 'text-indigo-400')
                           : idx === 1
                           ? (isTossMode ? 'text-[#4E5968]' : 'text-slate-300')
-                          : idx === 2
-                          ? (isTossMode ? 'text-[#6B7684]' : 'text-amber-700')
+                          :                           idx === 2
+                          ? (isTossMode ? 'text-[#6B7684]' : 'text-indigo-300')
                           : (isTossMode ? 'text-[#8B95A1]' : 'text-slate-500')
                       }`}>
                         {idx + 1}
@@ -4607,7 +4660,7 @@ export default function PuzzleBoard({
                         <div className={`w-2 h-2 rounded-full ${activeUsers.has(score.username) ? 'bg-emerald-500' : (isTossMode ? 'bg-[#B0B8C1]' : 'bg-slate-600')}`} title={activeUsers.has(score.username) ? 'Online' : 'Offline'} />
                         <span className={`text-xs truncate max-w-[100px] ${
                           isMe
-                            ? (isTossMode ? 'text-[#2F6FE4] font-bold' : 'text-blue-300 font-bold')
+                            ? (isTossMode ? 'text-[#2F6FE4] font-bold' : 'text-indigo-300 font-bold')
                             : activeUsers.has(score.username)
                             ? (isTossMode ? 'text-[#333D4B]' : 'text-slate-200')
                             : (isTossMode ? 'text-[#8B95A1]' : 'text-slate-400')
@@ -4615,11 +4668,11 @@ export default function PuzzleBoard({
                           {score.username}
                         </span>
                         {isMe && <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ml-1 ${
-                          isTossMode ? "text-[#2F6FE4] bg-[#EAF2FF]" : "text-blue-400 bg-blue-500/20"
+                          isTossMode ? "text-[#2F6FE4] bg-[#EAF2FF]" : "text-indigo-300 bg-indigo-500/25"
                         }`}>YOU</span>}
                       </div>
                     </div>
-                    <span className={`text-xs font-bold ${isTossMode ? "text-[#2F6FE4]" : "text-blue-400"}`}>{score.score}</span>
+                    <span className={`text-xs font-bold ${isTossMode ? "text-[#2F6FE4]" : "text-indigo-400"}`}>{score.score}</span>
                   </div>
                 )})}
               </div>
@@ -4652,7 +4705,7 @@ export default function PuzzleBoard({
           <div className="bg-slate-800 border border-slate-700 rounded-xl w-full max-w-md overflow-hidden">
             <div className="p-4 border-b border-slate-700 flex items-center justify-between bg-slate-800/50">
               <div className="flex items-center gap-2">
-                <ImageIcon size={18} className="text-blue-400" />
+                <ImageIcon size={18} className="text-indigo-400" />
                 <h3 className="font-bold text-white">Create Image Mosaic</h3>
               </div>
               <button onClick={() => setShowMosaicModal(false)} className="text-slate-400 hover:text-white transition-colors">
@@ -4670,7 +4723,7 @@ export default function PuzzleBoard({
                     setMosaicError(null);
                   }}
                   placeholder="https://example.com/image.jpg"
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
                 <p className="text-xs text-slate-500 mt-2">
                   Enter a direct link to an image. CORS must be enabled on the image host.
@@ -4690,7 +4743,7 @@ export default function PuzzleBoard({
                   max="5.0"
                   value={mosaicGap}
                   onChange={(e) => setMosaicGap(parseFloat(e.target.value) || 1.6)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
                 <p className="text-xs text-slate-500 mt-2">
                   1.0 means no gap. 1.6 is the default initial spacing.
@@ -4717,7 +4770,7 @@ export default function PuzzleBoard({
                     }
                   }}
                   disabled={isColorBotLoading}
-                  className="px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-500 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-500 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isColorBotLoading ? (
                     <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
@@ -4753,7 +4806,7 @@ export default function PuzzleBoard({
           className={`w-36 sm:w-48 h-9 rounded-full border-2 backdrop-blur-md flex items-center justify-center cursor-ew-resize touch-none ${
             isTossMode
               ? "border-[#D9E8FF] bg-[#F4F8FF]/95 text-[#2F6FE4] shadow-[0_8px_20px_rgba(47,111,228,0.12)]"
-              : "border-slate-600/50 bg-slate-800/80"
+              : "border-indigo-500/35 bg-slate-800/80 text-indigo-400"
           }`}
           onPointerDown={handleZoomPadPointerDown}
           onPointerMove={handleZoomPadPointerMove}
@@ -4773,7 +4826,7 @@ export default function PuzzleBoard({
           className={`w-36 sm:w-48 aspect-square rounded-xl border-2 overflow-hidden cursor-pointer touch-none backdrop-blur-md p-1.5 flex items-center justify-center ${
             isTossMode
               ? "border-[#D9E8FF] bg-[#F4F8FF]/95 shadow-[0_8px_20px_rgba(47,111,228,0.12)]"
-              : "border-slate-600/50 bg-slate-800/80"
+              : "border-indigo-500/35 bg-slate-800/80"
           }`}
           onPointerDown={handleMiniPadPointerDown}
           onPointerMove={handleMiniPadPointerMove}
@@ -4882,7 +4935,7 @@ export default function PuzzleBoard({
                 className={`flex-1 min-h-12 px-3 py-[14px] rounded-[14px] text-[15px] font-semibold ${
                   isTossMode
                     ? "bg-[#3182F6] text-white hover:bg-[#2b73dc]"
-                    : "bg-blue-600 text-white hover:bg-blue-500"
+                    : "bg-indigo-600 text-white hover:bg-indigo-500"
                 }`}
               >
                 {isKo ? "네" : "Yes"}
