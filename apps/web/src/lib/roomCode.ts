@@ -18,6 +18,22 @@ export function encodeRoomId(id: number): string {
   return str;
 }
 
+/** Accepts raw user input: numeric id, or 6-character encoded code (optional # / spaces). */
+export function parseRoomNumberOrCode(raw: string): number | null {
+  const s = raw
+    .trim()
+    .replace(/^#+/i, "")
+    .replace(/^room\s*#?\s*/i, "")
+    .replace(/\s/g, "");
+  if (!s) return null;
+  if (/^\d+$/.test(s)) {
+    const n = parseInt(s, 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
+  if (s.length === 6) return decodeRoomId(s.toUpperCase());
+  return null;
+}
+
 export function decodeRoomId(code: string): number | null {
   if (!code || code.length !== 6) return null;
   

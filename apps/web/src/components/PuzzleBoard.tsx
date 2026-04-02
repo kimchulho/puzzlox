@@ -14,6 +14,7 @@ import confetti from 'canvas-confetti';
 import { ROOM_EVENTS, SyncTimePayload } from "@contracts/realtime";
 import { supabase } from '../lib/supabaseClient';
 import { encodeRoomId } from '../lib/roomCode';
+import { recordUserRoomVisit } from '../lib/recordUserRoomVisit';
 
 const SNAP_THRESHOLD = 30;
 /** 와이드 툴바–퍼즐 사이 빈 줄(측정·라운딩·DP) 보정: 퍼즐 inset 을 살짝 줄임 */
@@ -434,6 +435,7 @@ export default function PuzzleBoard({
         // Update last active time when entering a room
         if (user && user.id) {
           supabase.from('pixi_users').update({ last_active_at: new Date().toISOString() }).eq('id', user.id).then();
+          void recordUserRoomVisit(user.id, roomId);
         }
         
         const app = new PIXI.Application();

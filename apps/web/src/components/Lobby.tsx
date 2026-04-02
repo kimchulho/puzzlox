@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Trophy, RefreshCw, Users, Lock, Image as ImageIcon, Play, Plus, Grid, Clock, RotateCcw, Maximize, Minimize, LogOut, ShieldAlert, LogIn, ChevronDown, Languages } from 'lucide-react';
 import { supabase } from '../lib/supabaseClient';
 import { motion } from 'motion/react';
-import { encodeRoomId } from '../lib/roomCode';
+import { encodeRoomId, parseRoomNumberOrCode } from '../lib/roomCode';
+import { recordUserRoomVisit } from '../lib/recordUserRoomVisit';
 import { ImageSelectorModal } from './ImageSelectorModal';
 
 const formatPlayTime = (seconds: number) => {
@@ -58,14 +59,65 @@ function roomIsMine(
   return readGuestCreatedRoomIds().includes(room.id);
 }
 
+function parseRoomIdField(raw: unknown): number | null {
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  if (typeof raw === "string" && /^\d+$/.test(raw)) return parseInt(raw, 10);
+  return null;
+}
+
+/** Server visit rows → ordered room ids (newest first) + last access time per room (ms). */
+function parseServerVisits(rows: { room_id: unknown; last_visited_at: unknown }[]): {
+  orderedIds: number[];
+  atMs: Map<number, number>;
+} {
+  const atMs = new Map<number, number>();
+  const orderedIds: number[] = [];
+  const seen = new Set<number>();
+  for (const v of rows) {
+    const id = parseRoomIdField(v.room_id);
+    if (id == null || seen.has(id)) continue;
+    const t = v.last_visited_at;
+    let ms: number;
+    if (typeof t === "string") ms = Date.parse(t);
+    else if (typeof t === "number" && Number.isFinite(t)) ms = t;
+    else ms = NaN;
+    if (!Number.isFinite(ms)) ms = 0;
+    atMs.set(id, ms);
+    orderedIds.push(id);
+    seen.add(id);
+  }
+  return { orderedIds, atMs };
+}
+
+/** Server-ordered ids first, then local-only ids (same browser), preserving order within each. */
+function mergeContinueRoomOrder(serverOrdered: number[], localOrdered: number[]): number[] {
+  const seen = new Set<number>();
+  const out: number[] = [];
+  for (const id of serverOrdered) {
+    if (typeof id === "number" && !seen.has(id)) {
+      seen.add(id);
+      out.push(id);
+    }
+  }
+  for (const id of localOrdered) {
+    if (typeof id === "number" && !seen.has(id)) {
+      seen.add(id);
+      out.push(id);
+    }
+  }
+  return out;
+}
+
+/** Pinned = 내 방 또는 이어하기(continue) 목록에 있는 방. 그 안에서는 가장 최근 접속이 맨 위. */
 function sortActiveRoomsForLobby(
   rooms: any[],
   user: { id?: string | number; username?: string } | undefined | null,
-  recentIds: number[]
+  continueRoomOrder: number[],
+  serverVisitAtMs: Map<number, number>
 ): any[] {
-  const recentIndex = new Map<number, number>();
-  recentIds.forEach((id, i) => {
-    if (typeof id === "number" && !recentIndex.has(id)) recentIndex.set(id, i);
+  const continueIndex = new Map<number, number>();
+  continueRoomOrder.forEach((id, i) => {
+    if (typeof id === "number" && !continueIndex.has(id)) continueIndex.set(id, i);
   });
 
   const guestCreated = user?.id != null && user.id !== "" ? [] : readGuestCreatedRoomIds();
@@ -79,13 +131,18 @@ function sortActiveRoomsForLobby(
     return guestCreated.includes(r.id);
   };
 
-  const bucket = (r: any) => {
-    if (mine(r)) return 0;
-    if (recentIndex.has(r.id)) return 1;
-    return 2;
-  };
+  const pinned = (r: any) => mine(r) || continueIndex.has(r.id);
 
-  const recIdx = (r: any) => recentIndex.get(r.id) ?? 1e9;
+  const pinnedLastAccessMs = (r: any): number => {
+    if (serverVisitAtMs.has(r.id)) {
+      const v = serverVisitAtMs.get(r.id)!;
+      if (Number.isFinite(v)) return v;
+    }
+    const ci = continueIndex.get(r.id);
+    if (ci !== undefined) return 1e15 - ci;
+    if (mine(r)) return new Date(r.created_at).getTime();
+    return 0;
+  };
 
   const tiePlayersAndTime = (a: any, b: any) => {
     const aPlayers = a.currentPlayers || 0;
@@ -97,16 +154,16 @@ function sortActiveRoomsForLobby(
   };
 
   return [...rooms].sort((a, b) => {
-    const ba = bucket(a);
-    const bb = bucket(b);
-    if (ba !== bb) return ba - bb;
-    if (ba === 0) {
-      const ia = recIdx(a);
-      const ib = recIdx(b);
-      if (ia !== ib) return ia - ib;
+    const pa = pinned(a);
+    const pb = pinned(b);
+    if (pa && !pb) return -1;
+    if (!pa && pb) return 1;
+    if (pa && pb) {
+      const ta = pinnedLastAccessMs(a);
+      const tb = pinnedLastAccessMs(b);
+      if (tb !== ta) return tb - ta;
       return tiePlayersAndTime(a, b);
     }
-    if (ba === 1) return recIdx(a) - recIdx(b);
     return tiePlayersAndTime(a, b);
   });
 }
@@ -146,6 +203,8 @@ const Lobby = ({
   onToggleLocale?: () => void;
 }) => {
   const [activeRooms, setActiveRooms] = useState<any[]>([]);
+  const [continueRoomIdsServer, setContinueRoomIdsServer] = useState<number[]>([]);
+  const [serverVisitAtMs, setServerVisitAtMs] = useState<Map<number, number>>(() => new Map());
   const [completedRooms, setCompletedRooms] = useState<any[]>([]);
   const [isRoomsLoading, setIsRoomsLoading] = useState(true);
   const [pieceCount, setPieceCount] = useState(100);
@@ -158,6 +217,9 @@ const Lobby = ({
   const [roomFullInfo, setRoomFullInfo] = useState<{ roomCode: string; current: number; max: number } | null>(null);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(!!document.fullscreenElement);
   const [isRewardAdLoading, setIsRewardAdLoading] = useState(false);
+  const [roomCodeInput, setRoomCodeInput] = useState('');
+  const [roomCodeError, setRoomCodeError] = useState<string | null>(null);
+  const [isJoiningByCode, setIsJoiningByCode] = useState(false);
   const gptLoadPromiseRef = useRef<Promise<void> | null>(null);
   const gptServicesEnabledRef = useRef(false);
   const isKo = locale === 'ko';
@@ -292,6 +354,26 @@ const Lobby = ({
   const fetchRooms = async () => {
     setIsRoomsLoading(true);
     try {
+      if (!user?.id) {
+        setContinueRoomIdsServer([]);
+        setServerVisitAtMs(new Map());
+      } else {
+        const { data: visits, error: visitsErr } = await supabase
+          .from("pixi_user_room_visits")
+          .select("room_id, last_visited_at")
+          .eq("user_id", user.id)
+          .order("last_visited_at", { ascending: false })
+          .limit(40);
+        if (!visitsErr && visits?.length) {
+          const { orderedIds, atMs } = parseServerVisits(visits as { room_id: unknown; last_visited_at: unknown }[]);
+          setContinueRoomIdsServer(orderedIds);
+          setServerVisitAtMs(atMs);
+        } else {
+          setContinueRoomIdsServer([]);
+          setServerVisitAtMs(new Map());
+        }
+      }
+
       const { data: activePublic } = await supabase
         .from('pixi_rooms')
         .select('*')
@@ -456,6 +538,7 @@ const Lobby = ({
     if (data && data.length > 0) {
       const roomId = data[0].id;
       if (!user?.id) pushGuestCreatedRoomId(roomId);
+      if (user?.id) void recordUserRoomVisit(user.id, roomId);
       const recentRooms = JSON.parse(localStorage.getItem('puzzle_recent_rooms') || '[]');
       const newRecent = [roomId, ...recentRooms.filter((id: number) => id !== roomId)].slice(0, 10);
       localStorage.setItem('puzzle_recent_rooms', JSON.stringify(newRecent));
@@ -627,6 +710,23 @@ const Lobby = ({
     await handleCreateRoom();
   };
 
+  const proceedAfterJoinChecks = (room: any) => {
+    if (room.has_password) {
+      const pwd = prompt(isKo ? '방 비밀번호를 입력하세요:' : 'Enter room password:');
+      if (pwd === null) return;
+    }
+
+    const recentRooms = JSON.parse(localStorage.getItem('puzzle_recent_rooms') || '[]');
+    const newRecent = [room.id, ...recentRooms.filter((id: number) => id !== room.id)].slice(0, 10);
+    localStorage.setItem('puzzle_recent_rooms', JSON.stringify(newRecent));
+
+    if (user?.id) void recordUserRoomVisit(user.id, room.id);
+
+    onJoinRoom(room.id, room.image_url, room.totalPieces || room.piece_count);
+    setRoomCodeInput("");
+    setRoomCodeError(null);
+  };
+
   const handleJoinSpecificRoom = (room: any) => {
     const currentPlayers = room.currentPlayers ?? 0;
     const maxPlayers = room.max_players ?? 0;
@@ -640,18 +740,41 @@ const Lobby = ({
       return;
     }
 
-    if (room.has_password) {
-      const pwd = prompt('Enter room password:');
-      if (pwd === null) return;
-      // In a real app, we'd verify the password here or on the server.
-      // For now, we just let them in if they enter something, or we'd need a password column.
+    proceedAfterJoinChecks(room);
+  };
+
+  const handleJoinByRoomCode = async () => {
+    setRoomCodeError(null);
+    const trimmed = roomCodeInput.trim();
+    if (!trimmed) {
+      setRoomCodeError(isKo ? '방 번호를 입력해 주세요.' : 'Enter a room code.');
+      return;
+    }
+    const id = parseRoomNumberOrCode(roomCodeInput);
+    if (id == null) {
+      setRoomCodeError(
+        isKo
+          ? '방 번호 형식이 올바르지 않습니다. (6자 코드 또는 숫자 ID)'
+          : 'Invalid code. Use the 6-character code or a numeric room ID.'
+      );
+      return;
     }
 
-    const recentRooms = JSON.parse(localStorage.getItem('puzzle_recent_rooms') || '[]');
-    const newRecent = [room.id, ...recentRooms.filter((id: number) => id !== room.id)].slice(0, 10);
-    localStorage.setItem('puzzle_recent_rooms', JSON.stringify(newRecent));
+    setIsJoiningByCode(true);
+    const { data, error } = await supabase.from('pixi_rooms').select('*').eq('id', id).maybeSingle();
+    setIsJoiningByCode(false);
 
-    onJoinRoom(room.id, room.image_url, room.totalPieces || room.piece_count);
+    if (error) {
+      console.error('Join by room code:', error);
+      setRoomCodeError(isKo ? '방 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.' : 'Could not load the room. Please try again.');
+      return;
+    }
+    if (!data) {
+      setRoomCodeError(isKo ? '해당 번호의 방을 찾을 수 없습니다.' : 'No room found with that code.');
+      return;
+    }
+
+    handleJoinSpecificRoom({ ...data });
   };
 
   const tossLight = !!tossUi;
@@ -1130,6 +1253,58 @@ const Lobby = ({
                 ? '방 만들기'
                 : 'Create room')}
           </button>
+
+          <div className="mt-4 text-left space-y-2">
+            <label
+              className={`block text-sm font-medium flex items-center gap-2 ${
+                tossSkin ? tossSkin.label : "text-slate-300"
+              }`}
+            >
+              <Play className="w-4 h-4 shrink-0" />
+              {isKo ? "방 번호로 입장" : "Join by room code"}
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                inputMode="text"
+                autoCapitalize="characters"
+                autoCorrect="off"
+                spellCheck={false}
+                value={roomCodeInput}
+                onChange={(e) => {
+                  setRoomCodeInput(e.target.value);
+                  setRoomCodeError(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !isJoiningByCode) void handleJoinByRoomCode();
+                }}
+                disabled={isJoiningByCode}
+                placeholder={isKo ? "6자 코드 또는 방 ID" : "6-letter code or room ID"}
+                className={`min-w-0 flex-1 rounded-xl p-3 text-sm focus:outline-none ${
+                  tossSkin
+                    ? tossSkin.input
+                    : "bg-slate-950 border border-slate-800 text-white placeholder-slate-600 focus:border-indigo-500"
+                }`}
+              />
+              <button
+                type="button"
+                onClick={() => void handleJoinByRoomCode()}
+                disabled={isJoiningByCode}
+                className={`shrink-0 rounded-xl px-4 py-3 text-sm font-semibold transition-colors disabled:opacity-50 ${
+                  tossSkin
+                    ? `${tossSkin.primaryBtn} disabled:bg-slate-200 disabled:text-slate-400`
+                    : "bg-indigo-500 hover:bg-indigo-600 disabled:bg-slate-800 disabled:text-slate-500 text-white"
+                }`}
+              >
+                {isJoiningByCode ? (isKo ? "확인 중…" : "Checking…") : isKo ? "입장" : "Join"}
+              </button>
+            </div>
+            {roomCodeError ? (
+              <p className={`text-sm ${tossSkin ? "text-red-600" : "text-red-400"}`} role="alert">
+                {roomCodeError}
+              </p>
+            ) : null}
+          </div>
         </div>
 
         {/* Middle Column: Active Rooms Gallery */}
@@ -1183,16 +1358,24 @@ const Lobby = ({
                 <p className="text-sm mt-1">{isKo ? "첫 번째 방을 만들어 보세요!" : "Be the first to create one!"}</p>
               </div>
             ) : (() => {
-              let recentIds: number[] = [];
+              let localContinueIds: number[] = [];
               try {
                 const raw = localStorage.getItem("puzzle_recent_rooms");
                 const parsed = raw ? JSON.parse(raw) : [];
-                recentIds = Array.isArray(parsed) ? parsed.filter((x: unknown): x is number => typeof x === "number") : [];
+                localContinueIds = Array.isArray(parsed)
+                  ? parsed.filter((x: unknown): x is number => typeof x === "number")
+                  : [];
               } catch {
-                recentIds = [];
+                localContinueIds = [];
               }
-              const recentSet = new Set(recentIds);
-              const displayActiveRooms = sortActiveRoomsForLobby(activeRooms, user, recentIds);
+              const continueRoomOrder = mergeContinueRoomOrder(continueRoomIdsServer, localContinueIds);
+              const continueSet = new Set(continueRoomOrder);
+              const displayActiveRooms = sortActiveRoomsForLobby(
+                activeRooms,
+                user,
+                continueRoomOrder,
+                serverVisitAtMs
+              );
               return displayActiveRooms.map((room) => (
                 <div
                   key={room.id}
@@ -1210,10 +1393,34 @@ const Lobby = ({
                       referrerPolicy="no-referrer"
                     />
                     <div
-                      className={`absolute inset-0 bg-gradient-to-t ${
+                      className={`pointer-events-none absolute inset-0 bg-gradient-to-t ${
                         tossSkin ? "from-[#F4F8FF] via-transparent to-transparent" : "from-slate-950 to-transparent"
                       }`}
                     />
+                    <div className="pointer-events-none absolute top-2 left-2 z-10 flex flex-col gap-1 items-start max-w-[calc(100%-1rem)]">
+                      {roomIsMine(room, user) && (
+                        <span
+                          className={`backdrop-blur-sm text-[10px] font-semibold px-2 py-0.5 rounded-md border leading-tight ${
+                            tossSkin
+                              ? "bg-white/95 text-[#2F6FE4] border-[#D9E8FF]"
+                              : "bg-slate-900/90 text-indigo-300 border-slate-600"
+                          }`}
+                        >
+                          {isKo ? "내 방" : "My room"}
+                        </span>
+                      )}
+                      {!roomIsMine(room, user) && continueSet.has(room.id) && (
+                        <span
+                          className={`backdrop-blur-sm text-[10px] font-semibold px-2 py-0.5 rounded-md border leading-tight ${
+                            tossSkin
+                              ? "bg-white/95 text-slate-800 border-[#D9E8FF]"
+                              : "bg-slate-900/90 text-slate-200 border-slate-600"
+                          }`}
+                        >
+                          {isKo ? "이어하기" : "Continue"}
+                        </span>
+                      )}
+                    </div>
                     <div className="absolute bottom-3 left-3 right-3 flex justify-between items-end">
                       <div className="flex gap-2 items-center">
                         <span
@@ -1266,24 +1473,6 @@ const Lobby = ({
                         }`}
                       >
                         Room #{encodeRoomId(room.id)}
-                        {roomIsMine(room, user) && (
-                          <span
-                            className={`text-xs px-1.5 py-0.5 rounded-md font-medium ${
-                              tossSkin ? "bg-[#2F6FE4]/15 text-[#2F6FE4]" : "bg-indigo-500/20 text-indigo-300"
-                            }`}
-                          >
-                            {isKo ? "내 방" : "My room"}
-                          </span>
-                        )}
-                        {!roomIsMine(room, user) && recentSet.has(room.id) && (
-                          <span
-                            className={`text-xs px-1.5 py-0.5 rounded-md font-medium ${
-                              tossSkin ? "bg-slate-100 text-slate-600" : "bg-slate-800 text-slate-400"
-                            }`}
-                          >
-                            {isKo ? "최근" : "Recent"}
-                          </span>
-                        )}
                         {room.currentPlayers !== undefined && room.max_players !== undefined && (
                           <span
                             className={`text-xs px-1.5 py-0.5 rounded-md ${
