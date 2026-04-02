@@ -20,6 +20,97 @@ const GPT_SCRIPT_ID = 'google-publisher-tag-script';
 const REWARDED_DEBUG_PREFIX = '[RewardedAd]';
 const ENABLE_WEB_REWARDED_GATE = false;
 
+const LS_GUEST_CREATED_ROOMS = "puzzle_created_room_ids";
+
+function readGuestCreatedRoomIds(): number[] {
+  try {
+    const raw = localStorage.getItem(LS_GUEST_CREATED_ROOMS);
+    if (!raw) return [];
+    const arr = JSON.parse(raw) as unknown;
+    return Array.isArray(arr) ? arr.filter((x): x is number => typeof x === "number") : [];
+  } catch {
+    return [];
+  }
+}
+
+function pushGuestCreatedRoomId(roomId: number) {
+  const cur = readGuestCreatedRoomIds();
+  const next = [roomId, ...cur.filter((id) => id !== roomId)].slice(0, 30);
+  localStorage.setItem(LS_GUEST_CREATED_ROOMS, JSON.stringify(next));
+}
+
+/** BIGINT from PostgREST may be number or string; user.id from API may differ in type. */
+function sameCreatorId(rowCreator: unknown, userId: unknown): boolean {
+  if (rowCreator == null || userId == null || userId === "") return false;
+  return String(rowCreator) === String(userId);
+}
+
+/** Logged-in: created_by or legacy creator_name match. Guest: localStorage ids from room creation. */
+function roomIsMine(
+  room: { id: number; created_by?: string | number | null; creator_name?: string | null },
+  user?: { id?: string | number; username?: string } | null
+): boolean {
+  if (user?.id != null && user.id !== "") {
+    if (sameCreatorId(room.created_by, user.id)) return true;
+    if (!room.created_by && user.username && room.creator_name === user.username) return true;
+    return false;
+  }
+  return readGuestCreatedRoomIds().includes(room.id);
+}
+
+function sortActiveRoomsForLobby(
+  rooms: any[],
+  user: { id?: string | number; username?: string } | undefined | null,
+  recentIds: number[]
+): any[] {
+  const recentIndex = new Map<number, number>();
+  recentIds.forEach((id, i) => {
+    if (typeof id === "number" && !recentIndex.has(id)) recentIndex.set(id, i);
+  });
+
+  const guestCreated = user?.id != null && user.id !== "" ? [] : readGuestCreatedRoomIds();
+
+  const mine = (r: any) => {
+    if (user?.id != null && user.id !== "") {
+      if (sameCreatorId(r.created_by, user.id)) return true;
+      if (!r.created_by && user.username && r.creator_name === user.username) return true;
+      return false;
+    }
+    return guestCreated.includes(r.id);
+  };
+
+  const bucket = (r: any) => {
+    if (mine(r)) return 0;
+    if (recentIndex.has(r.id)) return 1;
+    return 2;
+  };
+
+  const recIdx = (r: any) => recentIndex.get(r.id) ?? 1e9;
+
+  const tiePlayersAndTime = (a: any, b: any) => {
+    const aPlayers = a.currentPlayers || 0;
+    const bPlayers = b.currentPlayers || 0;
+    if (aPlayers > 0 && bPlayers === 0) return -1;
+    if (bPlayers > 0 && aPlayers === 0) return 1;
+    if (aPlayers > 0 && bPlayers > 0 && aPlayers !== bPlayers) return bPlayers - aPlayers;
+    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+  };
+
+  return [...rooms].sort((a, b) => {
+    const ba = bucket(a);
+    const bb = bucket(b);
+    if (ba !== bb) return ba - bb;
+    if (ba === 0) {
+      const ia = recIdx(a);
+      const ib = recIdx(b);
+      if (ia !== ib) return ia - ib;
+      return tiePlayersAndTime(a, b);
+    }
+    if (ba === 1) return recIdx(a) - recIdx(b);
+    return tiePlayersAndTime(a, b);
+  });
+}
+
 declare global {
   interface Window {
     googletag?: any;
@@ -201,12 +292,29 @@ const Lobby = ({
   const fetchRooms = async () => {
     setIsRoomsLoading(true);
     try {
-      const { data: active } = await supabase
+      const { data: activePublic } = await supabase
         .from('pixi_rooms')
         .select('*')
         .eq('status', 'active')
         .eq('is_private', false)
         .order('created_at', { ascending: false });
+
+      let activeMine: any[] = [];
+      if (user?.id) {
+        const { data: mine } = await supabase
+          .from('pixi_rooms')
+          .select('*')
+          .eq('status', 'active')
+          .eq('created_by', user.id);
+        activeMine = mine || [];
+      }
+
+      const merged = new Map<number, any>();
+      for (const r of activePublic || []) merged.set(r.id, r);
+      for (const r of activeMine) {
+        if (!merged.has(r.id)) merged.set(r.id, r);
+      }
+      const active = Array.from(merged.values());
       
       const { data: completed } = await supabase
         .from('pixi_rooms')
@@ -286,7 +394,7 @@ const Lobby = ({
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [user?.id]);
 
   useEffect(() => {
     const presenceChannels: any[] = [];
@@ -332,23 +440,22 @@ const Lobby = ({
         await supabase.from('puzzle_images').insert([insertData]);
     }
 
-    const { data, error } = await supabase
-      .from('pixi_rooms')
-      .insert([
-        { 
-          creator_name: creatorName, 
-          image_url: currentImageUrl, 
-          piece_count: pieceCount, 
-          max_players: maxPlayers, 
-          status: 'active',
-          has_password: !!password.trim(),
-          is_private: isPrivate
-        }
-      ])
-      .select();
-    
+    const insertRow: Record<string, unknown> = {
+      creator_name: creatorName,
+      image_url: currentImageUrl,
+      piece_count: pieceCount,
+      max_players: maxPlayers,
+      status: 'active',
+      has_password: !!password.trim(),
+      is_private: isPrivate,
+    };
+    if (user?.id) insertRow.created_by = user.id;
+
+    const { data, error } = await supabase.from('pixi_rooms').insert([insertRow]).select();
+
     if (data && data.length > 0) {
       const roomId = data[0].id;
+      if (!user?.id) pushGuestCreatedRoomId(roomId);
       const recentRooms = JSON.parse(localStorage.getItem('puzzle_recent_rooms') || '[]');
       const newRecent = [roomId, ...recentRooms.filter((id: number) => id !== roomId)].slice(0, 10);
       localStorage.setItem('puzzle_recent_rooms', JSON.stringify(newRecent));
@@ -1075,26 +1182,18 @@ const Lobby = ({
                 <p>{isKo ? "아직 진행 중인 방이 없습니다." : "No active rooms yet."}</p>
                 <p className="text-sm mt-1">{isKo ? "첫 번째 방을 만들어 보세요!" : "Be the first to create one!"}</p>
               </div>
-            ) : (
-              [...activeRooms].sort((a, b) => {
-                const aPlayers = a.currentPlayers || 0;
-                const bPlayers = b.currentPlayers || 0;
-                
-                // 1. 현재 플레이어가 있는 방을 맨 위로
-                if (aPlayers > 0 && bPlayers === 0) return -1;
-                if (bPlayers > 0 && aPlayers === 0) return 1;
-                
-                // 2. 플레이어가 있는 방들끼리는 플레이어 수가 많은 순
-                if (aPlayers > 0 && bPlayers > 0 && aPlayers !== bPlayers) {
-                  return bPlayers - aPlayers;
-                }
-                
-                // 3. 최근 활동 시간 기준으로 정렬 (created_at 사용)
-                const aTime = new Date(a.created_at).getTime();
-                const bTime = new Date(b.created_at).getTime();
-                
-                return bTime - aTime;
-              }).map((room) => (
+            ) : (() => {
+              let recentIds: number[] = [];
+              try {
+                const raw = localStorage.getItem("puzzle_recent_rooms");
+                const parsed = raw ? JSON.parse(raw) : [];
+                recentIds = Array.isArray(parsed) ? parsed.filter((x: unknown): x is number => typeof x === "number") : [];
+              } catch {
+                recentIds = [];
+              }
+              const recentSet = new Set(recentIds);
+              const displayActiveRooms = sortActiveRoomsForLobby(activeRooms, user, recentIds);
+              return displayActiveRooms.map((room) => (
                 <div
                   key={room.id}
                   className={`group rounded-2xl overflow-hidden transition-all duration-300 border ${
@@ -1167,6 +1266,24 @@ const Lobby = ({
                         }`}
                       >
                         Room #{encodeRoomId(room.id)}
+                        {roomIsMine(room, user) && (
+                          <span
+                            className={`text-xs px-1.5 py-0.5 rounded-md font-medium ${
+                              tossSkin ? "bg-[#2F6FE4]/15 text-[#2F6FE4]" : "bg-indigo-500/20 text-indigo-300"
+                            }`}
+                          >
+                            {isKo ? "내 방" : "My room"}
+                          </span>
+                        )}
+                        {!roomIsMine(room, user) && recentSet.has(room.id) && (
+                          <span
+                            className={`text-xs px-1.5 py-0.5 rounded-md font-medium ${
+                              tossSkin ? "bg-slate-100 text-slate-600" : "bg-slate-800 text-slate-400"
+                            }`}
+                          >
+                            {isKo ? "최근" : "Recent"}
+                          </span>
+                        )}
                         {room.currentPlayers !== undefined && room.max_players !== undefined && (
                           <span
                             className={`text-xs px-1.5 py-0.5 rounded-md ${
@@ -1209,8 +1326,8 @@ const Lobby = ({
                     </button>
                   </div>
                 </div>
-              ))
-            )}
+              ));
+            })()}
           </div>
         </div>
 
