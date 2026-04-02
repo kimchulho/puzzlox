@@ -464,13 +464,14 @@ export default function PuzzleBoard({
           });
         } catch (e) {
           console.warn("WebGL failed, trying Canvas renderer", e);
-          await app.init({ 
-            resizeTo: pixiContainer.current ?? window, 
+          await app.init({
+            resizeTo: pixiContainer.current ?? window,
             backgroundAlpha: 0,
             antialias: true,
-            resolution: window.devicePixelRatio || 1,
+            /** Canvas 폴백: 기본 DPR 대비 절반(저해상도) */
+            resolution: (window.devicePixelRatio || 1) * 0.5,
             autoDensity: true,
-            preference: 'canvas'
+            preference: 'canvas',
           });
         }
 
@@ -488,6 +489,8 @@ export default function PuzzleBoard({
         /** Canvas(저사양)에서는 지연 베벨(generateTexture) 경로를 쓰지 않음 */
         const deferBevelUpgrade =
           DEFER_PIECE_BEVEL_UPGRADE && FAST_PIECE_INIT && !isCanvasRenderer;
+        /** Canvas: 조각·판 외곽선 두께 등을 WebGL 대비 절반으로 */
+        const canvasOutlineScale = isCanvasRenderer ? 0.5 : 1;
 
         app.stage.eventMode = 'static';
         app.stage.hitArea = new PIXI.Rectangle(-10000, -10000, 20000, 20000);
@@ -910,6 +913,11 @@ export default function PuzzleBoard({
             
             if (!isTouchDraggingPiece) {
               // Tap to select
+              if (isClusterHeldRemotely(dragCluster)) {
+                dragCluster = new Set();
+                isDragging = false;
+                return;
+              }
               selectedCluster = dragCluster;
               topZIndex++;
               selectedCluster.forEach(id => {
@@ -1571,7 +1579,7 @@ export default function PuzzleBoard({
         const boardBg = new PIXI.Graphics();
         boardBg.rect(boardStartX, boardStartY, boardWidth, boardHeight);
         boardBg.fill({ color: 0x000000, alpha: 0.1 });
-        boardBg.stroke({ width: 2, color: 0x000000, alpha: 0.5 });
+        boardBg.stroke({ width: 2 * canvasOutlineScale, color: 0x000000, alpha: 0.5 });
         boardBg.zIndex = -1;
         world.addChild(boardBg);
         bumpProgress(38);
@@ -1689,14 +1697,20 @@ export default function PuzzleBoard({
           return u != null && u !== "" ? String(u) : "guest";
         };
 
-        /** 다른 클라이언트가 이미 lock 브로드캐스트로 점유한 조각이 클러스터에 포함되는지 */
-        const isClusterHeldRemotely = (cluster: Set<number>): boolean => {
+        /** 다른 클라이언트가 이미 lock / presence로 점유한 단일 조각인지 */
+        const isPieceIdHeldRemotely = (pieceId: number): boolean => {
           const me = getLocalUsername();
           for (const [uid, set] of remoteLockedPieces) {
             if (String(uid) === me) continue;
-            for (const id of cluster) {
-              if (set.has(id)) return true;
-            }
+            if (set.has(pieceId)) return true;
+          }
+          return false;
+        };
+
+        /** 다른 클라이언트가 이미 lock 브로드캐스트로 점유한 조각이 클러스터에 포함되는지 */
+        const isClusterHeldRemotely = (cluster: Set<number>): boolean => {
+          for (const id of cluster) {
+            if (isPieceIdHeldRemotely(id)) return true;
           }
           return false;
         };
@@ -3396,16 +3410,17 @@ export default function PuzzleBoard({
           const lockOutlineWOnce = 3.5;
           const lockIconGraphicsOnce = new PIXI.Graphics();
           lockIconGraphicsOnce.roundRect(-7.5, -19.5, 15, 12, 4);
-          lockIconGraphicsOnce.stroke({ width: lockOutlineWOnce, color: lockBorderColorOnce, alpha: 1, alignment: 0 });
+          const lockStrokeWOnce = lockOutlineWOnce * canvasOutlineScale;
+          lockIconGraphicsOnce.stroke({ width: lockStrokeWOnce, color: lockBorderColorOnce, alpha: 1, alignment: 0 });
           lockIconGraphicsOnce.roundRect(-12, -11, 24, 19, 4);
-          lockIconGraphicsOnce.stroke({ width: lockOutlineWOnce, color: lockBorderColorOnce, alpha: 1, alignment: 0 });
+          lockIconGraphicsOnce.stroke({ width: lockStrokeWOnce, color: lockBorderColorOnce, alpha: 1, alignment: 0 });
           lockIconGraphicsOnce.roundRect(-12, -11, 24, 19, 4);
           lockIconGraphicsOnce.fill({ color: 0xffffff, alpha: 1 });
           lockIconGraphicsOnce.roundRect(-7.5, -19.5, 15, 12, 4);
-          lockIconGraphicsOnce.stroke({ width: lockOutlineWOnce, color: 0xffffff, alpha: 1, alignment: 1 });
+          lockIconGraphicsOnce.stroke({ width: lockStrokeWOnce, color: 0xffffff, alpha: 1, alignment: 1 });
           let lockResOnce = Math.min(window.devicePixelRatio || 1, 2);
           if (PIECE_COUNT > 500) lockResOnce = Math.min(lockResOnce, 1);
-          if (isCanvasRenderer) lockResOnce *= 0.5;
+          if (isCanvasRenderer) lockResOnce *= 0.25;
           sharedLockTexture = app.renderer.generateTexture({
             target: lockIconGraphicsOnce,
             resolution: lockResOnce,
@@ -3452,7 +3467,7 @@ export default function PuzzleBoard({
           matrix.scale(boardWidth / texture.width, boardHeight / texture.height);
           matrix.translate(-col * pieceWidth, -row * pieceHeight);
 
-          const strokeWidth = 1;
+          const strokeWidth = 1 * canvasOutlineScale;
 
           pieceGraphics.fill({ texture: texture, matrix: matrix, textureSpace: 'global' });
           pieceGraphics.stroke({ color: 0x000000, alpha: 0.2, width: strokeWidth });
@@ -3521,7 +3536,7 @@ export default function PuzzleBoard({
             pieceContainer.addChild(lockIconSprite);
           } else {
             const lockBorderColor = isTossMode ? 0x3182f6 : 0x9333ea;
-            const lockOutlineW = 3.5;
+            const lockOutlineW = 3.5 * canvasOutlineScale;
             const lockIconGraphics = new PIXI.Graphics();
             lockIconGraphics.roundRect(-7.5, -19.5, 15, 12, 4);
             lockIconGraphics.stroke({ width: lockOutlineW, color: lockBorderColor, alpha: 1, alignment: 0 });
@@ -3538,7 +3553,7 @@ export default function PuzzleBoard({
 
             let targetResolution = Math.min(window.devicePixelRatio || 1, maxRes);
             if (isCanvasRenderer) {
-              targetResolution *= 0.5;
+              targetResolution *= 0.25;
             }
 
             const padding = 40;
@@ -3590,7 +3605,7 @@ export default function PuzzleBoard({
             const g = new PIXI.Graphics();
             applyPieceShape(g);
             g.fill({ color: EASTER_SOLID_BACK_HEX });
-            g.stroke({ color: 0x475569, alpha: 0.92, width: 1.5 });
+            g.stroke({ color: 0x475569, alpha: 0.92, width: 1.5 * canvasOutlineScale });
             g.label = 'easterSolidBack';
             return g;
           };
@@ -3681,6 +3696,9 @@ export default function PuzzleBoard({
             
             e.stopPropagation(); // 조각 클릭 시 배경 패닝 이벤트 방지
 
+            if (isPieceIdHeldRemotely(i)) {
+              return;
+            }
             const startCluster = getConnectedCluster(i);
             if (isClusterHeldRemotely(startCluster)) {
               return;
@@ -4069,7 +4087,7 @@ export default function PuzzleBoard({
           if (PIECE_COUNT > 500) maxRes = 1;
           else if (PIECE_COUNT > 200) maxRes = 1.5;
           let targetResolution = Math.min(window.devicePixelRatio || 1, maxRes);
-          if (isCanvasRenderer) targetResolution *= 0.5;
+          if (isCanvasRenderer) targetResolution *= 0.25;
 
           const padding = 40;
           const frame = new PIXI.Rectangle(
@@ -4175,6 +4193,8 @@ export default function PuzzleBoard({
         // 3. Supabase Realtime 수신
         const channel = supabase.channel(`room_${roomId}`);
         channelRef.current = channel;
+        let prevPresenceUsers = new Set<string>();
+        let presenceInitialSyncDone = false;
 
         enqueueRealtimeBroadcast = (event: string, payload: unknown) => {
           const ch = channelRef.current;
@@ -4295,6 +4315,8 @@ export default function PuzzleBoard({
             const state = channel.presenceState();
             const users = new Set<string>();
             const fromPresence = new Map<string, Set<number>>();
+            const me = getLocalUsername();
+
             for (const key in state) {
               state[key].forEach((p: any) => {
                 if (!p?.user || isBotLikeUser(p.user)) return;
@@ -4309,6 +4331,12 @@ export default function PuzzleBoard({
                 });
               });
             }
+
+            const joinedOthersResolved =
+              presenceInitialSyncDone
+                ? [...users].filter((u) => u !== me && !prevPresenceUsers.has(u))
+                : [];
+
             setPlayerCount(users.size);
             setActiveUsers(users);
 
@@ -4323,6 +4351,13 @@ export default function PuzzleBoard({
             });
             refreshRemoteLockVisuals();
 
+            if (joinedOthersResolved.length > 0 && localPresenceLockIds.size > 0) {
+              sendLockBatch(Array.from(localPresenceLockIds));
+            }
+
+            prevPresenceUsers = new Set(users);
+            presenceInitialSyncDone = true;
+
             // Remove cursors for users who left
             cursors.forEach((cursorData, username) => {
               if (!users.has(username) && username !== "bot") {
@@ -4333,6 +4368,8 @@ export default function PuzzleBoard({
           })
           .subscribe(async (status) => {
             if (status === 'SUBSCRIBED') {
+              prevPresenceUsers = new Set();
+              presenceInitialSyncDone = false;
               realtimeBroadcastReady = true;
               const ch = channelRef.current;
               if (ch) {
