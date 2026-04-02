@@ -1,0 +1,52 @@
+# 웹 + 앱인토스 WebView(Granite) 프로덕션 빌드 검증
+# 토스 번들(.ait)은 로컬 또는 아래 workflow_dispatch 워크플로에서 `npm run ait:build` 로 생성합니다.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run lint
+
+      - name: Build web app
+        run: npm run build:web
+
+      - name: Build Toss WebView (Vite)
+        env:
+          # apps/toss/vite.config.ts — production 에서 필수. 저장소 Variables/Secrets 로 덮어쓸 수 있음.
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+        run: |
+          if [ -z "$VITE_API_BASE_URL" ]; then
+            export VITE_API_BASE_URL="https://web-puzzle.onrender.com"
+          fi
+          npm run build:toss
+
+      - name: Upload Toss dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: toss-web-dist
+          path: apps/toss/dist
+          if-no-files-found: error

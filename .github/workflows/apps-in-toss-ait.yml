@@ -1,0 +1,46 @@
+# 앱인토스 CLI로 .ait 번들 생성 (콘솔 업로드용)
+# 필요 시 저장소 Secrets 에 AIT 인증 관련 값을 설정한 뒤 수동 실행하세요.
+# 로컬: npm run ait:build
+name: Apps in Toss bundle (.ait)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ait-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run lint
+
+      - name: Prepare API URL for Toss production build
+        env:
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+        run: |
+          if [ -z "$VITE_API_BASE_URL" ]; then
+            echo "VITE_API_BASE_URL=https://web-puzzle.onrender.com" >> "$GITHUB_ENV"
+          else
+            echo "VITE_API_BASE_URL=$VITE_API_BASE_URL" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build .ait bundle
+        run: npm run ait:build
+
+      - name: Upload .ait artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-puzzle-ait
+          path: "*.ait"
+          if-no-files-found: warn

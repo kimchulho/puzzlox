@@ -5,6 +5,8 @@ import { motion } from 'motion/react';
 import { encodeRoomId, parseRoomNumberOrCode } from '../lib/roomCode';
 import { recordUserRoomVisit } from '../lib/recordUserRoomVisit';
 import { ImageSelectorModal } from './ImageSelectorModal';
+import { TossLobbyBottomBanner } from './TossLobbyBottomBanner';
+import { hasTossRewardAdBeenSeenForRoom, runTossRewardedRoomEntry } from '../lib/tossRewardedAdGate';
 
 const formatPlayTime = (seconds: number) => {
   if (!seconds) return '00:00:00';
@@ -542,7 +544,19 @@ const Lobby = ({
       const recentRooms = JSON.parse(localStorage.getItem('puzzle_recent_rooms') || '[]');
       const newRecent = [roomId, ...recentRooms.filter((id: number) => id !== roomId)].slice(0, 10);
       localStorage.setItem('puzzle_recent_rooms', JSON.stringify(newRecent));
-      onJoinRoom(roomId, data[0].image_url, data[0].piece_count);
+      const doEnter = () => onJoinRoom(roomId, data[0].image_url, data[0].piece_count);
+      if (tossUi) {
+        const ok = await runTossRewardedRoomEntry(roomId, doEnter);
+        if (!ok) {
+          alert(
+            isKo
+              ? '보상형 광고를 끝까지 시청하면 퍼즐방으로 이동할 수 있어요.'
+              : 'Watch the rewarded ad through to enter your puzzle room.'
+          );
+        }
+      } else {
+        doEnter();
+      }
     } else if (error) {
       console.error('Error creating room:', error);
       alert("방 생성에 실패했습니다.");
@@ -710,7 +724,10 @@ const Lobby = ({
     await handleCreateRoom();
   };
 
-  const proceedAfterJoinChecks = (room: any) => {
+  const proceedAfterJoinChecks = async (
+    room: any,
+    opts?: { skipTossRewardedAd?: boolean }
+  ) => {
     if (room.has_password) {
       const pwd = prompt(isKo ? '방 비밀번호를 입력하세요:' : 'Enter room password:');
       if (pwd === null) return;
@@ -722,12 +739,36 @@ const Lobby = ({
 
     if (user?.id) void recordUserRoomVisit(user.id, room.id);
 
-    onJoinRoom(room.id, room.image_url, room.totalPieces || room.piece_count);
-    setRoomCodeInput("");
-    setRoomCodeError(null);
+    const enter = () => {
+      onJoinRoom(room.id, room.image_url, room.totalPieces || room.piece_count);
+      setRoomCodeInput("");
+      setRoomCodeError(null);
+    };
+
+    const skipAd = !!opts?.skipTossRewardedAd;
+    if (tossUi && !skipAd) {
+      setIsRewardAdLoading(true);
+      try {
+        const ok = await runTossRewardedRoomEntry(room.id, enter);
+        if (!ok) {
+          alert(
+            isKo
+              ? '보상형 광고를 끝까지 시청하면 입장할 수 있어요.'
+              : 'Watch the rewarded ad through to join the room.'
+          );
+        }
+      } finally {
+        setIsRewardAdLoading(false);
+      }
+    } else {
+      enter();
+    }
   };
 
-  const handleJoinSpecificRoom = (room: any) => {
+  const handleJoinSpecificRoom = async (
+    room: any,
+    opts?: { skipTossRewardedAd?: boolean }
+  ) => {
     const currentPlayers = room.currentPlayers ?? 0;
     const maxPlayers = room.max_players ?? 0;
     if (maxPlayers > 0 && currentPlayers >= maxPlayers) {
@@ -740,7 +781,7 @@ const Lobby = ({
       return;
     }
 
-    proceedAfterJoinChecks(room);
+    await proceedAfterJoinChecks(room, opts);
   };
 
   const handleJoinByRoomCode = async () => {
@@ -774,10 +815,22 @@ const Lobby = ({
       return;
     }
 
-    handleJoinSpecificRoom({ ...data });
+    await handleJoinSpecificRoom(
+      { ...data },
+      { skipTossRewardedAd: data.status === "completed" }
+    );
   };
 
   const tossLight = !!tossUi;
+  /** 토스 보상형 광고 게이트 진행 중(다른 입장·코드 입력과 겹치지 않게 버튼 비활성화) */
+  const tossRewardGateBusy = !!tossUi && isRewardAdLoading;
+
+  const tossJoinCtaLabel = (roomId: number) => {
+    if (tossRewardGateBusy) return isKo ? "대기 중…" : "Wait…";
+    if (!tossUi) return isKo ? "입장" : "Join";
+    if (hasTossRewardAdBeenSeenForRoom(roomId)) return isKo ? "입장" : "Join";
+    return isKo ? "광고 시청 후 입장" : "Join after ad";
+  };
   /** 앱인토스 로비: TDS·퍼즐방과 동일 계열 (밝은 배경 + 블루 포인트) */
   const tossSkin = tossUi
     ? {
@@ -982,18 +1035,16 @@ const Lobby = ({
 
   return (
     <div
-      className={`min-h-screen relative flex flex-col items-center overflow-y-auto box-border ${
-        tossUi ? "pb-12 bg-[#F4F8FF]" : "bg-slate-950 pt-20 pb-12 px-4"
+      className={`relative box-border flex min-h-[100dvh] min-h-screen flex-col ${
+        tossUi ? "bg-[#F4F8FF]" : "bg-slate-950"
       }`}
-      style={
-        tossUi
-          ? {
-              paddingTop: tossUi.safeArea.top + 12,
-              paddingBottom: tossUi.safeArea.bottom + 48,
-            }
-          : undefined
-      }
     >
+      <div
+        className={`relative flex w-full flex-1 min-h-0 flex-col items-center overflow-y-auto overflow-x-hidden ${
+          !tossUi ? "pt-20 pb-12 px-4" : ""
+        }`}
+        style={tossUi ? { paddingTop: tossUi.safeArea.top + 12 } : undefined}
+      >
       {!tossUi ? (
         <div className="fixed top-0 left-0 w-full z-50 bg-slate-900/80 backdrop-blur-sm border-b border-slate-700/50 p-2 sm:p-3 flex items-center justify-between text-white">
           <div className="flex items-center gap-2">
@@ -1046,6 +1097,22 @@ const Lobby = ({
               </p>
             </>
           )}
+
+          {tossUi ? (
+            <div
+              className="mb-4 rounded-xl border border-[#D9E8FF] bg-[#EAF2FF]/90 px-3 py-2.5 text-left text-xs leading-relaxed text-slate-700"
+              role="note"
+            >
+              <p className="mb-1 font-semibold text-slate-900">
+                {isKo ? "보상형 광고 안내" : "Rewarded video"}
+              </p>
+              <p>
+                {isKo
+                  ? "방을 처음 만들거나, 진행 중인 방을 이 기기에서 처음 열 때만 짧은 보상형 광고를 시청한 뒤 퍼즐방으로 이동해요. 완료된 퍼즐방은 광고 없이 바로 들어가요. 같은 방은 한 번 시청하면 이 기기에서는 다시 나오지 않아요."
+                  : "A short rewarded ad plays only when you create a room or open an active room for the first time on this device. Completed puzzles open with no ad. Each room only asks once on this device."}
+              </p>
+            </div>
+          ) : null}
 
           {!user && (
             <div className="mb-4">
@@ -1239,7 +1306,12 @@ const Lobby = ({
 
           <button
             onClick={handleCreateRoomClick}
-            disabled={isCreating || (ENABLE_WEB_REWARDED_GATE && isRewardAdLoading) || (!user && !guestName.trim())}
+            disabled={
+              isCreating ||
+              (ENABLE_WEB_REWARDED_GATE && isRewardAdLoading) ||
+              tossRewardGateBusy ||
+              (!user && !guestName.trim())
+            }
             className={`w-full font-medium py-4 px-6 rounded-xl flex items-center justify-center gap-2 transition-colors ${
               tossSkin
                 ? `${tossSkin.primaryBtn} disabled:bg-slate-200 disabled:text-slate-400`
@@ -1248,10 +1320,16 @@ const Lobby = ({
           >
             <Plus className="w-5 h-5" />
             {isCreating || (ENABLE_WEB_REWARDED_GATE && isRewardAdLoading)
-              ? (isKo ? '생성 중...' : 'Creating...')
-              : (isKo
-                ? '방 만들기'
-                : 'Create room')}
+              ? (isKo ? "생성 중…" : "Creating…")
+              : tossRewardGateBusy
+                ? (isKo ? "대기 중…" : "Please wait…")
+                : tossUi
+                  ? isKo
+                    ? "광고 시청 후 방 만들기"
+                    : "Create room after ad"
+                  : isKo
+                    ? "방 만들기"
+                    : "Create room"}
           </button>
 
           <div className="mt-4 text-left space-y-2">
@@ -1263,6 +1341,13 @@ const Lobby = ({
               <Play className="w-4 h-4 shrink-0" />
               {isKo ? "방 번호로 입장" : "Join by room code"}
             </label>
+            {tossUi ? (
+              <p className={`mb-1 text-left text-xs leading-snug ${tossSkin ? "text-slate-600" : "text-slate-500"}`}>
+                {isKo
+                  ? "해당 방을 이 기기에서 처음 열 때만 광고가 나와요. (목록의 입장 버튼 문구를 참고해 주세요.)"
+                  : "An ad plays only the first time you open that room on this device. See the list button label for whether an ad is needed."}
+              </p>
+            ) : null}
             <div className="flex gap-2">
               <input
                 type="text"
@@ -1276,9 +1361,9 @@ const Lobby = ({
                   setRoomCodeError(null);
                 }}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && !isJoiningByCode) void handleJoinByRoomCode();
+                  if (e.key === "Enter" && !isJoiningByCode && !tossRewardGateBusy) void handleJoinByRoomCode();
                 }}
-                disabled={isJoiningByCode}
+                disabled={isJoiningByCode || tossRewardGateBusy}
                 placeholder={isKo ? "6자 코드 또는 방 ID" : "6-letter code or room ID"}
                 className={`min-w-0 flex-1 rounded-xl p-3 text-sm focus:outline-none ${
                   tossSkin
@@ -1289,14 +1374,24 @@ const Lobby = ({
               <button
                 type="button"
                 onClick={() => void handleJoinByRoomCode()}
-                disabled={isJoiningByCode}
+                disabled={isJoiningByCode || tossRewardGateBusy}
                 className={`shrink-0 rounded-xl px-4 py-3 text-sm font-semibold transition-colors disabled:opacity-50 ${
                   tossSkin
                     ? `${tossSkin.primaryBtn} disabled:bg-slate-200 disabled:text-slate-400`
                     : "bg-indigo-500 hover:bg-indigo-600 disabled:bg-slate-800 disabled:text-slate-500 text-white"
                 }`}
               >
-                {isJoiningByCode ? (isKo ? "확인 중…" : "Checking…") : isKo ? "입장" : "Join"}
+                {isJoiningByCode
+                  ? (isKo ? "확인 중…" : "Checking…")
+                  : tossRewardGateBusy
+                    ? (isKo ? "대기 중…" : "Wait…")
+                    : tossUi
+                      ? isKo
+                        ? "방 확인 후 입장"
+                        : "Look up & join"
+                      : isKo
+                        ? "입장"
+                        : "Join"}
               </button>
             </div>
             {roomCodeError ? (
@@ -1313,26 +1408,36 @@ const Lobby = ({
             tossSkin ? tossSkin.card : "bg-slate-900 border-slate-800"
           }`}
         >
-          <div className="flex items-center justify-between mb-4">
-            <h2
-              className={`text-xl font-bold flex items-center gap-2 ${
-                tossSkin ? tossSkin.heading : "text-white"
-              }`}
-            >
-              <Grid className={`w-5 h-5 ${tossSkin ? tossSkin.subtleIcon : "text-indigo-400"}`} />
-              {isKo ? "진행 중인 퍼즐방" : "Active Puzzle Rooms"}
-            </h2>
-            <button
-              onClick={fetchRooms}
-              className={`transition-colors p-2 rounded-lg ${
-                tossSkin
-                  ? "text-slate-500 hover:text-[#2F6FE4] hover:bg-[#EAF2FF]"
-                  : "text-slate-400 hover:text-white hover:bg-slate-800"
-              }`}
-              title={isKo ? "목록 새로고침" : "Refresh room list"}
-            >
-              <RefreshCw size={18} />
-            </button>
+          <div className="mb-4">
+            <div className="flex items-center justify-between gap-2">
+              <h2
+                className={`text-xl font-bold flex items-center gap-2 min-w-0 ${
+                  tossSkin ? tossSkin.heading : "text-white"
+                }`}
+              >
+                <Grid className={`w-5 h-5 shrink-0 ${tossSkin ? tossSkin.subtleIcon : "text-indigo-400"}`} />
+                {isKo ? "진행 중인 퍼즐방" : "Active Puzzle Rooms"}
+              </h2>
+              <button
+                type="button"
+                onClick={fetchRooms}
+                className={`shrink-0 transition-colors p-2 rounded-lg ${
+                  tossSkin
+                    ? "text-slate-500 hover:text-[#2F6FE4] hover:bg-[#EAF2FF]"
+                    : "text-slate-400 hover:text-white hover:bg-slate-800"
+                }`}
+                title={isKo ? "목록 새로고침" : "Refresh room list"}
+              >
+                <RefreshCw size={18} />
+              </button>
+            </div>
+            {tossUi ? (
+              <p className={`mt-2 text-left text-xs leading-snug ${tossSkin ? "text-slate-600" : "text-slate-500"}`}>
+                {isKo
+                  ? "입장 버튼에 ‘광고 시청 후 입장’이 보이면, 시청 후 방으로 들어가요."
+                  : 'If the button says “Join after ad”, you’ll watch a short ad before entering.'}
+              </p>
+            ) : null}
           </div>
 
           <div className="flex-1 overflow-y-auto pr-2 space-y-3 custom-scrollbar">
@@ -1506,12 +1611,14 @@ const Lobby = ({
                       </p>
                     </div>
                     <button
-                      onClick={() => handleJoinSpecificRoom(room)}
-                      className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${
+                      type="button"
+                      onClick={() => void handleJoinSpecificRoom(room)}
+                      disabled={tossRewardGateBusy}
+                      className={`max-w-[min(11rem,46%)] px-3 py-2 rounded-xl text-sm font-medium transition-colors leading-tight ${
                         tossSkin ? tossSkin.joinBtn : "bg-indigo-500/10 hover:bg-indigo-500 text-indigo-400 hover:text-white"
-                      }`}
+                      } disabled:opacity-50 disabled:pointer-events-none`}
                     >
-                      {isKo ? "입장" : "Join"}
+                      {tossJoinCtaLabel(room.id)}
                     </button>
                   </div>
                 </div>
@@ -1526,7 +1633,7 @@ const Lobby = ({
             tossSkin ? tossSkin.card : "bg-slate-900 border-slate-800"
           }`}
         >
-          <div className="flex items-center justify-between mb-4">
+          <div className="mb-4">
             <h2
               className={`text-xl font-bold flex items-center gap-2 ${
                 tossSkin ? tossSkin.heading : "text-white"
@@ -1645,12 +1752,14 @@ const Lobby = ({
                         </p>
                       </div>
                       <button
-                        onClick={() => handleJoinSpecificRoom(room)}
+                        type="button"
+                        onClick={() => void handleJoinSpecificRoom(room, { skipTossRewardedAd: true })}
+                        disabled={tossRewardGateBusy}
                         className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${
                           tossSkin ? tossSkin.viewBtn : "bg-amber-500/10 hover:bg-amber-500 text-amber-400 hover:text-white"
-                        }`}
+                        } disabled:opacity-50 disabled:pointer-events-none`}
                       >
-                        {isKo ? "보기" : "View"}
+                        {tossRewardGateBusy ? (isKo ? "대기 중…" : "Wait…") : isKo ? "보기" : "View"}
                       </button>
                     </div>
                   </div>
@@ -1716,6 +1825,8 @@ const Lobby = ({
           </button>
         </footer>
       )}
+      </div>
+      {tossUi ? <TossLobbyBottomBanner safeAreaBottom={tossUi.safeArea.bottom} /> : null}
     </div>
   );
 };
