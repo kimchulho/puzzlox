@@ -385,6 +385,7 @@ export default function PuzzleBoard({
 
     return () => {
       socket.disconnect();
+      socketRef.current = null;
     };
   }, [roomId]);
 
@@ -419,7 +420,6 @@ export default function PuzzleBoard({
     /** FAST로 벡터만 올린 뒤, 로딩 이후 rAF로 조각마다 베벨 래스터를 점진 적용 */
     const DEFER_PIECE_BEVEL_UPGRADE = true;
     const BEVEL_UPGRADE_PIECES_PER_FRAME = 2;
-    const BEVEL_UPGRADE_CROSSFADE_MS = 260;
     let sharedLockTexture: PIXI.Texture | null = null;
 
     // 1. Pixi Application 초기화
@@ -782,7 +782,34 @@ export default function PuzzleBoard({
             if (!isTouchDraggingPiece && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
               isTouchDraggingPiece = true;
               topZIndex++;
-              currentShiftY = e.pointerType === 'touch' ? pieceHeight * 1.6 : 0;
+              if (e.pointerType === 'touch') {
+                /** 화면 위로 ~8mm(표준 96dpi CSS px 가정); 글로벌 Y 감소량에 맞춰 월드 좌표로 환산(줌·월드 회전 반영) */
+                const liftCssPx = (8 / 25.4) * 96;
+                const canvasEl = app.canvas as HTMLCanvasElement;
+                const cssToRenderer =
+                  canvasEl && canvasEl.clientWidth > 0
+                    ? canvasEl.width / canvasEl.clientWidth
+                    : (app.renderer as { resolution?: number }).resolution ??
+                      (typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1);
+                const targetGlobalPx = liftCssPx * cssToRenderer;
+                const anchorId =
+                  dragStartPieceId >= 0 && dragCluster.has(dragStartPieceId)
+                    ? dragStartPieceId
+                    : Array.from(dragCluster)[0];
+                const ap = pieces.current.get(anchorId);
+                if (ap) {
+                  const p0 = new PIXI.Point(ap.x, ap.y);
+                  const p1 = new PIXI.Point(ap.x, ap.y - 1);
+                  world.toGlobal(p0, p0);
+                  world.toGlobal(p1, p1);
+                  const rate = p1.y - p0.y;
+                  currentShiftY = Math.abs(rate) < 1e-4 ? pieceHeight * 1.6 : -targetGlobalPx / rate;
+                } else {
+                  currentShiftY = pieceHeight * 1.6;
+                }
+              } else {
+                currentShiftY = 0;
+              }
 
               if (selectedCluster) {
                 selectedCluster.forEach(id => {
@@ -3916,34 +3943,12 @@ export default function PuzzleBoard({
           pieceSprite.eventMode = 'none';
           pieceSprite.x = frame.x;
           pieceSprite.y = frame.y;
-          pieceSprite.alpha = 0;
 
           bevelContainer.destroy({ children: true });
 
-          oldNode.label = 'deferredBevelFadeOut';
+          pieceContainer.removeChild(oldNode);
+          oldNode.destroy();
           pieceContainer.addChildAt(pieceSprite, 0);
-
-          let fadeElapsed = 0;
-          const fadeTicker = (ticker: PIXI.Ticker) => {
-            if (!isMounted || pieceContainer.destroyed) {
-              app.ticker.remove(fadeTicker);
-              return;
-            }
-            fadeElapsed += ticker.deltaMS;
-            const u = Math.min(1, fadeElapsed / BEVEL_UPGRADE_CROSSFADE_MS);
-            const eased = u * u * (3 - 2 * u);
-            oldNode.alpha = 1 - eased;
-            pieceSprite.alpha = eased;
-            if (u < 1) return;
-            app.ticker.remove(fadeTicker);
-            pieceSprite.alpha = 1;
-            oldNode.alpha = 1;
-            if (oldNode.parent === pieceContainer) {
-              pieceContainer.removeChild(oldNode);
-            }
-            oldNode.destroy();
-          };
-          app.ticker.add(fadeTicker);
         };
 
         const scheduleDeferredBevelUpgrades = () => {
@@ -4195,33 +4200,53 @@ export default function PuzzleBoard({
         // Presence ghost를 줄이기 위해 untrack 후 unsubscribe
         channelRef.current.untrack?.();
         channelRef.current.unsubscribe();
+        channelRef.current = null;
       }
       const runHeavyTeardown = () => {
         try {
-          if (easterTicker && appInst) {
-            appInst.ticker.remove(easterTicker);
-            easterTicker = null;
+          try {
+            if (easterTicker && appInst) {
+              appInst.ticker.remove(easterTicker);
+              easterTicker = null;
+            }
+          } catch {
+            /* noop */
           }
-        } catch {
-          /* noop */
+          try {
+            sharedLockTexture?.destroy(true);
+            sharedLockTexture = null;
+          } catch {
+            /* noop */
+          }
+          try {
+            tex?.destroy(true);
+          } catch {
+            /* noop */
+          }
+          try {
+            appInst?.destroy(true);
+          } catch {
+            /* noop */
+          }
+        } finally {
+          if (objUrl) {
+            try {
+              URL.revokeObjectURL(objUrl);
+            } catch {
+              /* noop */
+            }
+          }
+          pieces.current.clear();
+          worldRef.current = null;
+          gatherBordersRef.current = null;
+          gatherByColorRef.current = null;
+          createMosaicFromImageRef.current = null;
+          initialPositionsRef.current = [];
+          isCompletedRef.current = false;
+          activeUsersRef.current.clear();
+          miniPadDragRef.current = null;
+          zoomPadDragRef.current = null;
         }
-        try {
-          sharedLockTexture?.destroy(true);
-          sharedLockTexture = null;
-        } catch {
-          /* noop */
-        }
-        try {
-          tex?.destroy(true);
-        } catch {
-          /* noop */
-        }
-        try {
-          appInst?.destroy(true);
-        } catch {
-          /* noop */
-        }
-        if (objUrl) URL.revokeObjectURL(objUrl);
       };
       // 로비 등 다음 화면이 먼저 그려진 뒤 WebGL/텍스처 정리(메인 스레드 블로킹 완화)
       if (typeof requestAnimationFrame !== "undefined") {
