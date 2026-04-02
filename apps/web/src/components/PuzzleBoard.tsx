@@ -413,6 +413,9 @@ export default function PuzzleBoard({
     let appInstance: PIXI.Application | null = null;
     let deviceMotionHandler: ((event: DeviceMotionEvent) => void) | null = null;
     let easterTicker: (() => void) | null = null;
+    /** true: 조각은 벡터+베벨(조각당 generateTexture 생략)·자물쇠 텍스처 1회 공유. false: 기존 래스터 조각+자물쇠. */
+    const FAST_PIECE_INIT = true;
+    let sharedLockTexture: PIXI.Texture | null = null;
 
     // 1. Pixi Application 초기화
     const initPixi = async () => {
@@ -569,9 +572,12 @@ export default function PuzzleBoard({
           smoothedZ: null as number | null,
           lastSwitchAt: 0,
         };
-        const getPieceSprite = (piece: PIXI.Container) => {
-          const sprite = piece.getChildByLabel('pieceSprite');
-          return sprite && sprite instanceof PIXI.Sprite ? sprite : null;
+        const getPieceSprite = (piece: PIXI.Container): PIXI.Sprite | PIXI.Container | null => {
+          const node = piece.getChildByLabel('pieceSprite');
+          if (!node) return null;
+          if (node instanceof PIXI.Sprite) return node;
+          if (node instanceof PIXI.Container) return node;
+          return null;
         };
         /** 퍼즐 뒷면(이스터 에그): 흰색·검정 중간 단색 회색 */
         const EASTER_SOLID_BACK_HEX = 0x9ca3af;
@@ -3205,12 +3211,40 @@ export default function PuzzleBoard({
         }
 
         bumpProgress(50);
+
+        if (FAST_PIECE_INIT) {
+          const lockBorderColorOnce = isTossMode ? 0x3182f6 : 0x9333ea;
+          const lockOutlineWOnce = 3.5;
+          const lockIconGraphicsOnce = new PIXI.Graphics();
+          lockIconGraphicsOnce.roundRect(-7.5, -19.5, 15, 12, 4);
+          lockIconGraphicsOnce.stroke({ width: lockOutlineWOnce, color: lockBorderColorOnce, alpha: 1, alignment: 0 });
+          lockIconGraphicsOnce.roundRect(-12, -11, 24, 19, 4);
+          lockIconGraphicsOnce.stroke({ width: lockOutlineWOnce, color: lockBorderColorOnce, alpha: 1, alignment: 0 });
+          lockIconGraphicsOnce.roundRect(-12, -11, 24, 19, 4);
+          lockIconGraphicsOnce.fill({ color: 0xffffff, alpha: 1 });
+          lockIconGraphicsOnce.roundRect(-7.5, -19.5, 15, 12, 4);
+          lockIconGraphicsOnce.stroke({ width: lockOutlineWOnce, color: 0xffffff, alpha: 1, alignment: 1 });
+          let lockResOnce = Math.min(window.devicePixelRatio || 1, 2);
+          if (PIECE_COUNT > 500) lockResOnce = Math.min(lockResOnce, 1);
+          if (isCanvasRenderer) lockResOnce *= 0.5;
+          sharedLockTexture = app.renderer.generateTexture({
+            target: lockIconGraphicsOnce,
+            resolution: lockResOnce,
+          });
+          lockIconGraphicsOnce.destroy();
+        }
+
         let initialPlacedCount = 0;
         for (let i = 0; i < PIECE_COUNT; i++) {
-          // 저사양 기기: rAF로 양보해 로딩 스피너·진행률이 끊기지 않게 함
-          if (i > 0 && i % 5 === 0) {
-            bumpProgress(50 + (49 * i) / Math.max(1, PIECE_COUNT));
-            await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+          if (FAST_PIECE_INIT) {
+            if (i > 0 && i % 30 === 0) {
+              bumpProgress(50 + (49 * i) / Math.max(1, PIECE_COUNT));
+            }
+          } else {
+            if (i > 0 && i % 5 === 0) {
+              bumpProgress(50 + (49 * i) / Math.max(1, PIECE_COUNT));
+              await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+            }
           }
 
           const col = i % GRID_COLS;
@@ -3222,7 +3256,7 @@ export default function PuzzleBoard({
           const leftTab = col === 0 ? 0 : -verticalTabs[row][col - 1];
 
           const pieceContainer = new PIXI.Container();
-          
+
           const applyPieceShape = (g: PIXI.Graphics) => {
             g.moveTo(0, 0);
             drawEdge(g, 0, 0, pieceWidth, 0, topTab, tabDepth);
@@ -3234,47 +3268,41 @@ export default function PuzzleBoard({
 
           const pieceGraphics = new PIXI.Graphics();
           applyPieceShape(pieceGraphics);
-          
+
           const matrix = new PIXI.Matrix();
           matrix.scale(boardWidth / texture.width, boardHeight / texture.height);
           matrix.translate(-col * pieceWidth, -row * pieceHeight);
-          
-          // 조각 외곽선 두께 1px
+
           const strokeWidth = 1;
-          
+
           pieceGraphics.fill({ texture: texture, matrix: matrix, textureSpace: 'global' });
-          // 퍼즐 조각 외곽선 (검은색 20%)
           pieceGraphics.stroke({ color: 0x000000, alpha: 0.2, width: strokeWidth });
 
-          // --- 베벨(입체) 효과 적용 ---
-          const ENABLE_BEVEL = true; // 베벨 효과 켜기/끄기 옵션
+          const ENABLE_BEVEL = false;
           let renderTarget: PIXI.Container | PIXI.Graphics = pieceGraphics;
 
           if (ENABLE_BEVEL) {
             const bevelContainer = new PIXI.Container();
             bevelContainer.addChild(pieceGraphics);
 
-            // 밝은 하이라이트 (좌상단)
             const whiteLine = new PIXI.Graphics();
             applyPieceShape(whiteLine);
             whiteLine.stroke({ width: 1, color: 0xffffff, alpha: 0.6 });
-            whiteLine.x = 1; // 오른쪽 아래로 밀어서 좌상단 안쪽으로 들어오게 함
+            whiteLine.x = 1;
             whiteLine.y = 1;
             const blurWhite = new PIXI.BlurFilter();
             blurWhite.strength = 1;
             whiteLine.filters = [blurWhite];
 
-            // 어두운 그림자 (우하단)
             const blackLine = new PIXI.Graphics();
             applyPieceShape(blackLine);
             blackLine.stroke({ width: 1, color: 0x000000, alpha: 0.6 });
-            blackLine.x = -1; // 왼쪽 위로 밀어서 우하단 안쪽으로 들어오게 함
+            blackLine.x = -1;
             blackLine.y = -1;
             const blurBlack = new PIXI.BlurFilter();
             blurBlack.strength = 1;
             blackLine.filters = [blurBlack];
 
-            // 마스크 (선이 조각 바깥으로 삐져나가지 않도록)
             const maskGraphics = new PIXI.Graphics();
             applyPieceShape(maskGraphics);
             maskGraphics.fill({ color: 0xffffff });
@@ -3282,95 +3310,113 @@ export default function PuzzleBoard({
             bevelContainer.addChild(whiteLine);
             bevelContainer.addChild(blackLine);
             bevelContainer.addChild(maskGraphics);
-            
+
             whiteLine.mask = maskGraphics;
             blackLine.mask = maskGraphics;
 
             renderTarget = bevelContainer;
           }
-          // -----------------------------
 
-          const lockIconGraphics = new PIXI.Graphics();
-          lockIconGraphics.roundRect(-10, -10, 20, 16, 4);
-          lockIconGraphics.fill({ color: 0xffffff, alpha: 0.8 });
-          lockIconGraphics.roundRect(-6, -16, 12, 10, 4);
-          lockIconGraphics.stroke({ width: 3, color: 0xffffff, alpha: 0.8 });
-
-          // 렌더링 최적화: 벡터 그래픽을 텍스처로 변환하여 Sprite로 사용
-          // 저사양 기기 최적화: 조각 개수가 많을수록 텍스처 해상도를 낮춰 VRAM 메모리 초과(OOM) 방지
-          let maxRes = 2;
-          if (PIECE_COUNT > 500) maxRes = 1;
-          else if (PIECE_COUNT > 200) maxRes = 1.5;
-          
-          let targetResolution = Math.min(window.devicePixelRatio || 1, maxRes);
-          if (isCanvasRenderer) {
-            targetResolution *= 0.5; // Canvas(소프트웨어) 렌더 시 VRAM·CPU 부담 완화
-          }
-          
-          // 외곽선이 잘리지 않도록 bounds를 기준으로 패딩을 추가하여 프레임 설정
           const bounds = pieceGraphics.getLocalBounds();
           const minX = bounds.minX !== undefined ? bounds.minX : bounds.x;
           const minY = bounds.minY !== undefined ? bounds.minY : bounds.y;
           const maxX = bounds.maxX !== undefined ? bounds.maxX : bounds.x + bounds.width;
           const maxY = bounds.maxY !== undefined ? bounds.maxY : bounds.y + bounds.height;
-          
-          const padding = 40;
-          const frame = new PIXI.Rectangle(
-            minX - padding,
-            minY - padding,
-            (maxX - minX) + padding * 2,
-            (maxY - minY) + padding * 2
-          );
-          
-          const pieceTexture = app.renderer.generateTexture({
-            target: renderTarget,
-            resolution: targetResolution,
-            frame: frame
-          });
-          const pieceSprite = new PIXI.Sprite(pieceTexture);
-          pieceSprite.label = 'pieceSprite';
-          
-          const lockIconTexture = app.renderer.generateTexture({
-            target: lockIconGraphics,
-            resolution: targetResolution,
-          });
-          const lockIconSprite = new PIXI.Sprite(lockIconTexture);
-          
-          pieceSprite.x = frame.x;
-          pieceSprite.y = frame.y;
-          
-          lockIconSprite.anchor.set(0.5);
-          lockIconSprite.x = pieceWidth / 2;
-          lockIconSprite.y = pieceHeight / 2;
-          lockIconSprite.visible = false;
-          lockIconSprite.label = 'lockIcon';
 
-          pieceContainer.addChild(pieceSprite);
-          pieceContainer.addChild(lockIconSprite);
-          
-          // 조각의 실제 모양에 맞춰 hitArea 설정 (여백 제외)
+          let lockIconSprite: PIXI.Sprite;
+
+          if (FAST_PIECE_INIT) {
+            pieceContainer.interactiveChildren = false;
+            renderTarget.label = 'pieceSprite';
+            renderTarget.eventMode = 'none';
+            pieceContainer.addChild(renderTarget);
+
+            lockIconSprite = new PIXI.Sprite(sharedLockTexture!);
+            lockIconSprite.anchor.set(0.5);
+            lockIconSprite.x = pieceWidth / 2;
+            lockIconSprite.y = pieceHeight / 2;
+            lockIconSprite.scale.set(1.08);
+            lockIconSprite.visible = false;
+            lockIconSprite.label = 'lockIcon';
+            lockIconSprite.eventMode = 'none';
+            pieceContainer.addChild(lockIconSprite);
+          } else {
+            const lockBorderColor = isTossMode ? 0x3182f6 : 0x9333ea;
+            const lockOutlineW = 3.5;
+            const lockIconGraphics = new PIXI.Graphics();
+            lockIconGraphics.roundRect(-7.5, -19.5, 15, 12, 4);
+            lockIconGraphics.stroke({ width: lockOutlineW, color: lockBorderColor, alpha: 1, alignment: 0 });
+            lockIconGraphics.roundRect(-12, -11, 24, 19, 4);
+            lockIconGraphics.stroke({ width: lockOutlineW, color: lockBorderColor, alpha: 1, alignment: 0 });
+            lockIconGraphics.roundRect(-12, -11, 24, 19, 4);
+            lockIconGraphics.fill({ color: 0xffffff, alpha: 1 });
+            lockIconGraphics.roundRect(-7.5, -19.5, 15, 12, 4);
+            lockIconGraphics.stroke({ width: lockOutlineW, color: 0xffffff, alpha: 1, alignment: 1 });
+
+            let maxRes = 2;
+            if (PIECE_COUNT > 500) maxRes = 1;
+            else if (PIECE_COUNT > 200) maxRes = 1.5;
+
+            let targetResolution = Math.min(window.devicePixelRatio || 1, maxRes);
+            if (isCanvasRenderer) {
+              targetResolution *= 0.5;
+            }
+
+            const padding = 40;
+            const frame = new PIXI.Rectangle(
+              minX - padding,
+              minY - padding,
+              maxX - minX + padding * 2,
+              maxY - minY + padding * 2,
+            );
+
+            const pieceTexture = app.renderer.generateTexture({
+              target: renderTarget,
+              resolution: targetResolution,
+              frame: frame,
+            });
+            const pieceSprite = new PIXI.Sprite(pieceTexture);
+            pieceSprite.label = 'pieceSprite';
+
+            const lockIconTexture = app.renderer.generateTexture({
+              target: lockIconGraphics,
+              resolution: targetResolution,
+            });
+            lockIconSprite = new PIXI.Sprite(lockIconTexture);
+
+            pieceSprite.x = frame.x;
+            pieceSprite.y = frame.y;
+
+            lockIconSprite.anchor.set(0.5);
+            lockIconSprite.x = pieceWidth / 2;
+            lockIconSprite.y = pieceHeight / 2;
+            lockIconSprite.scale.set(1.08);
+            lockIconSprite.visible = false;
+            lockIconSprite.label = 'lockIcon';
+
+            pieceContainer.addChild(pieceSprite);
+            pieceContainer.addChild(lockIconSprite);
+
+            if (ENABLE_BEVEL) {
+              (renderTarget as PIXI.Container).destroy({ children: true });
+            } else {
+              pieceGraphics.destroy();
+            }
+            lockIconGraphics.destroy();
+          }
+
           pieceContainer.hitArea = new PIXI.Rectangle(minX, minY, maxX - minX, maxY - minY);
 
           (pieceContainer as any).__makeEasterSolidBack = () => {
             const g = new PIXI.Graphics();
             applyPieceShape(g);
             g.fill({ color: EASTER_SOLID_BACK_HEX });
-            // 겹칠 때 덩어리로 보이지 않게 퍼즐 윤곽선
             g.stroke({ color: 0x475569, alpha: 0.92, width: 1.5 });
             g.label = 'easterSolidBack';
             return g;
           };
-          
-          // 렌더링 최적화: 화면 밖에 있는 조각은 그리지 않도록 설정
-          pieceContainer.cullable = true;
 
-          // 메모리 누수 방지를 위해 원본 그래픽 파괴
-          if (ENABLE_BEVEL) {
-            (renderTarget as PIXI.Container).destroy({ children: true });
-          } else {
-            pieceGraphics.destroy();
-          }
-          lockIconGraphics.destroy();
+          pieceContainer.cullable = true;
 
           // 퍼즐판 바깥에 겹치지 않게 배치
           let state = pieceStates.get(i);
@@ -3412,7 +3458,7 @@ export default function PuzzleBoard({
                 targetX,
                 targetY,
                 progress: 0,
-                delay: Math.random() * 40 // 0 to ~0.6 seconds delay
+                delay: Math.random() * 40,
               });
             } else {
               // WebGL 프로브와 실제 렌더러 불일치·Canvas 폴백 시 즉시 표시
@@ -3992,6 +4038,12 @@ export default function PuzzleBoard({
             appInst.ticker.remove(easterTicker);
             easterTicker = null;
           }
+        } catch {
+          /* noop */
+        }
+        try {
+          sharedLockTexture?.destroy(true);
+          sharedLockTexture = null;
         } catch {
           /* noop */
         }
