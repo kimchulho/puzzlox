@@ -11,6 +11,8 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import type { Request, Response, NextFunction } from "express";
 import {
+  CursorMovePayload,
+  MoveBatchPayload,
   ROOM_EVENTS,
   LockAppliedPayload,
   LockDeniedPayload,
@@ -962,6 +964,41 @@ async function startServer() {
         const payload: LockReleasedPayload = { roomId, userId, pieceIds: released };
         io.to(roomId.toString()).emit(ROOM_EVENTS.LockReleased, payload);
       }
+    });
+
+    socket.on(ROOM_EVENTS.MoveBatch, (raw: MoveBatchPayload) => {
+      const roomId = Number(raw?.roomId);
+      if (!Number.isFinite(roomId) || roomId <= 0 || currentRoomId !== roomId) return;
+      const updatesRaw = Array.isArray(raw?.updates) ? raw.updates : [];
+      if (updatesRaw.length === 0) return;
+      const updates = updatesRaw
+        .slice(0, 120)
+        .map((u) => ({
+          pieceId: Math.floor(Number(u.pieceId)),
+          x: Number(u.x),
+          y: Number(u.y),
+        }))
+        .filter(
+          (u) =>
+            Number.isFinite(u.pieceId) &&
+            u.pieceId >= 0 &&
+            Number.isFinite(u.x) &&
+            Number.isFinite(u.y)
+        );
+      if (updates.length === 0) return;
+      socket.to(roomId.toString()).emit(ROOM_EVENTS.MoveBatch, { roomId, updates });
+    });
+
+    socket.on(ROOM_EVENTS.CursorMove, (raw: CursorMovePayload) => {
+      const roomId = Number(raw?.roomId);
+      if (!Number.isFinite(roomId) || roomId <= 0 || currentRoomId !== roomId) return;
+      const username = String(raw?.username ?? "").trim();
+      const x = Number(raw?.x);
+      const y = Number(raw?.y);
+      if (!username || !Number.isFinite(x) || !Number.isFinite(y)) return;
+      socket
+        .to(roomId.toString())
+        .emit(ROOM_EVENTS.CursorMove, { roomId, username, x, y });
     });
 
     socket.on(ROOM_EVENTS.ScoreDelta, async (raw: ScoreDeltaPayload) => {

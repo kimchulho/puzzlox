@@ -2,6 +2,8 @@ export const ROOM_EVENTS = {
   JoinRoom: "join_room",
   PuzzleCompleted: "puzzle_completed",
   SyncTime: "sync_time",
+  MoveBatch: "move_batch",
+  CursorMove: "cursor_move",
   ScoreDelta: "score_delta",
   ScoreSync: "score_sync",
   LockRequest: "lock_request",
@@ -20,6 +22,18 @@ export type PuzzleCompletedPayload = number;
 export interface SyncTimePayload {
   accumulatedTime: number;
   isRunning: boolean;
+}
+
+export interface MoveBatchPayload {
+  roomId: number;
+  updates: { pieceId: number; x: number; y: number }[];
+}
+
+export interface CursorMovePayload {
+  roomId: number;
+  username: string;
+  x: number;
+  y: number;
 }
 
 export interface ScoreDeltaPayload {

@@ -12,9 +12,11 @@ import { Clock, Users, Trophy, ChevronLeft, X, Palette, LayoutGrid, Zap, Heart, 
 import { io, Socket } from 'socket.io-client';
 import confetti from 'canvas-confetti';
 import {
+  CursorMovePayload,
   LockAppliedPayload,
   LockDeniedPayload,
   LockReleasedPayload,
+  MoveBatchPayload,
   ROOM_EVENTS,
   ScoreSyncPayload,
   SyncTimePayload,
@@ -142,6 +144,8 @@ export default function PuzzleBoard({
   const socketLockReleasedRef = useRef<((payload: LockReleasedPayload) => void) | null>(null);
   const socketLockDeniedRef = useRef<((payload: LockDeniedPayload) => void) | null>(null);
   const socketScoreSyncRef = useRef<((payload: ScoreSyncPayload) => void) | null>(null);
+  const socketMoveBatchRef = useRef<((payload: MoveBatchPayload) => void) | null>(null);
+  const socketCursorMoveRef = useRef<((payload: CursorMovePayload) => void) | null>(null);
   const mainTextureRef = useRef<PIXI.Texture | null>(null);
   const objectUrlRef = useRef<string | null>(null);
   const gatherBordersRef = useRef<(() => void) | null>(null);
@@ -428,6 +432,12 @@ export default function PuzzleBoard({
     });
     socket.on(ROOM_EVENTS.ScoreSync, (payload: ScoreSyncPayload) => {
       socketScoreSyncRef.current?.(payload);
+    });
+    socket.on(ROOM_EVENTS.MoveBatch, (payload: MoveBatchPayload) => {
+      socketMoveBatchRef.current?.(payload);
+    });
+    socket.on(ROOM_EVENTS.CursorMove, (payload: CursorMovePayload) => {
+      socketCursorMoveRef.current?.(payload);
     });
 
     return () => {
@@ -798,11 +808,11 @@ export default function PuzzleBoard({
                 broadcastY = localPos.y;
               }
 
-              enqueueRealtimeBroadcast('cursorMove', {
-                username: user?.username ?? localStorage.getItem('puzzle_guest_name') ?? 'guest',
-                x: broadcastX,
-                y: broadcastY,
-              });
+              sendBotCursorMove(
+                user?.username ?? localStorage.getItem('puzzle_guest_name') ?? 'guest',
+                broadcastX,
+                broadcastY
+              );
             }
           }
 
@@ -1704,10 +1714,21 @@ export default function PuzzleBoard({
         };
 
         const sendMoveBatch = throttle((updates: {pieceId: number, x: number, y: number}[]) => {
+          if (updates.length === 0) return;
+          const socket = socketRef.current;
+          if (socket && socket.connected) {
+            socket.emit(ROOM_EVENTS.MoveBatch, { roomId, updates });
+            return;
+          }
           enqueueRealtimeBroadcast('moveBatch', { updates });
         }, 80);
 
         const sendBotCursorMove = throttle((username: string, x: number, y: number) => {
+          const socket = socketRef.current;
+          if (socket && socket.connected) {
+            socket.emit(ROOM_EVENTS.CursorMove, { roomId, username, x, y });
+            return;
+          }
           enqueueRealtimeBroadcast('cursorMove', { username, x, y });
         }, 100);
 
@@ -2749,11 +2770,7 @@ export default function PuzzleBoard({
           if (cursorData) {
             cursorData.container.destroy();
             cursors.delete(botUsername);
-            enqueueRealtimeBroadcast('cursorMove', {
-              username: botUsername,
-              x: -9999,
-              y: -9999,
-            });
+            sendBotCursorMove(botUsername, -9999, -9999);
           }
 
           isBotRunningRef.current = false;
@@ -3066,11 +3083,7 @@ export default function PuzzleBoard({
           if (cursorData) {
             cursorData.container.destroy();
             cursors.delete(botUsername);
-            enqueueRealtimeBroadcast('cursorMove', {
-              username: botUsername,
-              x: -9999,
-              y: -9999,
-            });
+            sendBotCursorMove(botUsername, -9999, -9999);
           }
 
           isColorBotRunningRef.current = false;
@@ -4607,25 +4620,21 @@ export default function PuzzleBoard({
           });
         };
 
-          channel
-          .on('broadcast', { event: 'moveBatch' }, ({ payload }) => {
-            bumpInbound();
-            payload.updates.forEach((u: any) => {
+          const handleRemoteMoveBatch = (updatesRaw: unknown) => {
+            const updates = Array.isArray(updatesRaw) ? updatesRaw : [];
+            updates.forEach((u: any) => {
               const pieceContainer = pieces.current.get(u.pieceId);
               if (pieceContainer) {
                 // 자신이 드래그 중인 조각은 원격 업데이트 무시
                 if ((isDragging && dragCluster.has(u.pieceId)) || (selectedCluster && selectedCluster.has(u.pieceId))) {
                   return;
                 }
-                
                 targetPositions.set(u.pieceId, { x: u.x, y: u.y });
-                
                 // 다른 사용자가 조각을 맞췄을 때 맨 뒤로 보내기
                 const col = u.pieceId % GRID_COLS;
                 const row = Math.floor(u.pieceId / GRID_COLS);
                 const targetX = boardStartX + col * pieceWidth;
                 const targetY = boardStartY + row * pieceHeight;
-                
                 if (Math.abs(u.x - targetX) < 1 && Math.abs(u.y - targetY) < 1) {
                   pieceContainer.eventMode = 'none';
                   pieceContainer.zIndex = 0;
@@ -4637,6 +4646,66 @@ export default function PuzzleBoard({
                 }
               }
             });
+          };
+
+          const handleRemoteCursorMove = (payload: { username?: unknown; x?: unknown; y?: unknown }) => {
+            const username = payload?.username != null ? String(payload.username) : "";
+            const x = Number(payload?.x);
+            const y = Number(payload?.y);
+            if (!username || !Number.isFinite(x) || !Number.isFinite(y)) return;
+            const currentUsername = user ? user.username : localStorage.getItem('puzzle_guest_name');
+            if (username === currentUsername) return;
+            markPeerSeen(username);
+
+            let cursorData = cursors.get(username);
+            if (!cursorData) {
+              const container = new PIXI.Container();
+
+              const graphics = new PIXI.Graphics();
+              graphics.circle(0, 0, 4).fill(0xffffff);
+
+              const text = new PIXI.Text({
+                text: username,
+                style: {
+                  fontFamily: 'Arial',
+                  fontSize: 12,
+                  fill: 0xffffff,
+                  stroke: { color: 0x000000, width: 3 }
+                }
+              });
+              text.x = 8;
+              text.y = -6;
+
+              container.addChild(graphics);
+              container.addChild(text);
+
+              container.x = x;
+              container.y = y;
+
+              cursorsContainer.addChild(container);
+              cursorData = { container, targetX: x, targetY: y };
+              cursors.set(username, cursorData);
+            } else {
+              cursorData.targetX = x;
+              cursorData.targetY = y;
+            }
+          };
+
+          socketMoveBatchRef.current = (payload) => {
+            if (payload.roomId !== roomId) return;
+            bumpInbound();
+            handleRemoteMoveBatch(payload.updates);
+          };
+          socketCursorMoveRef.current = (payload) => {
+            if (payload.roomId !== roomId) return;
+            bumpInbound();
+            handleRemoteCursorMove(payload);
+          };
+
+          channel
+          .on('broadcast', { event: 'moveBatch' }, ({ payload }) => {
+            bumpInbound();
+            handleRemoteMoveBatch((payload as { updates?: unknown }).updates);
           })
           .on('broadcast', { event: 'lock' }, ({ payload }) => {
             bumpInbound();
@@ -4689,43 +4758,7 @@ export default function PuzzleBoard({
           })
           .on('broadcast', { event: 'cursorMove' }, ({ payload }) => {
             bumpInbound();
-            const { username, x, y } = payload;
-            const currentUsername = user ? user.username : localStorage.getItem('puzzle_guest_name');
-            if (username === currentUsername) return;
-            markPeerSeen(username);
-
-            let cursorData = cursors.get(username);
-            if (!cursorData) {
-              const container = new PIXI.Container();
-              
-              const graphics = new PIXI.Graphics();
-              graphics.circle(0, 0, 4).fill(0xffffff);
-              
-              const text = new PIXI.Text({
-                text: username,
-                style: {
-                  fontFamily: 'Arial',
-                  fontSize: 12,
-                  fill: 0xffffff,
-                  stroke: { color: 0x000000, width: 3 }
-                }
-              });
-              text.x = 8;
-              text.y = -6;
-              
-              container.addChild(graphics);
-              container.addChild(text);
-              
-              container.x = x;
-              container.y = y;
-              
-              cursorsContainer.addChild(container);
-              cursorData = { container, targetX: x, targetY: y };
-              cursors.set(username, cursorData);
-            } else {
-              cursorData.targetX = x;
-              cursorData.targetY = y;
-            }
+            handleRemoteCursorMove(payload as { username?: unknown; x?: unknown; y?: unknown });
           })
           .on("broadcast", { event: "heartbeat" }, ({ payload }) => {
             bumpInbound();
@@ -4904,6 +4937,8 @@ export default function PuzzleBoard({
       socketLockReleasedRef.current = null;
       socketLockDeniedRef.current = null;
       socketScoreSyncRef.current = null;
+      socketMoveBatchRef.current = null;
+      socketCursorMoveRef.current = null;
       clearInterval(peerStaleUiTimer);
       peerLastSeenMsRef.current.clear();
       if (realtimeHealthTimer != null) {
