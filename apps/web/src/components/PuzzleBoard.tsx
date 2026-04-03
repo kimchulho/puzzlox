@@ -4524,6 +4524,7 @@ export default function PuzzleBoard({
           .on("presence", { event: "leave" }, applyPresenceSync)
           .subscribe(async (status, err) => {
             if (status === 'SUBSCRIBED') {
+              if (channelRef.current !== channel) return;
               rtWarn("SUBSCRIBED");
               prevPresenceUsers = new Set();
               presenceInitialSyncDone = false;
@@ -4545,7 +4546,7 @@ export default function PuzzleBoard({
                 dragCluster.forEach((id) => localPresenceLockIds.add(id));
               }
               const tr = channelRef.current;
-              if (tr) {
+              if (tr && tr === channel) {
                 await tr.track({
                   user: me,
                   lockedPieceIds: Array.from(localPresenceLockIds),
@@ -4556,6 +4557,10 @@ export default function PuzzleBoard({
               status === 'CHANNEL_ERROR' ||
               status === 'TIMED_OUT'
             ) {
+              if (channelRef.current !== channel) {
+                rtWarn(`subscribe ${status} (ignored, not current channel)`, err);
+                return;
+              }
               rtWarn(`subscribe ${status}`, err);
               realtimeBroadcastReady = false;
             }
@@ -4572,9 +4577,14 @@ export default function PuzzleBoard({
                 return;
               }
               const st = ch.state;
-              if (st === REALTIME_CHANNEL_STATES.errored || st === REALTIME_CHANNEL_STATES.closed) {
-                rtWarn("channel dead → recycle", st);
+              // `closed`는 removeChannel 직후·내부 재연결 등에서 잠깐 뜨는 경우가 많아 재구독 루프를 유발함 → errored만 강제 recycle
+              if (st === REALTIME_CHANNEL_STATES.errored) {
+                rtWarn("channel errored → recycle", st);
                 void recycleRealtimeChannel(`health_${st}`);
+                return;
+              }
+              if (st === REALTIME_CHANNEL_STATES.closed) {
+                rtWarn("channel state closed (waiting for rejoin; no recycle)", st);
                 return;
               }
               if (st === REALTIME_CHANNEL_STATES.joined) {
