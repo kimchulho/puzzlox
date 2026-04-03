@@ -187,6 +187,7 @@ export default function PuzzleBoard({
   const isKo = locale === 'ko';
   const [isCopied, setIsCopied] = useState(false);
   const [isTossWideMode, setIsTossWideMode] = useState(false);
+  const [webViewportTopInset, setWebViewportTopInset] = useState(0);
   const tossWidePrefHydratedRef = useRef(false);
   const skipNextTossWideSaveRef = useRef(false);
   /** 가로(와이드) 툴바 getBoundingClientRect().width (회전 후 화면상 두께, CSS px). 0 = 아직 측정 전 */
@@ -340,6 +341,14 @@ export default function PuzzleBoard({
         paddingLeft: hostWebViewPadding.left,
       }
     : undefined;
+  const webToolbarPadding: CSSProperties | undefined = !isTossMode
+    ? {
+        // Mobile browser URL bar / notch overlap guard on first room entry.
+        paddingTop: `calc(max(env(safe-area-inset-top), ${webViewportTopInset}px) + 4px)`,
+        paddingLeft: "max(env(safe-area-inset-left), 4px)",
+        paddingRight: "max(env(safe-area-inset-right), 4px)",
+      }
+    : undefined;
   const tossToolbarPadding = hostWebViewPadding
     ? {
         // Keep horizontal inset perfectly symmetric in Toss mode.
@@ -369,6 +378,42 @@ export default function PuzzleBoard({
       window.removeEventListener("resize", update);
     };
   }, [isTossMode, isTossWideMode]);
+
+  useEffect(() => {
+    if (isTossMode) {
+      setWebViewportTopInset(0);
+      return;
+    }
+    const vv = typeof window !== "undefined" ? window.visualViewport : null;
+    let raf = 0;
+    let t1: ReturnType<typeof setTimeout> | null = null;
+    let t2: ReturnType<typeof setTimeout> | null = null;
+    const updateInset = () => {
+      const next = vv ? Math.max(0, Math.round(vv.offsetTop || 0)) : 0;
+      setWebViewportTopInset(next);
+    };
+    const scheduleUpdate = () => {
+      if (raf) cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(updateInset);
+    };
+    scheduleUpdate();
+    // Address bar show/hide and orientation changes may settle after a short delay.
+    t1 = setTimeout(scheduleUpdate, 80);
+    t2 = setTimeout(scheduleUpdate, 220);
+    vv?.addEventListener("resize", scheduleUpdate);
+    vv?.addEventListener("scroll", scheduleUpdate);
+    window.addEventListener("resize", scheduleUpdate);
+    window.addEventListener("orientationchange", scheduleUpdate);
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+      if (t1) clearTimeout(t1);
+      if (t2) clearTimeout(t2);
+      vv?.removeEventListener("resize", scheduleUpdate);
+      vv?.removeEventListener("scroll", scheduleUpdate);
+      window.removeEventListener("resize", scheduleUpdate);
+      window.removeEventListener("orientationchange", scheduleUpdate);
+    };
+  }, [isTossMode]);
 
   /** 리더보드 패널 위치: 토스 세로는 툴바 아래(배경색 팝업과 유사한 Y), 웹은 기존 오프셋 사용 */
   const leaderboardOffset = isTossMode
@@ -5373,7 +5418,7 @@ export default function PuzzleBoard({
                   ? Math.max(hostWebViewPadding.left + 4, Math.max(0, hostWebViewPadding.right - 28))
                   : 12,
               }
-            : (isTossMode ? tossToolbarPadding : hostToolbarPadding)
+            : (isTossMode ? tossToolbarPadding : (hostToolbarPadding ?? webToolbarPadding))
         }
       >
         {/* Top Row (Mobile) / Left Side (Desktop) */}
