@@ -121,7 +121,7 @@ export default function App() {
 
   if (loading) {
     return (
-      <div className="h-[100dvh] min-h-screen w-screen bg-slate-950 flex items-center justify-center text-white">
+      <div className="h-screen w-screen bg-slate-950 flex items-center justify-center text-white">
         <div className="text-2xl font-bold animate-pulse">Loading...</div>
       </div>
     );
@@ -150,7 +150,7 @@ export default function App() {
 
   if (currentRoom) {
     return (
-      <div className="h-[100dvh] min-h-screen w-screen overflow-hidden bg-slate-900 relative">
+      <div className="h-screen w-screen overflow-hidden bg-slate-900 relative">
         <PuzzleBoard 
           roomId={currentRoom.id} 
           imageUrl={currentRoom.imageUrl} 
