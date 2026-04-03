@@ -344,7 +344,8 @@ export default function PuzzleBoard({
   const webToolbarPadding: CSSProperties | undefined = !isTossMode
     ? {
         // Mobile browser URL bar / notch overlap guard on first room entry.
-        paddingTop: `calc(max(env(safe-area-inset-top), ${webViewportTopInset}px) + 4px)`,
+        top: `max(env(safe-area-inset-top), ${webViewportTopInset}px)`,
+        paddingTop: 4,
         paddingLeft: "max(env(safe-area-inset-left), 4px)",
         paddingRight: "max(env(safe-area-inset-right), 4px)",
       }
