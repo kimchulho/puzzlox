@@ -740,6 +740,41 @@ async function startServer() {
 
   io.on("connection", (socket) => {
     let currentRoomId: number | null = null;
+    const MOVE_FLUSH_MS = 33;
+    const CURSOR_FLUSH_MS = 66;
+    let moveFlushTimer: ReturnType<typeof setTimeout> | null = null;
+    let cursorFlushTimer: ReturnType<typeof setTimeout> | null = null;
+    const pendingMoveByPiece = new Map<number, { pieceId: number; x: number; y: number }>();
+    let pendingCursor: { username: string; x: number; y: number } | null = null;
+    const flushPendingMoves = () => {
+      moveFlushTimer = null;
+      if (!currentRoomId || pendingMoveByPiece.size === 0) return;
+      const roomId = currentRoomId;
+      const updates = [...pendingMoveByPiece.values()];
+      pendingMoveByPiece.clear();
+      socket.to(roomId.toString()).emit(ROOM_EVENTS.MoveBatch, { roomId, updates });
+    };
+    const scheduleMoveFlush = () => {
+      if (moveFlushTimer != null) return;
+      moveFlushTimer = setTimeout(flushPendingMoves, MOVE_FLUSH_MS);
+    };
+    const flushPendingCursor = () => {
+      cursorFlushTimer = null;
+      if (!currentRoomId || !pendingCursor) return;
+      const roomId = currentRoomId;
+      const payload = pendingCursor;
+      pendingCursor = null;
+      socket.to(roomId.toString()).emit(ROOM_EVENTS.CursorMove, {
+        roomId,
+        username: payload.username,
+        x: payload.x,
+        y: payload.y,
+      });
+    };
+    const scheduleCursorFlush = () => {
+      if (cursorFlushTimer != null) return;
+      cursorFlushTimer = setTimeout(flushPendingCursor, CURSOR_FLUSH_MS);
+    };
     const rememberOwned = (roomId: number, pieceId: number) => {
       if (!socketOwnedPieceIds.has(socket.id)) socketOwnedPieceIds.set(socket.id, new Map());
       const byRoom = socketOwnedPieceIds.get(socket.id)!;
@@ -846,6 +881,16 @@ async function startServer() {
         Number.isFinite(joinedUserIdRaw) && joinedUserIdRaw > 0
           ? Math.floor(joinedUserIdRaw)
           : null;
+      pendingMoveByPiece.clear();
+      pendingCursor = null;
+      if (moveFlushTimer != null) {
+        clearTimeout(moveFlushTimer);
+        moveFlushTimer = null;
+      }
+      if (cursorFlushTimer != null) {
+        clearTimeout(cursorFlushTimer);
+        cursorFlushTimer = null;
+      }
       if (currentRoomId) {
         endSocketPlaySession(socket.id);
         releaseOwnedLocks(currentRoomId, socketUserId.get(socket.id) ?? "guest");
@@ -986,7 +1031,8 @@ async function startServer() {
             Number.isFinite(u.y)
         );
       if (updates.length === 0) return;
-      socket.to(roomId.toString()).emit(ROOM_EVENTS.MoveBatch, { roomId, updates });
+      for (const u of updates) pendingMoveByPiece.set(u.pieceId, u);
+      scheduleMoveFlush();
     });
 
     socket.on(ROOM_EVENTS.CursorMove, (raw: CursorMovePayload) => {
@@ -996,9 +1042,8 @@ async function startServer() {
       const x = Number(raw?.x);
       const y = Number(raw?.y);
       if (!username || !Number.isFinite(x) || !Number.isFinite(y)) return;
-      socket
-        .to(roomId.toString())
-        .emit(ROOM_EVENTS.CursorMove, { roomId, username, x, y });
+      pendingCursor = { username, x, y };
+      scheduleCursorFlush();
     });
 
     socket.on(ROOM_EVENTS.ScoreDelta, async (raw: ScoreDeltaPayload) => {
@@ -1051,6 +1096,10 @@ async function startServer() {
     });
 
     socket.on("disconnect", () => {
+      pendingMoveByPiece.clear();
+      pendingCursor = null;
+      if (moveFlushTimer != null) clearTimeout(moveFlushTimer);
+      if (cursorFlushTimer != null) clearTimeout(cursorFlushTimer);
       endSocketPlaySession(socket.id);
       if (currentRoomId && roomStates.has(currentRoomId)) {
         releaseOwnedLocks(currentRoomId, socketUserId.get(socket.id) ?? "guest");
