@@ -595,7 +595,10 @@ export default function PuzzleBoard({
         const cursorsContainer = new PIXI.Container();
         cursorsContainer.zIndex = 2000;
         world.addChild(cursorsContainer);
-        const cursors = new Map<string, { container: PIXI.Container, targetX: number, targetY: number }>();
+        const cursors = new Map<
+          string,
+          { container: PIXI.Container; targetX: number; targetY: number; lastUpdatedAt: number }
+        >();
         const remoteLockedPieces = new Map<string, Set<number>>();
         /** presence에 실어 신규 입장자가 선점 상태를 동기화할 수 있게 함 */
         const localPresenceLockIds = new Set<number>();
@@ -1110,6 +1113,7 @@ export default function PuzzleBoard({
         app.stage.on('pointerupoutside', stopPanning);
 
         app.ticker.add(() => {
+          const dtSec = Math.max(0.001, app.ticker.deltaMS / 1000);
           cursors.forEach((cursorData, username) => {
             cursorData.container.scale.set(1 / world.scale.x);
             
@@ -1135,13 +1139,23 @@ export default function PuzzleBoard({
 
             const dx = cursorData.targetX - cursorData.container.x;
             const dy = cursorData.targetY - cursorData.container.y;
+            const dist = Math.hypot(dx, dy);
             
             if (isHoldingPiece) {
-              cursorData.container.x = cursorData.targetX;
-              cursorData.container.y = cursorData.targetY;
-            } else if (Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1) {
-              cursorData.container.x += dx * 0.3;
-              cursorData.container.y += dy * 0.3;
+              const holdFollow = 1 - Math.exp(-28 * dtSec);
+              cursorData.container.x += dx * holdFollow;
+              cursorData.container.y += dy * holdFollow;
+            } else if (dist > 0.1) {
+              const baseFollow = 1 - Math.exp(-14 * dtSec);
+              const boostedFollow = dist > 120 ? 0.65 : dist > 48 ? 0.45 : baseFollow;
+              cursorData.container.x += dx * boostedFollow;
+              cursorData.container.y += dy * boostedFollow;
+              if (Math.abs(cursorData.targetX - cursorData.container.x) < 0.4) {
+                cursorData.container.x = cursorData.targetX;
+              }
+              if (Math.abs(cursorData.targetY - cursorData.container.y) < 0.4) {
+                cursorData.container.y = cursorData.targetY;
+              }
             }
           });
 
@@ -1713,24 +1727,20 @@ export default function PuzzleBoard({
           drawC(p(0.610, -0.127), p(0.807, 0), p(1.000, 0));
         };
 
-        const sendMoveBatch = throttle((updates: {pieceId: number, x: number, y: number}[]) => {
+        const sendMoveBatch = throttle((updates: {pieceId: number, x: number, y: number, isLocked?: boolean}[]) => {
           if (updates.length === 0) return;
           const socket = socketRef.current;
           if (socket && socket.connected) {
             socket.emit(ROOM_EVENTS.MoveBatch, { roomId, updates });
-            return;
           }
-          enqueueRealtimeBroadcast('moveBatch', { updates });
         }, 80);
 
         const sendBotCursorMove = throttle((username: string, x: number, y: number) => {
           const socket = socketRef.current;
           if (socket && socket.connected) {
             socket.emit(ROOM_EVENTS.CursorMove, { roomId, username, x, y });
-            return;
           }
-          enqueueRealtimeBroadcast('cursorMove', { username, x, y });
-        }, 100);
+        }, 50);
 
         const sendLockBatch = (pieceIds: number[], userId?: string) => {
           if (pieceIds.length === 0) return;
@@ -1995,23 +2005,74 @@ export default function PuzzleBoard({
           });
         };
 
-        const savePiecesState = async (updates: {piece_index: number, x: number, y: number, is_locked: boolean}[]) => {
-          if (updates.length === 0) return;
+        const PIECE_DB_FLUSH_MS = 1500;
+        const pieceStatePending = new Map<number, { piece_index: number; x: number; y: number; is_locked: boolean }>();
+        let pieceStateFlushTimer: ReturnType<typeof setTimeout> | null = null;
+        let pieceStateFlushInFlight = false;
+        let pieceStateFlushRequested = false;
+        const flushPieceStateBuffer = async () => {
+          if (pieceStateFlushInFlight) {
+            pieceStateFlushRequested = true;
+            return;
+          }
+          if (pieceStatePending.size === 0) return;
+          if (pieceStateFlushTimer != null) {
+            clearTimeout(pieceStateFlushTimer);
+            pieceStateFlushTimer = null;
+          }
+          pieceStateFlushInFlight = true;
+          const batch = [...pieceStatePending.values()];
+          pieceStatePending.clear();
           try {
-            const payload = updates.map(u => ({
+            const payload = batch.map((u) => ({
               room_id: roomId,
               piece_index: u.piece_index,
               x: u.x,
               y: u.y,
-              is_locked: u.is_locked
+              is_locked: u.is_locked,
             }));
-            const { error } = await supabase.from('pixi_pieces').upsert(payload, { onConflict: 'room_id, piece_index' });
+            const { error } = await supabase
+              .from('pixi_pieces')
+              .upsert(payload, { onConflict: 'room_id, piece_index' });
             if (error) {
               console.error('Failed to save piece state', error);
             }
           } catch (err) {
             console.error('Exception saving piece state', err);
+          } finally {
+            pieceStateFlushInFlight = false;
+            if (pieceStateFlushRequested || pieceStatePending.size > 0) {
+              pieceStateFlushRequested = false;
+              void flushPieceStateBuffer();
+            }
           }
+        };
+        const savePiecesState = async (
+          updates: {piece_index: number, x: number, y: number, is_locked: boolean}[],
+          opts?: { immediate?: boolean }
+        ) => {
+          if (updates.length === 0) return;
+          const socket = socketRef.current;
+          if (socket && socket.connected) {
+            // Socket server is authoritative for runtime move persistence.
+            return;
+          }
+          for (const u of updates) {
+            pieceStatePending.set(u.piece_index, u);
+          }
+          if (opts?.immediate) {
+            while (pieceStateFlushInFlight) {
+              pieceStateFlushRequested = true;
+              await new Promise((resolve) => setTimeout(resolve, 10));
+            }
+            await flushPieceStateBuffer();
+            return;
+          }
+          if (pieceStateFlushTimer != null) return;
+          pieceStateFlushTimer = setTimeout(() => {
+            pieceStateFlushTimer = null;
+            void flushPieceStateBuffer();
+          }, PIECE_DB_FLUSH_MS);
         };
 
         const zoomToCompletedPuzzle = (animate = true) => {
@@ -2358,8 +2419,9 @@ export default function PuzzleBoard({
             }
           }
 
-          const updates: any[] = [];
+          const updates: { pieceId: number; x: number; y: number; isLocked?: boolean }[] = [];
           const dbUpdates: any[] = [];
+          const lockedPieceIds = new Set<number>();
           if (snapped) {
             if (typeof navigator !== 'undefined' && navigator.vibrate) {
               navigator.vibrate(25);
@@ -2393,17 +2455,20 @@ export default function PuzzleBoard({
               const lockIcon = p.getChildByLabel('lockIcon');
               if (lockIcon) lockIcon.visible = false;
               isLocked = true;
+              lockedPieceIds.add(id);
             }
             dbUpdates.push({ piece_index: id, x: p.x, y: p.y, is_locked: isLocked });
           });
 
           if (updates.length > 0) {
+            updates.forEach((u) => {
+              u.isLocked = lockedPieceIds.has(u.pieceId);
+            });
             sendMoveBatch(updates);
           }
           if (dbUpdates.length > 0) {
-            savePiecesState(dbUpdates).then(() => {
-              checkCompletion();
-            });
+            void savePiecesState(dbUpdates);
+            void checkCompletion();
           }
           
           if (snapped) {
@@ -2604,7 +2669,12 @@ export default function PuzzleBoard({
             container.y = boardStartY + boardHeight / 2;
             
             cursorsContainer.addChild(container);
-            cursorData = { container, targetX: container.x, targetY: container.y };
+            cursorData = {
+              container,
+              targetX: container.x,
+              targetY: container.y,
+              lastUpdatedAt: Date.now(),
+            };
             cursors.set(botUsername, cursorData);
           }
 
@@ -2895,7 +2965,7 @@ export default function PuzzleBoard({
             
             if (updates.length > 0) {
               sendMoveBatch(updates);
-              await savePiecesState(dbUpdates);
+              await savePiecesState(dbUpdates, { immediate: true });
             }
             
             isColorBotRunningRef.current = false;
@@ -2935,7 +3005,12 @@ export default function PuzzleBoard({
             container.y = boardStartY + boardHeight / 2;
             
             cursorsContainer.addChild(container);
-            cursorData = { container, targetX: container.x, targetY: container.y };
+            cursorData = {
+              container,
+              targetX: container.x,
+              targetY: container.y,
+              lastUpdatedAt: Date.now(),
+            };
             cursors.set(botUsername, cursorData);
           }
 
@@ -4635,7 +4710,8 @@ export default function PuzzleBoard({
                 const row = Math.floor(u.pieceId / GRID_COLS);
                 const targetX = boardStartX + col * pieceWidth;
                 const targetY = boardStartY + row * pieceHeight;
-                if (Math.abs(u.x - targetX) < 1 && Math.abs(u.y - targetY) < 1) {
+                const shouldLock = u.isLocked === true || (Math.abs(u.x - targetX) < 1 && Math.abs(u.y - targetY) < 1);
+                if (shouldLock) {
                   pieceContainer.eventMode = 'none';
                   pieceContainer.zIndex = 0;
                   pieceContainer.alpha = 1; // 잠금 해제 및 원래 투명도 복구
@@ -4683,11 +4759,12 @@ export default function PuzzleBoard({
               container.y = y;
 
               cursorsContainer.addChild(container);
-              cursorData = { container, targetX: x, targetY: y };
+              cursorData = { container, targetX: x, targetY: y, lastUpdatedAt: Date.now() };
               cursors.set(username, cursorData);
             } else {
               cursorData.targetX = x;
               cursorData.targetY = y;
+              cursorData.lastUpdatedAt = Date.now();
             }
           };
 
@@ -4703,10 +4780,6 @@ export default function PuzzleBoard({
           };
 
           channel
-          .on('broadcast', { event: 'moveBatch' }, ({ payload }) => {
-            bumpInbound();
-            handleRemoteMoveBatch((payload as { updates?: unknown }).updates);
-          })
           .on('broadcast', { event: 'lock' }, ({ payload }) => {
             bumpInbound();
             const userId = payload.userId;
@@ -4755,10 +4828,6 @@ export default function PuzzleBoard({
                 return [...prev, { username: payload.username, score: payload.score }].sort((a, b) => b.score - a.score);
               }
             });
-          })
-          .on('broadcast', { event: 'cursorMove' }, ({ payload }) => {
-            bumpInbound();
-            handleRemoteCursorMove(payload as { username?: unknown; x?: unknown; y?: unknown });
           })
           .on("broadcast", { event: "heartbeat" }, ({ payload }) => {
             bumpInbound();

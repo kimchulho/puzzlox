@@ -605,6 +605,7 @@ async function startServer() {
     const roomIds = active.map((r) => Number(r.id)).filter((id) => Number.isFinite(id));
     const totalByRoom = new Map<number, number>();
     const lockedByRoom = new Map<number, number>();
+    const scoreByRoom = new Map<number, number>();
     if (roomIds.length > 0) {
       const { data: pieces, error: piecesError } = await supabase
         .from("pixi_pieces")
@@ -620,6 +621,19 @@ async function startServer() {
           lockedByRoom.set(roomId, (lockedByRoom.get(roomId) ?? 0) + 1);
         }
       }
+      const { data: scores, error: scoresError } = await supabase
+        .from("pixi_scores")
+        .select("room_id,score")
+        .in("room_id", roomIds);
+      if (scoresError) {
+        return res.status(500).json({ message: scoresError.message });
+      }
+      for (const row of scores ?? []) {
+        const roomId = Number((row as { room_id: unknown }).room_id);
+        const score = Number((row as { score?: unknown }).score ?? 0);
+        if (!Number.isFinite(roomId) || roomId <= 0 || !Number.isFinite(score) || score <= 0) continue;
+        scoreByRoom.set(roomId, (scoreByRoom.get(roomId) ?? 0) + Math.floor(score));
+      }
     }
 
     const newlyCompletedIds: number[] = [];
@@ -627,8 +641,10 @@ async function startServer() {
       const id = Number(room.id);
       const total = totalByRoom.get(id) ?? Number(room.piece_count ?? 0);
       const locked = lockedByRoom.get(id) ?? 0;
+      const scored = scoreByRoom.get(id) ?? 0;
+      const snapped = Math.min(total > 0 ? total : Number(room.piece_count ?? 0), Math.max(locked, scored));
       room.totalPieces = total > 0 ? total : Number(room.piece_count ?? 0);
-      room.snappedCount = locked;
+      room.snappedCount = snapped;
       room.currentPlayers = roomStates.get(id)?.users.size ?? 0;
       if (room.totalPieces > 0 && room.totalPieces === room.snappedCount && room.status === "active") {
         newlyCompletedIds.push(id);
@@ -680,6 +696,14 @@ async function startServer() {
   }>();
   const roomPieceLocks = new Map<number, Map<number, { socketId: string; userId: string }>>();
   const roomScoreCache = new Map<number, Map<string, number>>();
+  const PIECE_DB_FLUSH_MS = 1200;
+  const roomPieceStatePending = new Map<
+    number,
+    Map<number, { piece_index: number; x: number; y: number; is_locked: boolean }>
+  >();
+  const roomSolvedPieceIds = new Map<number, Set<number>>();
+  const roomPieceStateFlushTimer = new Map<number, ReturnType<typeof setTimeout>>();
+  const roomPieceStateFlushing = new Set<number>();
   const socketOwnedPieceIds = new Map<string, Map<number, Set<number>>>();
   const socketUserId = new Map<string, string>();
   const socketUserPlaySessions = new Map<string, { userId: number; startedAt: number; roomId: number }>();
@@ -731,6 +755,73 @@ async function startServer() {
       flushingUserPlaySeconds = false;
     }
   };
+  const scheduleRoomPieceStateFlush = (roomId: number) => {
+    if (roomPieceStateFlushTimer.has(roomId)) return;
+    const timer = setTimeout(() => {
+      roomPieceStateFlushTimer.delete(roomId);
+      void flushRoomPieceState(roomId);
+    }, PIECE_DB_FLUSH_MS);
+    roomPieceStateFlushTimer.set(roomId, timer);
+  };
+  const flushRoomPieceState = async (roomId: number) => {
+    if (roomPieceStateFlushing.has(roomId)) return;
+    const pending = roomPieceStatePending.get(roomId);
+    if (!pending || pending.size === 0) return;
+    const scheduled = roomPieceStateFlushTimer.get(roomId);
+    if (scheduled) {
+      clearTimeout(scheduled);
+      roomPieceStateFlushTimer.delete(roomId);
+    }
+    roomPieceStateFlushing.add(roomId);
+    const entries = [...pending.values()];
+    pending.clear();
+    try {
+      const payload = entries.map((u) => ({
+        room_id: roomId,
+        piece_index: u.piece_index,
+        x: u.x,
+        y: u.y,
+        is_locked: u.is_locked,
+      }));
+      const { error } = await supabase
+        .from("pixi_pieces")
+        .upsert(payload, { onConflict: "room_id,piece_index" });
+      if (error) {
+        console.warn("[piece-state/upsert]", { roomId, message: error.message });
+        for (const u of entries) pending.set(u.piece_index, u);
+      }
+    } catch (error) {
+      console.warn("[piece-state/upsert-exception]", error);
+      for (const u of entries) pending.set(u.piece_index, u);
+    } finally {
+      roomPieceStateFlushing.delete(roomId);
+      if (pending.size === 0) {
+        roomPieceStatePending.delete(roomId);
+        return;
+      }
+      scheduleRoomPieceStateFlush(roomId);
+    }
+  };
+  const enqueueRoomPieceState = (
+    roomId: number,
+    updates: { pieceId: number; x: number; y: number; isLocked?: boolean }[]
+  ) => {
+    if (!roomPieceStatePending.has(roomId)) roomPieceStatePending.set(roomId, new Map());
+    const pending = roomPieceStatePending.get(roomId)!;
+    if (!roomSolvedPieceIds.has(roomId)) roomSolvedPieceIds.set(roomId, new Set());
+    const solved = roomSolvedPieceIds.get(roomId)!;
+    for (const u of updates) {
+      if (u.isLocked === true) solved.add(u.pieceId);
+      pending.set(u.pieceId, {
+        piece_index: u.pieceId,
+        x: u.x,
+        y: u.y,
+        // 한번 잠긴 조각은 다시 false로 내려가지 않게 단조 증가(monotonic) 처리
+        is_locked: solved.has(u.pieceId),
+      });
+    }
+    scheduleRoomPieceStateFlush(roomId);
+  };
   const endSocketPlaySession = (socketId: string) => {
     const session = socketUserPlaySessions.get(socketId);
     if (!session) return;
@@ -741,10 +832,13 @@ async function startServer() {
   io.on("connection", (socket) => {
     let currentRoomId: number | null = null;
     const MOVE_FLUSH_MS = 33;
-    const CURSOR_FLUSH_MS = 66;
+    const CURSOR_FLUSH_MS = 50;
     let moveFlushTimer: ReturnType<typeof setTimeout> | null = null;
     let cursorFlushTimer: ReturnType<typeof setTimeout> | null = null;
-    const pendingMoveByPiece = new Map<number, { pieceId: number; x: number; y: number }>();
+    const pendingMoveByPiece = new Map<
+      number,
+      { pieceId: number; x: number; y: number; isLocked?: boolean }
+    >();
     let pendingCursor: { username: string; x: number; y: number } | null = null;
     const flushPendingMoves = () => {
       moveFlushTimer = null;
@@ -892,6 +986,7 @@ async function startServer() {
         cursorFlushTimer = null;
       }
       if (currentRoomId) {
+        void flushRoomPieceState(currentRoomId);
         endSocketPlaySession(socket.id);
         releaseOwnedLocks(currentRoomId, socketUserId.get(socket.id) ?? "guest");
         socket.leave(currentRoomId.toString());
@@ -1022,6 +1117,7 @@ async function startServer() {
           pieceId: Math.floor(Number(u.pieceId)),
           x: Number(u.x),
           y: Number(u.y),
+          isLocked: u.isLocked === true,
         }))
         .filter(
           (u) =>
@@ -1032,6 +1128,7 @@ async function startServer() {
         );
       if (updates.length === 0) return;
       for (const u of updates) pendingMoveByPiece.set(u.pieceId, u);
+      enqueueRoomPieceState(roomId, updates);
       scheduleMoveFlush();
     });
 
@@ -1102,6 +1199,7 @@ async function startServer() {
       if (cursorFlushTimer != null) clearTimeout(cursorFlushTimer);
       endSocketPlaySession(socket.id);
       if (currentRoomId && roomStates.has(currentRoomId)) {
+        void flushRoomPieceState(currentRoomId);
         releaseOwnedLocks(currentRoomId, socketUserId.get(socket.id) ?? "guest");
         const room = roomStates.get(currentRoomId)!;
         room.users.delete(socket.id);
