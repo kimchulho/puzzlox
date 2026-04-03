@@ -410,6 +410,23 @@ export default function PuzzleBoard({
   };
 
   useEffect(() => {
+    const readLocalPuzzleUsername = (): string => {
+      try {
+        const raw = localStorage.getItem("puzzle_user");
+        if (raw) {
+          const o = JSON.parse(raw) as { username?: string };
+          if (o?.username != null && String(o.username) !== "") return String(o.username);
+        }
+      } catch {
+        /* noop */
+      }
+      const g = localStorage.getItem("puzzle_guest_name");
+      if (g != null && g !== "") return String(g);
+      return "guest";
+    };
+    /** playerLeft 수신 후 presence 유령이 남아 있어도 순위표에서 접속 해제로 표시 */
+    const offlineAfterByeRef = { current: new Set<string>() };
+
     let isMounted = true;
     /** initPixi 안에서 할당: 방 나가기 시 스티키/드래그 중 lock 브로드캐스트 해제 */
     let releaseOwnedPieceLocks: (() => void) | null = null;
@@ -4227,6 +4244,102 @@ export default function PuzzleBoard({
           }
         };
 
+        const applyPresenceSync = () => {
+          const state = channel.presenceState();
+          const stillInPresence = (uname: string): boolean => {
+            for (const key in state) {
+              const arr = state[key];
+              for (let i = 0; i < arr.length; i++) {
+                const p = arr[i] as { user?: unknown };
+                if (p?.user != null && String(p.user) === uname) return true;
+              }
+            }
+            return false;
+          };
+          for (const u of [...offlineAfterByeRef.current]) {
+            if (!stillInPresence(u)) offlineAfterByeRef.current.delete(u);
+          }
+
+          const users = new Set<string>();
+          const fromPresence = new Map<string, Set<number>>();
+          const me = getLocalUsername();
+
+          for (const key in state) {
+            state[key].forEach((p: any) => {
+              if (!p?.user || isBotLikeUser(p.user)) return;
+              const u = String(p.user);
+              users.add(u);
+              const raw = p.lockedPieceIds;
+              const ids = Array.isArray(raw) ? raw : [];
+              if (!fromPresence.has(u)) fromPresence.set(u, new Set());
+              const bucket = fromPresence.get(u)!;
+              ids.forEach((id: unknown) => {
+                if (typeof id === "number" && Number.isFinite(id)) bucket.add(id);
+              });
+            });
+          }
+
+          for (const u of offlineAfterByeRef.current) {
+            users.delete(u);
+          }
+
+          const joinedOthersResolved =
+            presenceInitialSyncDone
+              ? [...users].filter((u) => u !== me && !prevPresenceUsers.has(u))
+              : [];
+
+          setPlayerCount(users.size);
+          setActiveUsers(users);
+
+          for (const uid of [...remoteLockedPieces.keys()]) {
+            if (uid === "bot") continue;
+            if (!users.has(uid)) {
+              releaseVisualLocksForDepartedUser(uid);
+            }
+          }
+          /**
+           * 선점 상태: lock/unlock은 브로드캐스트가 즉시 반영되고, presence의 lockedPieceIds는
+           * track 전파가 늦으면 이전 목록을 실어 올 수 있음. 매 sync마다 presence로 덮어쓰면
+           * 상대가 이미 해제한 조각이 다시 잠긴 것처럼 보임.
+           * - 나(me): 항상 localPresenceLockIds
+           * - 첫 sync·새로 들어온 유저: presence로 시드
+           * - 그 외 기존 원격: 이미 맵에 있으면 브로드캐스트만으로 유지( presence로 갱신 안 함 )
+           */
+          users.forEach((u) => {
+            const fromP = new Set(fromPresence.get(u) ?? []);
+            if (u === me) {
+              remoteLockedPieces.set(u, new Set(localPresenceLockIds));
+              return;
+            }
+            if (!presenceInitialSyncDone) {
+              remoteLockedPieces.set(u, new Set(fromP));
+              return;
+            }
+            if (!prevPresenceUsers.has(u)) {
+              remoteLockedPieces.set(u, new Set(fromP));
+              return;
+            }
+            if (!remoteLockedPieces.has(u)) {
+              remoteLockedPieces.set(u, new Set(fromP));
+            }
+          });
+          refreshRemoteLockVisuals();
+
+          if (joinedOthersResolved.length > 0 && localPresenceLockIds.size > 0) {
+            sendLockBatch(Array.from(localPresenceLockIds));
+          }
+
+          prevPresenceUsers = new Set(users);
+          presenceInitialSyncDone = true;
+
+          cursors.forEach((cursorData, username) => {
+            if (!users.has(username) && username !== "bot") {
+              cursorData.container.destroy();
+              cursors.delete(username);
+            }
+          });
+        };
+
         channel
           .on('broadcast', { event: 'moveBatch' }, ({ payload }) => {
             payload.updates.forEach((u: any) => {
@@ -4329,61 +4442,19 @@ export default function PuzzleBoard({
               cursorData.targetY = y;
             }
           })
-          .on('presence', { event: 'sync' }, () => {
-            const state = channel.presenceState();
-            const users = new Set<string>();
-            const fromPresence = new Map<string, Set<number>>();
-            const me = getLocalUsername();
-
-            for (const key in state) {
-              state[key].forEach((p: any) => {
-                if (!p?.user || isBotLikeUser(p.user)) return;
-                const u = String(p.user);
-                users.add(u);
-                const raw = p.lockedPieceIds;
-                const ids = Array.isArray(raw) ? raw : [];
-                if (!fromPresence.has(u)) fromPresence.set(u, new Set());
-                const bucket = fromPresence.get(u)!;
-                ids.forEach((id: unknown) => {
-                  if (typeof id === 'number' && Number.isFinite(id)) bucket.add(id);
-                });
-              });
-            }
-
-            const joinedOthersResolved =
-              presenceInitialSyncDone
-                ? [...users].filter((u) => u !== me && !prevPresenceUsers.has(u))
-                : [];
-
-            setPlayerCount(users.size);
-            setActiveUsers(users);
-
-            for (const uid of [...remoteLockedPieces.keys()]) {
-              if (uid === 'bot') continue;
-              if (!users.has(uid)) {
-                releaseVisualLocksForDepartedUser(uid);
-              }
-            }
-            users.forEach((u) => {
-              remoteLockedPieces.set(u, new Set(fromPresence.get(u) ?? []));
-            });
-            refreshRemoteLockVisuals();
-
-            if (joinedOthersResolved.length > 0 && localPresenceLockIds.size > 0) {
-              sendLockBatch(Array.from(localPresenceLockIds));
-            }
-
-            prevPresenceUsers = new Set(users);
-            presenceInitialSyncDone = true;
-
-            // Remove cursors for users who left
-            cursors.forEach((cursorData, username) => {
-              if (!users.has(username) && username !== "bot") {
-                cursorData.container.destroy();
-                cursors.delete(username);
-              }
-            });
+          .on("broadcast", { event: "playerLeft" }, ({ payload }) => {
+            const un =
+              payload && typeof (payload as { username?: unknown }).username !== "undefined"
+                ? String((payload as { username: unknown }).username).trim()
+                : "";
+            if (!un || un === getLocalUsername()) return;
+            if (un === "guest") return;
+            offlineAfterByeRef.current.add(un);
+            applyPresenceSync();
           })
+          .on("presence", { event: "sync" }, applyPresenceSync)
+          .on("presence", { event: "join" }, applyPresenceSync)
+          .on("presence", { event: "leave" }, applyPresenceSync)
           .subscribe(async (status) => {
             if (status === 'SUBSCRIBED') {
               prevPresenceUsers = new Set();
@@ -4447,9 +4518,6 @@ export default function PuzzleBoard({
 
     return () => {
       isMounted = false;
-      realtimeBroadcastReady = false;
-      realtimeBroadcastQueue.length = 0;
-      enqueueRealtimeBroadcast = () => {};
       if (deferredBevelRafId != null) {
         cancelAnimationFrame(deferredBevelRafId);
         deferredBevelRafId = null;
@@ -4468,11 +4536,18 @@ export default function PuzzleBoard({
       objectUrlRef.current = null;
       if (channelRef.current) {
         releaseOwnedPieceLocks?.();
-        // Presence ghost를 줄이기 위해 untrack 후 unsubscribe
-        channelRef.current.untrack?.();
-        channelRef.current.unsubscribe();
+        const ch = channelRef.current;
+        const bye = readLocalPuzzleUsername();
+        if (bye !== "guest") {
+          void ch.send({ type: "broadcast", event: "playerLeft", payload: { username: bye } });
+        }
+        ch.untrack?.();
+        ch.unsubscribe();
         channelRef.current = null;
       }
+      realtimeBroadcastReady = false;
+      realtimeBroadcastQueue.length = 0;
+      enqueueRealtimeBroadcast = () => {};
       const runHeavyTeardown = () => {
         try {
           try {
