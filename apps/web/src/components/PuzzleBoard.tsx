@@ -224,6 +224,27 @@ export default function PuzzleBoard({
   const activeUsersRef = useRef<Set<string>>(new Set());
   const isTossMode = Boolean(hostWebViewPadding);
   useEffect(() => {
+    if (isTossMode) return;
+    if (typeof window === "undefined") return;
+    if (!window.matchMedia("(orientation: portrait)").matches) return;
+    let t1: ReturnType<typeof setTimeout> | null = null;
+    let t2: ReturnType<typeof setTimeout> | null = null;
+    let t3: ReturnType<typeof setTimeout> | null = null;
+    const nudgeViewport = () => {
+      window.scrollTo({ top: 1, left: 0, behavior: "auto" });
+      t1 = setTimeout(() => window.scrollTo({ top: 0, left: 0, behavior: "auto" }), 40);
+      t2 = setTimeout(() => window.scrollTo({ top: 1, left: 0, behavior: "auto" }), 180);
+      t3 = setTimeout(() => window.scrollTo({ top: 0, left: 0, behavior: "auto" }), 260);
+    };
+    nudgeViewport();
+    return () => {
+      if (t1) clearTimeout(t1);
+      if (t2) clearTimeout(t2);
+      if (t3) clearTimeout(t3);
+    };
+  }, [isTossMode, roomId]);
+
+  useEffect(() => {
     activeUsersRef.current = activeUsers;
   }, [activeUsers]);
 
