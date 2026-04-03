@@ -1198,22 +1198,20 @@ export default function PuzzleBoard({
               cursorData.container.x += dx * holdFollow;
               cursorData.container.y += dy * holdFollow;
             } else if (dist > 0.1) {
-              const ageMs = Date.now() - cursorData.lastUpdatedAt;
-              const predictMs = Math.min(Math.max(ageMs, 0), 120);
-              const predictedX = cursorData.targetX + cursorData.velX * (predictMs / 1000);
-              const predictedY = cursorData.targetY + cursorData.velY * (predictMs / 1000);
-              const pdx = predictedX - cursorData.container.x;
-              const pdy = predictedY - cursorData.container.y;
-              const pdist = Math.hypot(pdx, pdy);
-              const baseFollow = 1 - Math.exp(-16 * dtSec);
-              const boostedFollow = pdist > 120 ? 0.7 : pdist > 48 ? 0.5 : baseFollow;
-              cursorData.container.x += pdx * boostedFollow;
-              cursorData.container.y += pdy * boostedFollow;
-              if (Math.abs(predictedX - cursorData.container.x) < 0.4) {
-                cursorData.container.x = predictedX;
+              // Free cursor: prioritize stability over aggressive prediction to avoid micro jitter.
+              const baseFollow = 1 - Math.exp(-20 * dtSec);
+              const boostedFollow = dist > 160 ? 0.62 : dist > 72 ? 0.46 : baseFollow;
+              const maxStep = 44 * (app.ticker.deltaMS / 16.67);
+              const nextStep = Math.min(dist * boostedFollow, maxStep);
+              if (dist > 0.0001) {
+                cursorData.container.x += (dx / dist) * nextStep;
+                cursorData.container.y += (dy / dist) * nextStep;
               }
-              if (Math.abs(predictedY - cursorData.container.y) < 0.4) {
-                cursorData.container.y = predictedY;
+              if (Math.abs(cursorData.targetX - cursorData.container.x) < 0.9) {
+                cursorData.container.x = cursorData.targetX;
+              }
+              if (Math.abs(cursorData.targetY - cursorData.container.y) < 0.9) {
+                cursorData.container.y = cursorData.targetY;
               }
             }
           });
@@ -1794,10 +1792,16 @@ export default function PuzzleBoard({
           }
         }, 80);
 
+        const lastSentCursorByUser = new Map<string, { x: number; y: number }>();
         const sendBotCursorMove = throttle((username: string, x: number, y: number) => {
           const socket = socketRef.current;
           if (socket && socket.connected) {
-            socket.emit(ROOM_EVENTS.CursorMove, { roomId, username, x, y });
+            const qx = Math.round(x * 2) / 2;
+            const qy = Math.round(y * 2) / 2;
+            const prev = lastSentCursorByUser.get(username);
+            if (prev && Math.hypot(prev.x - qx, prev.y - qy) < 1.6) return;
+            lastSentCursorByUser.set(username, { x: qx, y: qy });
+            socket.emit(ROOM_EVENTS.CursorMove, { roomId, username, x: qx, y: qy });
           }
         }, 50);
 
@@ -4834,13 +4838,22 @@ export default function PuzzleBoard({
             } else {
               const now = Date.now();
               const dt = Math.max((now - cursorData.lastUpdatedAt) / 1000, 0.016);
-              const instantVelX = (x - cursorData.targetX) / dt;
-              const instantVelY = (y - cursorData.targetY) / dt;
-              const smooth = 0.35;
+              const deltaX = x - cursorData.targetX;
+              const deltaY = y - cursorData.targetY;
+              const jitterCutoff = 1.4;
+              if (Math.abs(deltaX) < jitterCutoff && Math.abs(deltaY) < jitterCutoff) {
+                return;
+              }
+              const effectiveDeltaX = Math.abs(deltaX) < jitterCutoff ? 0 : deltaX;
+              const effectiveDeltaY = Math.abs(deltaY) < jitterCutoff ? 0 : deltaY;
+              const instantVelX = Math.max(-1400, Math.min(1400, effectiveDeltaX / dt));
+              const instantVelY = Math.max(-1400, Math.min(1400, effectiveDeltaY / dt));
+              const smooth = 0.22;
               cursorData.velX = cursorData.velX * (1 - smooth) + instantVelX * smooth;
               cursorData.velY = cursorData.velY * (1 - smooth) + instantVelY * smooth;
-              cursorData.targetX = x;
-              cursorData.targetY = y;
+              const targetAlpha = Math.hypot(deltaX, deltaY) > 80 ? 1 : 0.7;
+              cursorData.targetX += effectiveDeltaX * targetAlpha;
+              cursorData.targetY += effectiveDeltaY * targetAlpha;
               cursorData.lastUpdatedAt = now;
             }
           };
