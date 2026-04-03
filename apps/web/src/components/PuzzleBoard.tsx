@@ -11,7 +11,13 @@ import { throttle } from 'lodash';
 import { Clock, Users, Trophy, ChevronLeft, X, Palette, LayoutGrid, Zap, Heart, Image as ImageIcon, Bot, Maximize, Minimize, RotateCcw, Share2, Check, Plus, Minus } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 import confetti from 'canvas-confetti';
-import { ROOM_EVENTS, SyncTimePayload } from "@contracts/realtime";
+import {
+  LockAppliedPayload,
+  LockDeniedPayload,
+  LockReleasedPayload,
+  ROOM_EVENTS,
+  SyncTimePayload,
+} from "@contracts/realtime";
 import { REALTIME_CHANNEL_STATES } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabaseClient';
 import { encodeRoomId } from '../lib/roomCode';
@@ -131,6 +137,9 @@ export default function PuzzleBoard({
   const pieces = useRef<Map<number, PIXI.Container>>(new Map());
   const channelRef = useRef<any>(null);
   const socketRef = useRef<Socket | null>(null);
+  const socketLockAppliedRef = useRef<((payload: LockAppliedPayload) => void) | null>(null);
+  const socketLockReleasedRef = useRef<((payload: LockReleasedPayload) => void) | null>(null);
+  const socketLockDeniedRef = useRef<((payload: LockDeniedPayload) => void) | null>(null);
   const mainTextureRef = useRef<PIXI.Texture | null>(null);
   const objectUrlRef = useRef<string | null>(null);
   const gatherBordersRef = useRef<(() => void) | null>(null);
@@ -402,6 +411,15 @@ export default function PuzzleBoard({
       isRunningRef.current = data.isRunning;
       localStartTimeRef.current = Date.now();
       setPlayTime(Math.floor(data.accumulatedTime));
+    });
+    socket.on(ROOM_EVENTS.LockApplied, (payload: LockAppliedPayload) => {
+      socketLockAppliedRef.current?.(payload);
+    });
+    socket.on(ROOM_EVENTS.LockReleased, (payload: LockReleasedPayload) => {
+      socketLockReleasedRef.current?.(payload);
+    });
+    socket.on(ROOM_EVENTS.LockDenied, (payload: LockDeniedPayload) => {
+      socketLockDeniedRef.current?.(payload);
     });
 
     return () => {
@@ -1686,39 +1704,31 @@ export default function PuzzleBoard({
         }, 100);
 
         const sendLockBatch = (pieceIds: number[], userId?: string) => {
-          const ch = channelRef.current;
-          if (!ch) return;
+          if (pieceIds.length === 0) return;
           const currentUsername = user ? user.username : localStorage.getItem('puzzle_guest_name');
           const me = currentUsername != null && currentUsername !== '' ? String(currentUsername) : 'guest';
           const uid = userId != null ? String(userId) : me;
-          enqueueRealtimeBroadcast('lock', { pieceIds, userId: uid });
-          if (uid === me) {
-            pieceIds.forEach((id) => localPresenceLockIds.add(id));
-            if (realtimeBroadcastReady) {
-              void ch.track({
-                user: me,
-                lockedPieceIds: Array.from(localPresenceLockIds),
-              });
-            }
+          const socket = socketRef.current;
+          if (socket && socket.connected) {
+            socket.emit(ROOM_EVENTS.LockRequest, { roomId, userId: uid, pieceIds });
+            return;
           }
+          // Fallback for environments where socket is unavailable.
+          enqueueRealtimeBroadcast('lock', { pieceIds, userId: uid });
         };
 
         const sendUnlockBatch = (pieceIds: number[], userId?: string) => {
-          const ch = channelRef.current;
-          if (!ch) return;
+          if (pieceIds.length === 0) return;
           const currentUsername = user ? user.username : localStorage.getItem('puzzle_guest_name');
           const me = currentUsername != null && currentUsername !== '' ? String(currentUsername) : 'guest';
           const uid = userId != null ? String(userId) : me;
-          enqueueRealtimeBroadcast('unlock', { pieceIds, userId: uid });
-          if (uid === me) {
-            pieceIds.forEach((id) => localPresenceLockIds.delete(id));
-            if (realtimeBroadcastReady) {
-              void ch.track({
-                user: me,
-                lockedPieceIds: Array.from(localPresenceLockIds),
-              });
-            }
+          const socket = socketRef.current;
+          if (socket && socket.connected) {
+            socket.emit(ROOM_EVENTS.UnlockRequest, { roomId, userId: uid, pieceIds });
+            return;
           }
+          // Fallback for environments where socket is unavailable.
+          enqueueRealtimeBroadcast('unlock', { pieceIds, userId: uid });
         };
 
         releaseOwnedPieceLocks = () => {
@@ -1844,6 +1854,100 @@ export default function PuzzleBoard({
             pieceContainer.alpha = 1;
             pieceContainer.eventMode = 'static';
           }
+        };
+
+        const forceReleaseLocalDeniedLocks = (pieceIds: number[]) => {
+          const denied = new Set(pieceIds);
+          if (denied.size === 0) return;
+          let changed = false;
+          if (selectedCluster && [...selectedCluster].some((id) => denied.has(id))) {
+            selectedCluster.forEach((id) => {
+              if (!denied.has(id)) return;
+              const p = pieces.current.get(id);
+              if (!p) return;
+              const lockIcon = p.getChildByLabel("lockIcon");
+              if (lockIcon) lockIcon.visible = false;
+            });
+            sendUnlockBatch([...selectedCluster].filter((id) => denied.has(id)));
+            selectedCluster = null;
+            changed = true;
+          }
+          if (isDragging && [...dragCluster].some((id) => denied.has(id))) {
+            dragCluster.forEach((id) => {
+              if (!denied.has(id)) return;
+              const p = pieces.current.get(id);
+              if (!p) return;
+              const lockIcon = p.getChildByLabel("lockIcon");
+              if (lockIcon) lockIcon.visible = false;
+            });
+            sendUnlockBatch([...dragCluster].filter((id) => denied.has(id)));
+            dragCluster = new Set([...dragCluster].filter((id) => !denied.has(id)));
+            isDragging = false;
+            isTouchDraggingPiece = false;
+            isDraggingSelected = false;
+            selectedMoved = false;
+            currentShiftY = 0;
+            changed = true;
+          }
+          pieceIds.forEach((id) => localPresenceLockIds.delete(id));
+          if (changed) refreshRemoteLockVisuals();
+        };
+
+        socketLockAppliedRef.current = (payload) => {
+          if (payload.roomId !== roomId || !Array.isArray(payload.pieceIds) || payload.pieceIds.length === 0) return;
+          const uid = String(payload.userId ?? "").trim();
+          if (!uid) return;
+          const me = getLocalUsername();
+          if (uid !== me) {
+            abortLocalInteractionForRemoteClaim(uid, payload.pieceIds);
+            if (!remoteLockedPieces.has(uid)) remoteLockedPieces.set(uid, new Set());
+            const userLocked = remoteLockedPieces.get(uid)!;
+            payload.pieceIds.forEach((id) => userLocked.add(id));
+          } else {
+            if (!remoteLockedPieces.has(uid)) remoteLockedPieces.set(uid, new Set());
+            const mine = remoteLockedPieces.get(uid)!;
+            payload.pieceIds.forEach((id) => {
+              mine.add(id);
+              localPresenceLockIds.add(id);
+            });
+            const ch = channelRef.current;
+            if (ch && realtimeBroadcastReady) {
+              void ch.track({
+                user: me,
+                lockedPieceIds: Array.from(localPresenceLockIds),
+              });
+            }
+          }
+          refreshRemoteLockVisuals();
+        };
+
+        socketLockReleasedRef.current = (payload) => {
+          if (payload.roomId !== roomId || !Array.isArray(payload.pieceIds) || payload.pieceIds.length === 0) return;
+          const uid = String(payload.userId ?? "").trim();
+          if (!uid) return;
+          const me = getLocalUsername();
+          const set = remoteLockedPieces.get(uid);
+          if (set) {
+            payload.pieceIds.forEach((id) => set.delete(id));
+          }
+          if (uid === me) {
+            payload.pieceIds.forEach((id) => localPresenceLockIds.delete(id));
+            const ch = channelRef.current;
+            if (ch && realtimeBroadcastReady) {
+              void ch.track({
+                user: me,
+                lockedPieceIds: Array.from(localPresenceLockIds),
+              });
+            }
+          }
+          refreshRemoteLockVisuals();
+        };
+
+        socketLockDeniedRef.current = (payload) => {
+          if (payload.roomId !== roomId || !Array.isArray(payload.pieceIds) || payload.pieceIds.length === 0) return;
+          const me = getLocalUsername();
+          if (String(payload.userId ?? "").trim() !== me) return;
+          forceReleaseLocalDeniedLocks(payload.pieceIds);
         };
 
         const savePiecesState = async (updates: {piece_index: number, x: number, y: number, is_locked: boolean}[]) => {
@@ -4255,7 +4359,10 @@ export default function PuzzleBoard({
         let recyclingRealtime = false;
         let lastRealtimeInboundAt = Date.now();
         /** 소켓은 연결됐는데 채널만 `closed`에 멈춘 경우 → 즉시 recycle는 루프 유발, 연속 구간만 재구독 */
-        let closedWhileConnectedStreak = 0;
+        let channelClosedSinceAt: number | null = null;
+        let lastSubscribedAt = 0;
+        let lastClosedWarnAt = 0;
+        let lastManualConnectAt = 0;
         const rtWarn = (msg: string, detail?: unknown) => {
           console.warn(`[PuzzleRealtime room=${roomId}]`, msg, detail ?? "");
         };
@@ -4316,7 +4423,7 @@ export default function PuzzleBoard({
         }
 
         function attachRoomRealtimeChannel() {
-          closedWhileConnectedStreak = 0;
+          channelClosedSinceAt = null;
           if (realtimeHealthTimer != null) {
             clearInterval(realtimeHealthTimer);
             realtimeHealthTimer = null;
@@ -4539,6 +4646,9 @@ export default function PuzzleBoard({
               }
               const userLocked = remoteLockedPieces.get(uid)!;
               payload.pieceIds.forEach((id: number) => userLocked.add(id));
+              if (uid === getLocalUsername()) {
+                payload.pieceIds.forEach((id: number) => localPresenceLockIds.add(id));
+              }
             }
             refreshRemoteLockVisuals();
           })
@@ -4551,6 +4661,9 @@ export default function PuzzleBoard({
               if (remoteLockedPieces.has(uid)) {
                 const userLocked = remoteLockedPieces.get(uid)!;
                 payload.pieceIds.forEach((id: number) => userLocked.delete(id));
+              }
+              if (uid === getLocalUsername()) {
+                payload.pieceIds.forEach((id: number) => localPresenceLockIds.delete(id));
               }
             }
             refreshRemoteLockVisuals();
@@ -4637,6 +4750,8 @@ export default function PuzzleBoard({
             if (status === 'SUBSCRIBED') {
               if (channelRef.current !== channel) return;
               rtWarn("SUBSCRIBED");
+              lastSubscribedAt = Date.now();
+              channelClosedSinceAt = null;
               prevPresenceUsers = new Set();
               presenceInitialSyncDone = false;
               realtimeBroadcastReady = true;
@@ -4685,36 +4800,50 @@ export default function PuzzleBoard({
             try {
               if (!supabase.realtime.isConnected()) {
                 realtimeBroadcastReady = false;
-                rtWarn("socket disconnected → connect()");
-                void supabase.realtime.connect();
+                const now = Date.now();
+                if (now - lastManualConnectAt > 10_000) {
+                  lastManualConnectAt = now;
+                  rtWarn("socket disconnected → connect()");
+                  void supabase.realtime.connect();
+                }
                 return;
               }
               const st = ch.state;
               // `closed`는 removeChannel 직후·내부 재연결 등에서 잠깐 뜨는 경우가 많아 재구독 루프를 유발함 → errored만 즉시 recycle
               if (st === REALTIME_CHANNEL_STATES.errored) {
-                closedWhileConnectedStreak = 0;
+                channelClosedSinceAt = null;
                 rtWarn("channel errored → recycle", st);
                 void recycleRealtimeChannel(`health_${st}`);
                 return;
               }
               if (st === REALTIME_CHANNEL_STATES.closed) {
-                closedWhileConnectedStreak++;
-                if (
-                  closedWhileConnectedStreak >= 3 &&
-                  Date.now() - lastRealtimeInboundAt > 8000
-                ) {
-                  closedWhileConnectedStreak = 0;
+                const now = Date.now();
+                if (channelClosedSinceAt == null) {
+                  channelClosedSinceAt = now;
+                }
+                const closedForMs = now - channelClosedSinceAt;
+                const sinceInboundMs = now - lastRealtimeInboundAt;
+                const sinceSubscribedMs = lastSubscribedAt > 0 ? now - lastSubscribedAt : Number.MAX_SAFE_INTEGER;
+                if (now - lastClosedWarnAt > 15_000) {
+                  lastClosedWarnAt = now;
+                  rtWarn("channel closed (waiting auto-recovery)", {
+                    closedForMs,
+                    sinceInboundMs,
+                    sinceSubscribedMs,
+                  });
+                }
+                if (closedForMs >= 45_000 && sinceInboundMs >= 30_000 && sinceSubscribedMs >= 30_000) {
+                  channelClosedSinceAt = null;
                   rtWarn("channel stuck closed while socket connected → recycle", {
                     state: st,
-                    msSinceInbound: Date.now() - lastRealtimeInboundAt,
+                    closedForMs,
+                    msSinceInbound: sinceInboundMs,
                   });
                   void recycleRealtimeChannel("health_closed_stuck");
-                } else if (closedWhileConnectedStreak === 1) {
-                  rtWarn("channel closed (recycle if still closed ~12s)", st);
                 }
                 return;
               }
-              closedWhileConnectedStreak = 0;
+              channelClosedSinceAt = null;
               if (st === REALTIME_CHANNEL_STATES.joined) {
                 if (!realtimeBroadcastReady) {
                   rtWarn("joined but broadcast gate off → heal");
@@ -4786,6 +4915,9 @@ export default function PuzzleBoard({
 
     return () => {
       isMounted = false;
+      socketLockAppliedRef.current = null;
+      socketLockReleasedRef.current = null;
+      socketLockDeniedRef.current = null;
       clearInterval(peerStaleUiTimer);
       peerLastSeenMsRef.current.clear();
       if (realtimeHealthTimer != null) {

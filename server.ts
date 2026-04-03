@@ -10,7 +10,15 @@ import dotenv from "dotenv";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import type { Request, Response, NextFunction } from "express";
-import { ROOM_EVENTS, SyncTimePayload } from "./packages/contracts/realtime";
+import {
+  ROOM_EVENTS,
+  LockAppliedPayload,
+  LockDeniedPayload,
+  LockRequestPayload,
+  LockReleasedPayload,
+  SyncTimePayload,
+  UnlockRequestPayload,
+} from "./packages/contracts/realtime";
 import { HealthResponse } from "./packages/contracts/api";
 import { AuthSuccessResponse, TossLoginRequest } from "./packages/contracts/auth";
 import { tossPartnerRequest } from "./tossPartnerClient";
@@ -537,6 +545,9 @@ async function startServer() {
     users: Set<string>; 
     isCompleted: boolean 
   }>();
+  const roomPieceLocks = new Map<number, Map<number, { socketId: string; userId: string }>>();
+  const socketOwnedPieceIds = new Map<string, Map<number, Set<number>>>();
+  const socketUserId = new Map<string, string>();
 
   // 현재까지의 정확한 플레이 타임 계산 (초 단위)
   const getCurrentPlayTime = (room: any) => {
@@ -549,9 +560,48 @@ async function startServer() {
 
   io.on("connection", (socket) => {
     let currentRoomId: number | null = null;
+    const rememberOwned = (roomId: number, pieceId: number) => {
+      if (!socketOwnedPieceIds.has(socket.id)) socketOwnedPieceIds.set(socket.id, new Map());
+      const byRoom = socketOwnedPieceIds.get(socket.id)!;
+      if (!byRoom.has(roomId)) byRoom.set(roomId, new Set());
+      byRoom.get(roomId)!.add(pieceId);
+    };
+    const forgetOwned = (roomId: number, pieceId: number) => {
+      const byRoom = socketOwnedPieceIds.get(socket.id);
+      if (!byRoom) return;
+      const ids = byRoom.get(roomId);
+      if (!ids) return;
+      ids.delete(pieceId);
+      if (ids.size === 0) byRoom.delete(roomId);
+      if (byRoom.size === 0) socketOwnedPieceIds.delete(socket.id);
+    };
+    const releaseOwnedLocks = (roomId: number, userIdFallback = "guest") => {
+      const locks = roomPieceLocks.get(roomId);
+      const byRoom = socketOwnedPieceIds.get(socket.id);
+      const owned = byRoom?.get(roomId);
+      if (!locks || !owned || owned.size === 0) return;
+      const released: number[] = [];
+      let userId = userIdFallback;
+      for (const pieceId of [...owned]) {
+        const owner = locks.get(pieceId);
+        if (owner?.socketId === socket.id) {
+          userId = owner.userId || userId;
+          locks.delete(pieceId);
+          released.push(pieceId);
+        }
+      }
+      byRoom?.delete(roomId);
+      if (byRoom && byRoom.size === 0) socketOwnedPieceIds.delete(socket.id);
+      if (locks.size === 0) roomPieceLocks.delete(roomId);
+      if (released.length > 0) {
+        const payload: LockReleasedPayload = { roomId, userId, pieceIds: released };
+        io.to(roomId.toString()).emit(ROOM_EVENTS.LockReleased, payload);
+      }
+    };
 
     socket.on(ROOM_EVENTS.JoinRoom, async (roomId: number) => {
       if (currentRoomId) {
+        releaseOwnedLocks(currentRoomId, socketUserId.get(socket.id) ?? "guest");
         socket.leave(currentRoomId.toString());
         const oldRoom = roomStates.get(currentRoomId);
         if (oldRoom) {
@@ -603,6 +653,63 @@ async function startServer() {
       socket.emit(ROOM_EVENTS.SyncTime, syncPayload);
     });
 
+    socket.on(ROOM_EVENTS.LockRequest, (raw: LockRequestPayload) => {
+      const roomId = Number(raw?.roomId);
+      if (!Number.isFinite(roomId) || roomId <= 0 || currentRoomId !== roomId) return;
+      const userId = String(raw?.userId ?? "").trim() || "guest";
+      socketUserId.set(socket.id, userId);
+      const input = Array.isArray(raw?.pieceIds) ? raw.pieceIds : [];
+      const req = [...new Set(input.filter((x) => Number.isFinite(x) && x >= 0).map((x) => Math.floor(x)))];
+      if (req.length === 0) return;
+      if (!roomPieceLocks.has(roomId)) roomPieceLocks.set(roomId, new Map());
+      const locks = roomPieceLocks.get(roomId)!;
+      const granted: number[] = [];
+      const denied: number[] = [];
+      for (const pieceId of req) {
+        const owner = locks.get(pieceId);
+        if (!owner || owner.socketId === socket.id) {
+          locks.set(pieceId, { socketId: socket.id, userId });
+          rememberOwned(roomId, pieceId);
+          granted.push(pieceId);
+        } else {
+          denied.push(pieceId);
+        }
+      }
+      if (granted.length > 0) {
+        const payload: LockAppliedPayload = { roomId, userId, pieceIds: granted };
+        io.to(roomId.toString()).emit(ROOM_EVENTS.LockApplied, payload);
+      }
+      if (denied.length > 0) {
+        const payload: LockDeniedPayload = { roomId, userId, pieceIds: denied };
+        socket.emit(ROOM_EVENTS.LockDenied, payload);
+      }
+    });
+
+    socket.on(ROOM_EVENTS.UnlockRequest, (raw: UnlockRequestPayload) => {
+      const roomId = Number(raw?.roomId);
+      if (!Number.isFinite(roomId) || roomId <= 0 || currentRoomId !== roomId) return;
+      const userId = String(raw?.userId ?? "").trim() || socketUserId.get(socket.id) || "guest";
+      const input = Array.isArray(raw?.pieceIds) ? raw.pieceIds : [];
+      const req = [...new Set(input.filter((x) => Number.isFinite(x) && x >= 0).map((x) => Math.floor(x)))];
+      if (req.length === 0) return;
+      const locks = roomPieceLocks.get(roomId);
+      if (!locks) return;
+      const released: number[] = [];
+      for (const pieceId of req) {
+        const owner = locks.get(pieceId);
+        if (owner?.socketId === socket.id) {
+          locks.delete(pieceId);
+          forgetOwned(roomId, pieceId);
+          released.push(pieceId);
+        }
+      }
+      if (locks.size === 0) roomPieceLocks.delete(roomId);
+      if (released.length > 0) {
+        const payload: LockReleasedPayload = { roomId, userId, pieceIds: released };
+        io.to(roomId.toString()).emit(ROOM_EVENTS.LockReleased, payload);
+      }
+    });
+
     socket.on(ROOM_EVENTS.PuzzleCompleted, async (roomId: number) => {
       const room = roomStates.get(roomId);
       if (room && !room.isCompleted) {
@@ -633,6 +740,7 @@ async function startServer() {
 
     socket.on("disconnect", () => {
       if (currentRoomId && roomStates.has(currentRoomId)) {
+        releaseOwnedLocks(currentRoomId, socketUserId.get(socket.id) ?? "guest");
         const room = roomStates.get(currentRoomId)!;
         room.users.delete(socket.id);
         
@@ -654,6 +762,8 @@ async function startServer() {
             });
         }
       }
+      socketOwnedPieceIds.delete(socket.id);
+      socketUserId.delete(socket.id);
     });
   });
 
