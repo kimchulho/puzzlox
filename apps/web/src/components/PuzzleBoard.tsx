@@ -36,6 +36,10 @@ const readStoredBool = (key: string, fallback: boolean) => {
 const isBotLikeUser = (name: unknown) =>
   typeof name === 'string' && /(bot|봇)/i.test(name.trim());
 
+/** 방 하트비트(10s) 기준, 1회 유실·지연 여유 포함해 “응답 없음” 판정 */
+const PEER_ACTIVITY_STALE_MS = 22_000;
+const ROOM_HEARTBEAT_INTERVAL_MS = 10_000;
+
 /** Pixi `RendererType.CANVAS` (pixi.js `rendering/renderers/types.d.ts`) */
 const PIXI_RENDERER_TYPE_CANVAS = 4;
 
@@ -207,6 +211,22 @@ export default function PuzzleBoard({
   useEffect(() => {
     activeUsersRef.current = activeUsers;
   }, [activeUsers]);
+
+  const peerLastSeenMsRef = useRef<Map<string, number>>(new Map());
+  const [peerWatchEpoch, setPeerWatchEpoch] = useState(0);
+
+  const isLeaderboardPeerLive = (scoreUsername: string) => {
+    void peerWatchEpoch;
+    const currentUsername = user?.username ?? localStorage.getItem("puzzle_guest_name");
+    const meStr =
+      currentUsername != null && String(currentUsername) !== ""
+        ? String(currentUsername)
+        : "guest";
+    if (scoreUsername === meStr) return true;
+    if (isBotLikeUser(scoreUsername)) return true;
+    const t = peerLastSeenMsRef.current.get(scoreUsername);
+    return t != null && Date.now() - t < PEER_ACTIVITY_STALE_MS;
+  };
 
   useEffect(() => {
     if (!hostLeaderboardToggleRef) return;
@@ -427,6 +447,8 @@ export default function PuzzleBoard({
     };
     /** playerLeft 수신 후 presence 유령이 남아 있어도 순위표에서 접속 해제로 표시 */
     const offlineAfterByeRef = { current: new Set<string>() };
+    /** presence에 처음 보인 유저만 1회 시드(이후 생존은 하트비트·브로드캐스트로만 갱신) */
+    const peerPresenceSeededRef = { current: new Set<string>() };
 
     let isMounted = true;
     /** initPixi 안에서 할당: 방 나가기 시 스티키/드래그 중 lock 브로드캐스트 해제 */
@@ -446,6 +468,7 @@ export default function PuzzleBoard({
     const realtimeBroadcastQueue: { event: string; payload: unknown }[] = [];
     let enqueueRealtimeBroadcast: (event: string, payload: unknown) => void = () => {};
     let realtimeHealthTimer: ReturnType<typeof setInterval> | null = null;
+    let realtimeHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
     // 1. Pixi Application 초기화
     const initPixi = async () => {
@@ -4231,11 +4254,31 @@ export default function PuzzleBoard({
         let lastChannelRecycleAt = 0;
         let recyclingRealtime = false;
         let lastRealtimeInboundAt = Date.now();
+        /** 소켓은 연결됐는데 채널만 `closed`에 멈춘 경우 → 즉시 recycle는 루프 유발, 연속 구간만 재구독 */
+        let closedWhileConnectedStreak = 0;
         const rtWarn = (msg: string, detail?: unknown) => {
           console.warn(`[PuzzleRealtime room=${roomId}]`, msg, detail ?? "");
         };
         const bumpInbound = () => {
           lastRealtimeInboundAt = Date.now();
+        };
+
+        let lastPeerUiBumpAt = 0;
+        const markPeerSeen = (uname: string) => {
+          const s = String(uname).trim();
+          if (s === "" || isBotLikeUser(s)) return;
+          peerLastSeenMsRef.current.set(s, Date.now());
+          const now = Date.now();
+          if (now - lastPeerUiBumpAt > 1500) {
+            lastPeerUiBumpAt = now;
+            setPeerWatchEpoch((n) => n + 1);
+          }
+        };
+        const clearPeerSeen = (uname: string) => {
+          const s = String(uname).trim();
+          if (s === "") return;
+          peerLastSeenMsRef.current.delete(s);
+          setPeerWatchEpoch((n) => n + 1);
         };
 
         async function recycleRealtimeChannel(reason: string) {
@@ -4249,6 +4292,10 @@ export default function PuzzleBoard({
             if (realtimeHealthTimer != null) {
               clearInterval(realtimeHealthTimer);
               realtimeHealthTimer = null;
+            }
+            if (realtimeHeartbeatTimer != null) {
+              clearInterval(realtimeHeartbeatTimer);
+              realtimeHeartbeatTimer = null;
             }
             const old = channelRef.current;
             channelRef.current = null;
@@ -4269,9 +4316,14 @@ export default function PuzzleBoard({
         }
 
         function attachRoomRealtimeChannel() {
+          closedWhileConnectedStreak = 0;
           if (realtimeHealthTimer != null) {
             clearInterval(realtimeHealthTimer);
             realtimeHealthTimer = null;
+          }
+          if (realtimeHeartbeatTimer != null) {
+            clearInterval(realtimeHeartbeatTimer);
+            realtimeHeartbeatTimer = null;
           }
           const channel = supabase.channel(`room_${roomId}`);
           channelRef.current = channel;
@@ -4284,6 +4336,13 @@ export default function PuzzleBoard({
           if (realtimeBroadcastReady) {
             void ch.send({ type: 'broadcast', event, payload });
           } else {
+            if (event === 'heartbeat' && realtimeBroadcastQueue.length > 0) {
+              const last = realtimeBroadcastQueue[realtimeBroadcastQueue.length - 1];
+              if (last.event === 'heartbeat') {
+                last.payload = payload;
+                return;
+              }
+            }
             if (event === 'moveBatch' && realtimeBroadcastQueue.length > 0) {
               const last = realtimeBroadcastQueue[realtimeBroadcastQueue.length - 1];
               if (last.event === 'moveBatch') {
@@ -4343,6 +4402,17 @@ export default function PuzzleBoard({
           for (const u of offlineAfterByeRef.current) {
             users.delete(u);
           }
+
+          for (const s of [...peerPresenceSeededRef.current]) {
+            if (!users.has(s)) peerPresenceSeededRef.current.delete(s);
+          }
+          users.forEach((u) => {
+            if (u === me || isBotLikeUser(u)) return;
+            if (!peerPresenceSeededRef.current.has(u)) {
+              peerPresenceSeededRef.current.add(u);
+              markPeerSeen(u);
+            }
+          });
 
           const joinedOthersResolved =
             presenceInitialSyncDone
@@ -4437,6 +4507,7 @@ export default function PuzzleBoard({
             const userId = payload.userId;
             if (userId) {
               const uid = String(userId);
+              if (uid !== getLocalUsername()) markPeerSeen(uid);
               abortLocalInteractionForRemoteClaim(uid, payload.pieceIds);
               if (!remoteLockedPieces.has(uid)) {
                 remoteLockedPieces.set(uid, new Set());
@@ -4451,6 +4522,7 @@ export default function PuzzleBoard({
             const userId = payload.userId;
             if (userId) {
               const uid = String(userId);
+              if (uid !== getLocalUsername()) markPeerSeen(uid);
               if (remoteLockedPieces.has(uid)) {
                 const userLocked = remoteLockedPieces.get(uid)!;
                 payload.pieceIds.forEach((id: number) => userLocked.delete(id));
@@ -4460,6 +4532,10 @@ export default function PuzzleBoard({
           })
           .on('broadcast', { event: 'scoreUpdate' }, ({ payload }) => {
             bumpInbound();
+            if (payload?.username != null) {
+              const su = String(payload.username);
+              if (su !== getLocalUsername()) markPeerSeen(su);
+            }
             setScores(prev => {
               const existing = prev.find(s => s.username === payload.username);
               if (existing) {
@@ -4474,6 +4550,7 @@ export default function PuzzleBoard({
             const { username, x, y } = payload;
             const currentUsername = user ? user.username : localStorage.getItem('puzzle_guest_name');
             if (username === currentUsername) return;
+            markPeerSeen(username);
 
             let cursorData = cursors.get(username);
             if (!cursorData) {
@@ -4508,6 +4585,13 @@ export default function PuzzleBoard({
               cursorData.targetY = y;
             }
           })
+          .on("broadcast", { event: "heartbeat" }, ({ payload }) => {
+            bumpInbound();
+            const p = payload as { username?: unknown };
+            const un = p?.username != null ? String(p.username).trim() : "";
+            if (!un || un === getLocalUsername()) return;
+            markPeerSeen(un);
+          })
           .on("broadcast", { event: "playerLeft" }, ({ payload }) => {
             bumpInbound();
             const un =
@@ -4517,6 +4601,8 @@ export default function PuzzleBoard({
             if (!un || un === getLocalUsername()) return;
             if (un === "guest") return;
             offlineAfterByeRef.current.add(un);
+            peerPresenceSeededRef.current.delete(un);
+            clearPeerSeen(un);
             applyPresenceSync();
           })
           .on("presence", { event: "sync" }, applyPresenceSync)
@@ -4552,6 +4638,7 @@ export default function PuzzleBoard({
                   lockedPieceIds: Array.from(localPresenceLockIds),
                 });
               }
+              enqueueRealtimeBroadcast("heartbeat", { username: me, t: Date.now() });
             } else if (
               status === 'CLOSED' ||
               status === 'CHANNEL_ERROR' ||
@@ -4577,16 +4664,25 @@ export default function PuzzleBoard({
                 return;
               }
               const st = ch.state;
-              // `closed`는 removeChannel 직후·내부 재연결 등에서 잠깐 뜨는 경우가 많아 재구독 루프를 유발함 → errored만 강제 recycle
+              // `closed`는 removeChannel 직후·내부 재연결 등에서 잠깐 뜨는 경우가 많아 재구독 루프를 유발함 → errored만 즉시 recycle
               if (st === REALTIME_CHANNEL_STATES.errored) {
+                closedWhileConnectedStreak = 0;
                 rtWarn("channel errored → recycle", st);
                 void recycleRealtimeChannel(`health_${st}`);
                 return;
               }
               if (st === REALTIME_CHANNEL_STATES.closed) {
-                rtWarn("channel state closed (waiting for rejoin; no recycle)", st);
+                closedWhileConnectedStreak++;
+                if (closedWhileConnectedStreak >= 2) {
+                  closedWhileConnectedStreak = 0;
+                  rtWarn("channel stuck closed while socket connected → recycle", st);
+                  void recycleRealtimeChannel("health_closed_stuck");
+                } else if (closedWhileConnectedStreak === 1) {
+                  rtWarn("channel closed (recycle if still closed ~4s)", st);
+                }
                 return;
               }
+              closedWhileConnectedStreak = 0;
               if (st === REALTIME_CHANNEL_STATES.joined) {
                 if (!realtimeBroadcastReady) {
                   rtWarn("joined but broadcast gate off → heal");
@@ -4615,6 +4711,12 @@ export default function PuzzleBoard({
               rtWarn("health tick error", e);
             }
           }, 4000);
+
+          realtimeHeartbeatTimer = window.setInterval(() => {
+            if (!isMounted || recyclingRealtime) return;
+            const un = getLocalUsername();
+            enqueueRealtimeBroadcast("heartbeat", { username: un, t: Date.now() });
+          }, ROOM_HEARTBEAT_INTERVAL_MS);
         }
 
         attachRoomRealtimeChannel();
@@ -4624,6 +4726,10 @@ export default function PuzzleBoard({
         setIsLoading(false);
       }
     };
+
+    const peerStaleUiTimer = window.setInterval(() => {
+      setPeerWatchEpoch((n) => n + 1);
+    }, 3000);
 
     initPixi();
 
@@ -4648,9 +4754,15 @@ export default function PuzzleBoard({
 
     return () => {
       isMounted = false;
+      clearInterval(peerStaleUiTimer);
+      peerLastSeenMsRef.current.clear();
       if (realtimeHealthTimer != null) {
         clearInterval(realtimeHealthTimer);
         realtimeHealthTimer = null;
+      }
+      if (realtimeHeartbeatTimer != null) {
+        clearInterval(realtimeHeartbeatTimer);
+        realtimeHeartbeatTimer = null;
       }
       if (deferredBevelRafId != null) {
         cancelAnimationFrame(deferredBevelRafId);
@@ -5404,11 +5516,22 @@ export default function PuzzleBoard({
                         {idx + 1}
                       </span>
                       <div className="flex items-center gap-1.5">
-                        <div className={`w-2 h-2 rounded-full ${activeUsers.has(score.username) ? 'bg-emerald-500' : (isTossMode ? 'bg-[#B0B8C1]' : 'bg-slate-600')}`} title={activeUsers.has(score.username) ? 'Online' : 'Offline'} />
+                        <div
+                          className={`w-2 h-2 rounded-full ${isLeaderboardPeerLive(score.username) ? 'bg-emerald-500' : (isTossMode ? 'bg-[#B0B8C1]' : 'bg-slate-600')}`}
+                          title={
+                            isLeaderboardPeerLive(score.username)
+                              ? isKo
+                                ? '최근 응답 있음'
+                                : 'Recently active'
+                              : isKo
+                                ? '응답 없음'
+                                : 'No recent activity'
+                          }
+                        />
                         <span className={`text-xs truncate max-w-[100px] ${
                           isMe
                             ? (isTossMode ? 'text-[#2F6FE4] font-bold' : 'text-indigo-300 font-bold')
-                            : activeUsers.has(score.username)
+                            : isLeaderboardPeerLive(score.username)
                             ? (isTossMode ? 'text-[#333D4B]' : 'text-slate-200')
                             : (isTossMode ? 'text-[#8B95A1]' : 'text-slate-400')
                         }`} title={score.username}>
