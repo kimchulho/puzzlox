@@ -398,7 +398,7 @@ export default function PuzzleBoard({
       }
     };
     fetchRoomData();
-  }, [roomId]);
+  }, [roomId, user?.id]);
 
   useEffect(() => {
     // Socket.io 연결 및 플레이 타임 동기화 (기준 시간만 받음)
@@ -406,7 +406,10 @@ export default function PuzzleBoard({
     const socket = backendUrl ? io(backendUrl) : io();
     socketRef.current = socket;
 
-    socket.emit(ROOM_EVENTS.JoinRoom, roomId);
+    socket.emit(ROOM_EVENTS.JoinRoom, {
+      roomId,
+      userId: user?.id != null ? Number(user.id) : undefined,
+    });
 
     socket.on(ROOM_EVENTS.SyncTime, (data: SyncTimePayload) => {
       accumulatedTimeRef.current = data.accumulatedTime;
@@ -4895,25 +4898,6 @@ export default function PuzzleBoard({
 
     initPixi();
 
-    // Track total play time
-    let playTimeInterval: any;
-    if (user && user.id) {
-      playTimeInterval = setInterval(async () => {
-        try {
-          // Fetch current total to avoid overwriting from other tabs
-          const { data } = await supabase.from('pixi_users').select('total_play_time').eq('id', user.id).single();
-          if (data) {
-            await supabase.from('pixi_users').update({
-              total_play_time: (data.total_play_time || 0) + 60,
-              last_active_at: new Date().toISOString()
-            }).eq('id', user.id);
-          }
-        } catch (err) {
-          console.error("Error updating play time:", err);
-        }
-      }, 60000); // Every 60 seconds
-    }
-
     return () => {
       isMounted = false;
       socketLockAppliedRef.current = null;
@@ -4937,7 +4921,6 @@ export default function PuzzleBoard({
       if (deviceMotionHandler) {
         window.removeEventListener('devicemotion', deviceMotionHandler);
       }
-      if (playTimeInterval) clearInterval(playTimeInterval);
       isBotRunningRef.current = false;
       isColorBotRunningRef.current = false;
       const tex = mainTextureRef.current;

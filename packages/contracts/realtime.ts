@@ -11,7 +11,10 @@ export const ROOM_EVENTS = {
   LockDenied: "lock_denied",
 } as const;
 
-export type JoinRoomPayload = number;
+export interface JoinRoomPayload {
+  roomId: number;
+  userId?: number;
+}
 export type PuzzleCompletedPayload = number;
 
 export interface SyncTimePayload {

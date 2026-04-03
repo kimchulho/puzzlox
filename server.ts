@@ -551,6 +551,9 @@ async function startServer() {
   const roomScoreCache = new Map<number, Map<string, number>>();
   const socketOwnedPieceIds = new Map<string, Map<number, Set<number>>>();
   const socketUserId = new Map<string, string>();
+  const socketUserPlaySessions = new Map<string, { userId: number; startedAt: number; roomId: number }>();
+  const pendingUserPlaySeconds = new Map<number, number>();
+  let flushingUserPlaySeconds = false;
 
   // 현재까지의 정확한 플레이 타임 계산 (초 단위)
   const getCurrentPlayTime = (room: any) => {
@@ -559,6 +562,49 @@ async function startServer() {
       time += (Date.now() - room.lastResumeTime) / 1000;
     }
     return time;
+  };
+  const enqueueUserPlaySeconds = (userId: number, deltaSec: number) => {
+    const rounded = Math.floor(deltaSec);
+    if (!Number.isFinite(userId) || userId <= 0 || rounded <= 0) return;
+    pendingUserPlaySeconds.set(userId, (pendingUserPlaySeconds.get(userId) ?? 0) + rounded);
+  };
+  const flushUserPlaySeconds = async () => {
+    if (flushingUserPlaySeconds || pendingUserPlaySeconds.size === 0) return;
+    flushingUserPlaySeconds = true;
+    const entries = [...pendingUserPlaySeconds.entries()];
+    pendingUserPlaySeconds.clear();
+    try {
+      await Promise.all(
+        entries.map(async ([userId, delta]) => {
+          const { data, error } = await supabase
+            .from("pixi_users")
+            .select("total_play_time")
+            .eq("id", userId)
+            .maybeSingle();
+          if (error || !data) {
+            if (error) console.warn("[user-playtime/select]", { userId, message: error.message });
+            return;
+          }
+          const next = Number(data.total_play_time ?? 0) + delta;
+          const { error: updateError } = await supabase
+            .from("pixi_users")
+            .update({ total_play_time: next, last_active_at: new Date().toISOString() })
+            .eq("id", userId);
+          if (updateError) {
+            console.warn("[user-playtime/update]", { userId, message: updateError.message });
+            pendingUserPlaySeconds.set(userId, (pendingUserPlaySeconds.get(userId) ?? 0) + delta);
+          }
+        })
+      );
+    } finally {
+      flushingUserPlaySeconds = false;
+    }
+  };
+  const endSocketPlaySession = (socketId: string) => {
+    const session = socketUserPlaySessions.get(socketId);
+    if (!session) return;
+    socketUserPlaySessions.delete(socketId);
+    enqueueUserPlaySeconds(session.userId, (Date.now() - session.startedAt) / 1000);
   };
 
   io.on("connection", (socket) => {
@@ -659,8 +705,18 @@ async function startServer() {
       );
     };
 
-    socket.on(ROOM_EVENTS.JoinRoom, async (roomId: number) => {
+    socket.on(ROOM_EVENTS.JoinRoom, async (raw: number | { roomId?: unknown; userId?: unknown }) => {
+      const roomId =
+        typeof raw === "number" ? raw : Number((raw as { roomId?: unknown })?.roomId);
+      const joinedUserIdRaw =
+        typeof raw === "number" ? NaN : Number((raw as { userId?: unknown })?.userId);
+      if (!Number.isFinite(roomId) || roomId <= 0) return;
+      const joinedUserId =
+        Number.isFinite(joinedUserIdRaw) && joinedUserIdRaw > 0
+          ? Math.floor(joinedUserIdRaw)
+          : null;
       if (currentRoomId) {
+        endSocketPlaySession(socket.id);
         releaseOwnedLocks(currentRoomId, socketUserId.get(socket.id) ?? "guest");
         socket.leave(currentRoomId.toString());
         const oldRoom = roomStates.get(currentRoomId);
@@ -704,6 +760,15 @@ async function startServer() {
       }
       
       room.users.add(socket.id);
+      if (joinedUserId != null) {
+        socketUserPlaySessions.set(socket.id, {
+          userId: joinedUserId,
+          startedAt: Date.now(),
+          roomId,
+        });
+      } else {
+        socketUserPlaySessions.delete(socket.id);
+      }
       
       // 접속한 유저에게만 현재 기준 시간 동기화
       const syncPayload: SyncTimePayload = {
@@ -820,6 +885,7 @@ async function startServer() {
     });
 
     socket.on("disconnect", () => {
+      endSocketPlaySession(socket.id);
       if (currentRoomId && roomStates.has(currentRoomId)) {
         releaseOwnedLocks(currentRoomId, socketUserId.get(socket.id) ?? "guest");
         const room = roomStates.get(currentRoomId)!;
@@ -845,6 +911,7 @@ async function startServer() {
       }
       socketOwnedPieceIds.delete(socket.id);
       socketUserId.delete(socket.id);
+      socketUserPlaySessions.delete(socket.id);
     });
   });
 
@@ -865,6 +932,7 @@ async function startServer() {
           });
       }
     });
+    void flushUserPlaySeconds();
   }, 30000);
 
   // ==========================================
