@@ -597,7 +597,14 @@ export default function PuzzleBoard({
         world.addChild(cursorsContainer);
         const cursors = new Map<
           string,
-          { container: PIXI.Container; targetX: number; targetY: number; lastUpdatedAt: number }
+          {
+            container: PIXI.Container;
+            targetX: number;
+            targetY: number;
+            lastUpdatedAt: number;
+            velX: number;
+            velY: number;
+          }
         >();
         const remoteLockedPieces = new Map<string, Set<number>>();
         /** presence에 실어 신규 입장자가 선점 상태를 동기화할 수 있게 함 */
@@ -1146,15 +1153,22 @@ export default function PuzzleBoard({
               cursorData.container.x += dx * holdFollow;
               cursorData.container.y += dy * holdFollow;
             } else if (dist > 0.1) {
-              const baseFollow = 1 - Math.exp(-14 * dtSec);
-              const boostedFollow = dist > 120 ? 0.65 : dist > 48 ? 0.45 : baseFollow;
-              cursorData.container.x += dx * boostedFollow;
-              cursorData.container.y += dy * boostedFollow;
-              if (Math.abs(cursorData.targetX - cursorData.container.x) < 0.4) {
-                cursorData.container.x = cursorData.targetX;
+              const ageMs = Date.now() - cursorData.lastUpdatedAt;
+              const predictMs = Math.min(Math.max(ageMs, 0), 120);
+              const predictedX = cursorData.targetX + cursorData.velX * (predictMs / 1000);
+              const predictedY = cursorData.targetY + cursorData.velY * (predictMs / 1000);
+              const pdx = predictedX - cursorData.container.x;
+              const pdy = predictedY - cursorData.container.y;
+              const pdist = Math.hypot(pdx, pdy);
+              const baseFollow = 1 - Math.exp(-16 * dtSec);
+              const boostedFollow = pdist > 120 ? 0.7 : pdist > 48 ? 0.5 : baseFollow;
+              cursorData.container.x += pdx * boostedFollow;
+              cursorData.container.y += pdy * boostedFollow;
+              if (Math.abs(predictedX - cursorData.container.x) < 0.4) {
+                cursorData.container.x = predictedX;
               }
-              if (Math.abs(cursorData.targetY - cursorData.container.y) < 0.4) {
-                cursorData.container.y = cursorData.targetY;
+              if (Math.abs(predictedY - cursorData.container.y) < 0.4) {
+                cursorData.container.y = predictedY;
               }
             }
           });
@@ -2674,6 +2688,8 @@ export default function PuzzleBoard({
               targetX: container.x,
               targetY: container.y,
               lastUpdatedAt: Date.now(),
+              velX: 0,
+              velY: 0,
             };
             cursors.set(botUsername, cursorData);
           }
@@ -3010,6 +3026,8 @@ export default function PuzzleBoard({
               targetX: container.x,
               targetY: container.y,
               lastUpdatedAt: Date.now(),
+              velX: 0,
+              velY: 0,
             };
             cursors.set(botUsername, cursorData);
           }
@@ -4759,12 +4777,26 @@ export default function PuzzleBoard({
               container.y = y;
 
               cursorsContainer.addChild(container);
-              cursorData = { container, targetX: x, targetY: y, lastUpdatedAt: Date.now() };
+              cursorData = {
+                container,
+                targetX: x,
+                targetY: y,
+                lastUpdatedAt: Date.now(),
+                velX: 0,
+                velY: 0,
+              };
               cursors.set(username, cursorData);
             } else {
+              const now = Date.now();
+              const dt = Math.max((now - cursorData.lastUpdatedAt) / 1000, 0.016);
+              const instantVelX = (x - cursorData.targetX) / dt;
+              const instantVelY = (y - cursorData.targetY) / dt;
+              const smooth = 0.35;
+              cursorData.velX = cursorData.velX * (1 - smooth) + instantVelX * smooth;
+              cursorData.velY = cursorData.velY * (1 - smooth) + instantVelY * smooth;
               cursorData.targetX = x;
               cursorData.targetY = y;
-              cursorData.lastUpdatedAt = Date.now();
+              cursorData.lastUpdatedAt = now;
             }
           };
 
