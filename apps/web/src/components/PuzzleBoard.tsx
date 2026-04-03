@@ -4330,12 +4330,15 @@ export default function PuzzleBoard({
           let prevPresenceUsers = new Set<string>();
           let presenceInitialSyncDone = false;
 
-          enqueueRealtimeBroadcast = (event: string, payload: unknown) => {
-          const ch = channelRef.current;
-          if (!ch) return;
-          if (realtimeBroadcastReady) {
-            void ch.send({ type: 'broadcast', event, payload });
-          } else {
+          const canSendRealtimeNow = (ch: any): boolean =>
+            Boolean(
+              realtimeBroadcastReady &&
+              channelRef.current === ch &&
+              supabase.realtime.isConnected() &&
+              ch.state === REALTIME_CHANNEL_STATES.joined
+            );
+
+          const enqueueOrMergeRealtime = (event: string, payload: unknown) => {
             if (event === 'heartbeat' && realtimeBroadcastQueue.length > 0) {
               const last = realtimeBroadcastQueue[realtimeBroadcastQueue.length - 1];
               if (last.event === 'heartbeat') {
@@ -4357,9 +4360,31 @@ export default function PuzzleBoard({
             }
             realtimeBroadcastQueue.push({ event, payload });
             if (realtimeBroadcastQueue.length > 250) {
-              realtimeBroadcastQueue.splice(0, realtimeBroadcastQueue.length - 250);
+              // cursorMove/heartbeat를 우선 버리고 lock/unlock/moveBatch는 최대한 보존
+              const keep = realtimeBroadcastQueue.filter(
+                (x) => x.event !== 'cursorMove' && x.event !== 'heartbeat'
+              );
+              if (keep.length >= 200) {
+                realtimeBroadcastQueue.splice(0, realtimeBroadcastQueue.length, ...keep.slice(-200));
+              } else {
+                realtimeBroadcastQueue.splice(0, realtimeBroadcastQueue.length - 250);
+              }
             }
-          }
+          };
+
+          enqueueRealtimeBroadcast = (event: string, payload: unknown) => {
+            const ch = channelRef.current;
+            if (!ch) return;
+            if (!canSendRealtimeNow(ch)) {
+              enqueueOrMergeRealtime(event, payload);
+              return;
+            }
+            try {
+              void ch.send({ type: 'broadcast', event, payload });
+            } catch {
+              realtimeBroadcastReady = false;
+              enqueueOrMergeRealtime(event, payload);
+            }
           };
 
           const applyPresenceSync = () => {
@@ -4616,7 +4641,7 @@ export default function PuzzleBoard({
               presenceInitialSyncDone = false;
               realtimeBroadcastReady = true;
               const ch = channelRef.current;
-              if (ch) {
+              if (ch && canSendRealtimeNow(ch)) {
                 while (realtimeBroadcastQueue.length > 0) {
                   const item = realtimeBroadcastQueue.shift()!;
                   void ch.send({ type: 'broadcast', event: item.event, payload: item.payload });
@@ -4659,6 +4684,7 @@ export default function PuzzleBoard({
             if (!ch) return;
             try {
               if (!supabase.realtime.isConnected()) {
+                realtimeBroadcastReady = false;
                 rtWarn("socket disconnected → connect()");
                 void supabase.realtime.connect();
                 return;
@@ -4673,12 +4699,18 @@ export default function PuzzleBoard({
               }
               if (st === REALTIME_CHANNEL_STATES.closed) {
                 closedWhileConnectedStreak++;
-                if (closedWhileConnectedStreak >= 2) {
+                if (
+                  closedWhileConnectedStreak >= 3 &&
+                  Date.now() - lastRealtimeInboundAt > 8000
+                ) {
                   closedWhileConnectedStreak = 0;
-                  rtWarn("channel stuck closed while socket connected → recycle", st);
+                  rtWarn("channel stuck closed while socket connected → recycle", {
+                    state: st,
+                    msSinceInbound: Date.now() - lastRealtimeInboundAt,
+                  });
                   void recycleRealtimeChannel("health_closed_stuck");
                 } else if (closedWhileConnectedStreak === 1) {
-                  rtWarn("channel closed (recycle if still closed ~4s)", st);
+                  rtWarn("channel closed (recycle if still closed ~12s)", st);
                 }
                 return;
               }
@@ -4687,7 +4719,7 @@ export default function PuzzleBoard({
                 if (!realtimeBroadcastReady) {
                   rtWarn("joined but broadcast gate off → heal");
                   realtimeBroadcastReady = true;
-                  while (realtimeBroadcastQueue.length > 0) {
+                  while (realtimeBroadcastQueue.length > 0 && canSendRealtimeNow(ch)) {
                     const item = realtimeBroadcastQueue.shift()!;
                     void ch.send({ type: "broadcast", event: item.event, payload: item.payload });
                   }
