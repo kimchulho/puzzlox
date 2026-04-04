@@ -590,7 +590,7 @@ export default function PuzzleBoard({
               piece.eventMode = "none";
               piece.zIndex = 0;
               const lockIcon = piece.getChildByLabel("lockIcon");
-              if (lockIcon) lockIcon.visible = true;
+              if (lockIcon) lockIcon.visible = false;
             }
           }
         }
@@ -6374,7 +6374,7 @@ export default function PuzzleBoard({
 
       {showLeaderboard && (
         <div
-          className={`z-50 w-56 rounded-xl overflow-hidden animate-in fade-in slide-in-from-top-4 duration-200 ${
+          className={`z-50 w-52 rounded-xl overflow-hidden animate-in fade-in slide-in-from-top-4 duration-200 ${
             isTossMode
               ? "bg-white border border-[#D9E8FF] shadow-[0_10px_24px_rgba(47,111,228,0.14)]"
               : "bg-slate-800 border border-slate-700"
@@ -6391,15 +6391,15 @@ export default function PuzzleBoard({
               : leaderboardOffset
           }
         >
-          <div className={`p-2.5 border-b flex items-center justify-between ${
+          <div className={`p-2 border-b flex items-center justify-between ${
             isTossMode ? "bg-[#F4F8FF] border-[#D9E8FF]" : "bg-slate-900/50 border-slate-700"
           }`}>
             <div className="flex items-center gap-2">
-              <Trophy size={16} className={isTossMode ? "text-[#2F6FE4]" : "text-amber-400"} />
-              <h3 className={`font-bold text-sm ${isTossMode ? "text-[#2F6FE4]" : "text-white"}`}>{isKo ? "순위" : "Rank"}</h3>
+              <Trophy size={14} className={isTossMode ? "text-[#2F6FE4]" : "text-amber-400"} />
+              <h3 className={`font-bold text-xs ${isTossMode ? "text-[#2F6FE4]" : "text-white"}`}>{isKo ? "순위" : "Rank"}</h3>
             </div>
             <div className="flex items-center gap-1">
-              <div className="h-7 flex items-center mr-1" title={isKo ? "조각 색상 투명도" : "Piece color opacity"}>
+              <div className="h-6 flex items-center mr-1" title={isKo ? "조각 색상 투명도" : "Piece color opacity"}>
                 <input
                   type="range"
                   min={10}
@@ -6407,26 +6407,26 @@ export default function PuzzleBoard({
                   step={5}
                   value={ownerOverlayOpacityPct}
                   onChange={(e) => setOwnerOverlayOpacityPct(Number(e.target.value))}
-                  className="w-12 h-1 accent-indigo-500 cursor-pointer"
+                  className="w-10 h-1 accent-indigo-500 cursor-pointer"
                 />
               </div>
               <button
                 onClick={() => setShowPieceOwnerOverlay((v) => !v)}
-                className={`h-7 w-7 rounded-md border text-[11px] font-semibold transition-colors inline-flex items-center justify-center mr-1 ${
+                className={`h-6 w-6 rounded-md border text-[10px] font-semibold transition-colors inline-flex items-center justify-center mr-1 ${
                   showPieceOwnerOverlay
                     ? (isTossMode ? "bg-[#EAF2FF] border-[#BBD5FF] text-[#2F6FE4]" : "bg-indigo-500/20 border-indigo-400/60 text-indigo-200")
                     : (isTossMode ? "bg-white border-[#D9E8FF] text-[#6B7684] hover:text-[#2F6FE4]" : "bg-slate-800 border-slate-600 text-slate-300 hover:text-white")
                 }`}
                 title={isKo ? "내 조각/소유자 색상 표시" : "Show my/owner piece colors"}
               >
-                <Crosshair size={12} />
+                <Crosshair size={11} />
               </button>
               <button onClick={() => setShowLeaderboard(false)} className={`transition-colors ${isTossMode ? "text-[#2F6FE4] hover:text-[#1f5ec6]" : "text-slate-400 hover:text-white"}`}>
-                <X size={16} />
+                <X size={14} />
               </button>
             </div>
           </div>
-          <div className="max-h-56 overflow-y-auto p-1.5">
+          <div className="max-h-52 overflow-y-auto p-1">
             {scores.length === 0 ? (
               <div className={`text-center py-4 text-xs ${isTossMode ? "text-[#6B7684]" : "text-slate-400"}`}>{isKo ? "아직 점수가 없습니다." : "No scores yet"}</div>
             ) : (
@@ -6435,12 +6435,12 @@ export default function PuzzleBoard({
                   const currentUsername = user ? user.username : localStorage.getItem('puzzle_guest_name');
                   const isMe = score.username === currentUsername;
                   return (
-                  <div key={idx} className={`flex items-center justify-between p-1.5 rounded-lg transition-colors ${
+                  <div key={idx} className={`flex items-center justify-between p-1 rounded-lg transition-colors ${
                     isMe
                       ? (isTossMode ? 'bg-[#EAF2FF] border border-[#CFE2FF]' : 'bg-indigo-500/20 border border-indigo-500/35')
                       : (isTossMode ? 'hover:bg-[#F4F8FF]' : 'hover:bg-slate-700/50')
                   }`}>
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2.5">
                       <span className={`font-bold w-4 text-center ${
                         idx === 0
                           ? (isTossMode ? 'text-[#2F6FE4]' : 'text-amber-400')
@@ -6452,9 +6452,9 @@ export default function PuzzleBoard({
                       }`}>
                         {idx + 1}
                       </span>
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1">
                         <span
-                          className="w-2.5 h-2.5 rounded-sm border border-white/60"
+                          className="w-2 h-2 rounded-sm border border-white/60"
                           style={{
                             backgroundColor: ownerColorCss(score.username),
                             opacity: showPieceOwnerOverlay ? 0.9 : 0.45,
@@ -6473,7 +6473,7 @@ export default function PuzzleBoard({
                                 : 'No recent activity'
                           }
                         />
-                        <span className={`text-xs truncate max-w-[100px] ${
+                        <span className={`text-[11px] truncate max-w-[92px] ${
                           isMe
                             ? (isTossMode ? 'text-[#2F6FE4] font-bold' : 'text-indigo-300 font-bold')
                             : isLeaderboardPeerLive(score.username)
@@ -6482,12 +6482,12 @@ export default function PuzzleBoard({
                         }`} title={score.username}>
                           {score.username}
                         </span>
-                        {isMe && <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ml-1 ${
+                        {isMe && <span className={`text-[9px] font-bold px-1 py-0.5 rounded-full ml-1 ${
                           isTossMode ? "text-[#2F6FE4] bg-[#EAF2FF]" : "text-indigo-300 bg-indigo-500/25"
                         }`}>YOU</span>}
                       </div>
                     </div>
-                    <span className={`text-xs font-bold ${isTossMode ? "text-[#2F6FE4]" : "text-indigo-400"}`}>{score.score}</span>
+                    <span className={`text-[11px] font-bold ${isTossMode ? "text-[#2F6FE4]" : "text-indigo-400"}`}>{score.score}</span>
                   </div>
                 )})}
               </div>
