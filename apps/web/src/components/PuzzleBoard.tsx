@@ -561,12 +561,51 @@ export default function PuzzleBoard({
     const backendUrl = import.meta.env.VITE_BACKEND_URL;
     const socket = backendUrl ? io(backendUrl) : io();
     socketRef.current = socket;
+    const joinRoomOnSocket = () => {
+      socket.emit(ROOM_EVENTS.JoinRoom, {
+        roomId,
+        userId: user?.id != null ? Number(user.id) : undefined,
+      });
+    };
+    const refreshStateAfterReconnect = async () => {
+      try {
+        const [{ data: scoreData }, { data: pieceData }] = await Promise.all([
+          supabase.from("scores").select("*").eq("room_id", roomId).order("score", { ascending: false }),
+          supabase.from("pieces").select("piece_index, x, y, is_locked").eq("room_id", roomId),
+        ]);
+        if (Array.isArray(scoreData)) {
+          setScores(scoreData);
+        }
+        if (Array.isArray(pieceData)) {
+          for (const row of pieceData) {
+            const pieceId = Number(row.piece_index);
+            if (!Number.isFinite(pieceId)) continue;
+            const piece = pieces.current.get(pieceId);
+            if (!piece) continue;
+            const nextX = Number(row.x);
+            const nextY = Number(row.y);
+            if (Number.isFinite(nextX)) piece.x = nextX;
+            if (Number.isFinite(nextY)) piece.y = nextY;
+            if (row.is_locked === true) {
+              piece.eventMode = "none";
+              piece.zIndex = 0;
+              const lockIcon = piece.getChildByLabel("lockIcon");
+              if (lockIcon) lockIcon.visible = true;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("[PuzzleBoard] reconnect state sync failed", e);
+      }
+    };
     setIsGameSocketConnected(socket.connected);
     if (!socket.connected) {
       setSocketDisconnectedAt((prev) => prev ?? Date.now());
     }
 
     socket.on("connect", () => {
+      joinRoomOnSocket();
+      void refreshStateAfterReconnect();
       setIsGameSocketConnected(true);
       setSocketDisconnectedAt(null);
       setShowConnectionStatusPopup(false);
@@ -580,10 +619,10 @@ export default function PuzzleBoard({
       setSocketDisconnectedAt((prev) => prev ?? Date.now());
     });
 
-    socket.emit(ROOM_EVENTS.JoinRoom, {
-      roomId,
-      userId: user?.id != null ? Number(user.id) : undefined,
-    });
+    if (socket.connected) {
+      joinRoomOnSocket();
+      void refreshStateAfterReconnect();
+    }
 
     socket.on(ROOM_EVENTS.SyncTime, (data: SyncTimePayload) => {
       accumulatedTimeRef.current = data.accumulatedTime;
@@ -616,7 +655,7 @@ export default function PuzzleBoard({
       setIsGameSocketConnected(false);
       setShowConnectionStatusPopup(false);
     };
-  }, [roomId]);
+  }, [roomId, user?.id]);
 
   useEffect(() => {
     // 클라이언트 로컬 타이머 (네트워크 통신 없이 화면만 갱신)
