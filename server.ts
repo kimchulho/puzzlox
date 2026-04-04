@@ -818,7 +818,7 @@ async function startServer() {
   };
   const enqueueRoomPieceState = (
     roomId: number,
-    updates: { pieceId: number; x: number; y: number; isLocked?: boolean }[],
+    updates: { pieceId: number; x: number; y: number; isLocked?: boolean; snappedBy?: string }[],
     userId?: string
   ) => {
     if (!roomPieceStatePending.has(roomId)) roomPieceStatePending.set(roomId, new Map());
@@ -828,6 +828,10 @@ async function startServer() {
     if (!roomSolvedPieceOwner.has(roomId)) roomSolvedPieceOwner.set(roomId, new Map());
     const solvedOwner = roomSolvedPieceOwner.get(roomId)!;
     for (const u of updates) {
+      const snappedBy = String(u.snappedBy ?? "").trim();
+      if (snappedBy && !solvedOwner.has(u.pieceId)) {
+        solvedOwner.set(u.pieceId, snappedBy);
+      }
       if (u.isLocked === true) {
         solved.add(u.pieceId);
         const owner = String(userId ?? "").trim();
@@ -861,7 +865,7 @@ async function startServer() {
     let cursorFlushTimer: ReturnType<typeof setTimeout> | null = null;
     const pendingMoveByPiece = new Map<
       number,
-      { pieceId: number; x: number; y: number; isLocked?: boolean }
+      { pieceId: number; x: number; y: number; isLocked?: boolean; snappedBy?: string }
     >();
     let pendingMoveUserId = "guest";
     let pendingCursor: { username: string; x: number; y: number } | null = null;
@@ -1145,6 +1149,10 @@ async function startServer() {
           x: Number(u.x),
           y: Number(u.y),
           isLocked: u.isLocked === true,
+          snappedBy:
+            typeof u.snappedBy === "string" && u.snappedBy.trim() !== ""
+              ? u.snappedBy.trim()
+              : undefined,
         }))
         .filter(
           (u) =>

@@ -27,7 +27,7 @@ export interface SyncTimePayload {
 export interface MoveBatchPayload {
   roomId: number;
   userId?: string;
-  updates: { pieceId: number; x: number; y: number; isLocked?: boolean }[];
+  updates: { pieceId: number; x: number; y: number; isLocked?: boolean; snappedBy?: string }[];
 }
 
 export interface CursorMovePayload {

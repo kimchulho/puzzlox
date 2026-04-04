@@ -8,7 +8,7 @@ import React, {
 } from 'react';
 import * as PIXI from 'pixi.js';
 import { throttle } from 'lodash';
-import { Clock, Users, Trophy, ChevronLeft, X, Palette, LayoutGrid, Zap, Heart, Image as ImageIcon, Bot, Maximize, Minimize, RotateCcw, Share2, Check, Plus, Minus } from 'lucide-react';
+import { Clock, Users, Trophy, ChevronLeft, X, Palette, LayoutGrid, Zap, Heart, Image as ImageIcon, Bot, Maximize, Minimize, RotateCcw, Share2, Check, Plus, Minus, QrCode } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 import confetti from 'canvas-confetti';
 import {
@@ -201,6 +201,9 @@ export default function PuzzleBoard({
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [showPieceOwnerOverlay, setShowPieceOwnerOverlay] = useState(false);
   const [showColorPicker, setShowColorPicker] = useState(false);
+  const [showQrCode, setShowQrCode] = useState(false);
+  const [isQrLoading, setIsQrLoading] = useState(false);
+  const [isQrError, setIsQrError] = useState(false);
   const [showBotMenu, setShowBotMenu] = useState(false);
   const [showMosaicModal, setShowMosaicModal] = useState(false);
   const [mosaicError, setMosaicError] = useState<string | null>(null);
@@ -233,6 +236,14 @@ export default function PuzzleBoard({
       setTimeout(() => setIsCopied(false), 2000);
     });
   };
+  const roomJoinUrl = `${window.location.origin}/?room=${encodeRoomId(roomId)}`;
+  const roomQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(roomJoinUrl)}`;
+
+  useEffect(() => {
+    if (!showQrCode) return;
+    setIsQrLoading(true);
+    setIsQrError(false);
+  }, [showQrCode, roomQrUrl]);
 
   const PRESET_COLORS = [
     '#0f172a', // slate-900
@@ -761,7 +772,7 @@ export default function PuzzleBoard({
           const localUserRaw = user ? user.username : localStorage.getItem("puzzle_guest_name");
           const me = localUserRaw != null && localUserRaw !== "" ? String(localUserRaw) : "guest";
           overlay.tint = ownerColorFromUsername(owner);
-          overlay.alpha = owner === me ? 0.26 : 0.2;
+          overlay.alpha = owner === me ? 0.6 : 0.6;
           overlay.visible = true;
         };
         const refreshPieceOwnerOverlay = () => {
@@ -1840,7 +1851,7 @@ export default function PuzzleBoard({
           drawC(p(0.610, -0.127), p(0.807, 0), p(1.000, 0));
         };
 
-        const sendMoveBatch = throttle((updates: {pieceId: number, x: number, y: number, isLocked?: boolean}[]) => {
+        const sendMoveBatch = throttle((updates: {pieceId: number, x: number, y: number, isLocked?: boolean, snappedBy?: string}[]) => {
           if (updates.length === 0) return;
           const socket = socketRef.current;
           if (socket && socket.connected) {
@@ -2573,7 +2584,7 @@ export default function PuzzleBoard({
             }
           }
 
-          const updates: { pieceId: number; x: number; y: number; isLocked?: boolean }[] = [];
+          const updates: { pieceId: number; x: number; y: number; isLocked?: boolean; snappedBy?: string }[] = [];
           const dbUpdates: any[] = [];
           const lockedPieceIds = new Set<number>();
           if (snapped) {
@@ -2596,6 +2607,11 @@ export default function PuzzleBoard({
 
           // Check if any piece is in the absolute correct position to lock it
           const localOwner = getLocalUsername();
+          if (snapped) {
+            cluster.forEach((id) => {
+              rememberSolvedPieceOwner(id, localOwner);
+            });
+          }
           cluster.forEach(id => {
             const p = pieces.current.get(id)!;
             const c = id % GRID_COLS;
@@ -2617,7 +2633,7 @@ export default function PuzzleBoard({
               x: p.x,
               y: p.y,
               is_locked: isLocked,
-              snapped_by: isLocked ? localOwner : undefined,
+              snapped_by: solvedPieceOwner.get(id),
             });
           });
 
@@ -2638,6 +2654,8 @@ export default function PuzzleBoard({
           if (updates.length > 0) {
             updates.forEach((u) => {
               u.isLocked = lockedPieceIds.has(u.pieceId);
+              const owner = solvedPieceOwner.get(u.pieceId);
+              if (owner) u.snappedBy = owner;
             });
             sendMoveBatch(updates);
           }
@@ -4907,6 +4925,9 @@ export default function PuzzleBoard({
                 const row = Math.floor(u.pieceId / GRID_COLS);
                 const targetX = boardStartX + col * pieceWidth;
                 const targetY = boardStartY + row * pieceHeight;
+                if (typeof u.snappedBy === "string" && u.snappedBy.trim() !== "") {
+                  rememberSolvedPieceOwner(u.pieceId, u.snappedBy.trim());
+                }
                 const shouldLock = u.isLocked === true || (Math.abs(u.x - targetX) < 1 && Math.abs(u.y - targetY) < 1);
                 if (shouldLock) {
                   if (moveUserId) {
@@ -5597,23 +5618,113 @@ export default function PuzzleBoard({
               }`}
             >
               <span className={`text-xs font-medium ${isTossMode ? "text-blue-700" : "text-slate-300"}`}>#{encodeRoomId(roomId)}</span>
-              {isTossMode ? (
-                <button
-                  aria-label={isCopied ? "링크 복사됨" : "링크 공유"}
-                  onClick={handleShareLink}
-                  className="inline-flex items-center justify-center h-6 w-6 rounded-md bg-[#EAF2FF] text-[#2F6FE4]"
-                >
-                  {isCopied ? <Check size={12} className="text-[#2F6FE4]" /> : <Share2 size={12} className="text-[#2F6FE4]" />}
-                </button>
-              ) : (
-                <button
-                  onClick={handleShareLink}
-                  className="flex items-center justify-center text-slate-400 hover:text-white transition-colors"
-                  title="Share Link"
-                >
-                  {isCopied ? <Check size={14} className="text-emerald-400" /> : <Share2 size={14} />}
-                </button>
-              )}
+              <div className="relative flex items-center gap-1">
+                {isTossMode ? (
+                  <>
+                    <button
+                      aria-label={isCopied ? "링크 복사됨" : "링크 공유"}
+                      onClick={handleShareLink}
+                      className="inline-flex items-center justify-center h-6 w-6 rounded-md bg-[#EAF2FF] text-[#2F6FE4]"
+                    >
+                      {isCopied ? <Check size={12} className="text-[#2F6FE4]" /> : <Share2 size={12} className="text-[#2F6FE4]" />}
+                    </button>
+                    <button
+                      aria-label={isKo ? "QR 코드" : "QR code"}
+                      onClick={() => setShowQrCode((v) => !v)}
+                      className={`inline-flex items-center justify-center h-6 w-6 rounded-md ${
+                        showQrCode ? "bg-[#2F6FE4] text-white" : "bg-[#EAF2FF] text-[#2F6FE4]"
+                      }`}
+                      title={isKo ? "입장 QR 코드" : "Room QR code"}
+                    >
+                      <QrCode size={12} />
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={handleShareLink}
+                      className="flex items-center justify-center text-slate-400 hover:text-white transition-colors"
+                      title="Share Link"
+                    >
+                      {isCopied ? <Check size={14} className="text-emerald-400" /> : <Share2 size={14} />}
+                    </button>
+                    <button
+                      onClick={() => setShowQrCode((v) => !v)}
+                      className={`flex items-center justify-center transition-colors ${
+                        showQrCode ? "text-indigo-300" : "text-slate-400 hover:text-white"
+                      }`}
+                      title={isKo ? "입장 QR 코드" : "Room QR code"}
+                    >
+                      <QrCode size={14} />
+                    </button>
+                  </>
+                )}
+                {showQrCode && (
+                  <div className={`absolute top-full mt-2 left-0 rounded-xl p-3 z-50 animate-in fade-in slide-in-from-top-2 w-[174px] ${
+                    isTossMode
+                      ? "bg-white border border-[#D9E8FF] shadow-[0_10px_24px_rgba(47,111,228,0.14)]"
+                      : "bg-slate-800 border border-slate-700"
+                  }`}>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className={`text-[11px] font-semibold ${isTossMode ? "text-[#2F6FE4]" : "text-slate-200"}`}>
+                        {isKo ? "방 입장 QR" : "Room QR"}
+                      </span>
+                      <button
+                        onClick={() => setShowQrCode(false)}
+                        className={isTossMode ? "text-[#2F6FE4]" : "text-slate-400 hover:text-white"}
+                        aria-label={isKo ? "닫기" : "Close"}
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                    <div className="w-[150px] mx-auto">
+                      <div className={`relative w-full h-[150px] rounded-md bg-white p-2 flex items-center justify-center ${isTossMode ? "border border-[#D9E8FF]" : "border border-slate-600"}`}>
+                        {(isQrLoading || isQrError) && (
+                          <div className={`absolute inset-0 rounded-md flex flex-col items-center justify-center gap-2 ${
+                            isTossMode ? "bg-white/90 text-[#2F6FE4]" : "bg-slate-900/85 text-slate-200"
+                          }`}>
+                            {isQrError ? (
+                              <span className="text-[10px] text-center px-2">
+                                {isKo ? "QR 생성 실패" : "Failed to load QR"}
+                              </span>
+                            ) : (
+                              <>
+                                <span className={`w-4 h-4 rounded-full border-2 border-transparent animate-spin ${
+                                  isTossMode ? "border-t-[#2F6FE4] border-r-[#2F6FE4]" : "border-t-indigo-300 border-r-indigo-300"
+                                }`} />
+                                <span className="text-[10px]">{isKo ? "생성 중..." : "Generating..."}</span>
+                              </>
+                            )}
+                          </div>
+                        )}
+                        <img
+                          src={roomQrUrl}
+                          alt={isKo ? "퍼즐방 입장 QR 코드" : "Room entry QR code"}
+                          onLoad={() => {
+                            setIsQrLoading(false);
+                            setIsQrError(false);
+                          }}
+                          onError={() => {
+                            setIsQrLoading(false);
+                            setIsQrError(true);
+                          }}
+                          className={`block w-full h-full rounded-sm object-contain ${isQrLoading || isQrError ? "opacity-0" : "opacity-100"} transition-opacity`}
+                        />
+                      </div>
+                    </div>
+                    <button
+                      onClick={handleShareLink}
+                      className={`mt-2 block mx-auto w-[150px] text-[11px] py-1.5 rounded-md border transition-colors ${
+                        isTossMode
+                          ? "bg-[#EAF2FF] border-[#CFE2FF] text-[#2F6FE4]"
+                          : "bg-slate-700/50 border-slate-600 text-slate-200 hover:bg-slate-700"
+                      }`}
+                    >
+                      {isKo ? "링크 복사" : "Copy link"}
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
           
