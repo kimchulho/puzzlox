@@ -230,6 +230,10 @@ export default function PuzzleBoard({
     if (typeof window === "undefined") return false;
     return window.matchMedia("(max-width: 767px) and (orientation: landscape)").matches;
   });
+  const [isMobilePortrait, setIsMobilePortrait] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.matchMedia("(max-width: 767px) and (orientation: portrait)").matches;
+  });
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [mosaicUrl, setMosaicUrl] = useState("https://ewbjogsolylcbfmpmyfa.supabase.co/storage/v1/object/public/checki/2.jpg");
   const [mosaicQuick, setMosaicQuick] = useState(false);
@@ -315,21 +319,29 @@ export default function PuzzleBoard({
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const mql = window.matchMedia("(max-width: 767px) and (orientation: landscape)");
-    const apply = () => setIsMobileLandscape(mql.matches);
+    const mqlLandscape = window.matchMedia("(max-width: 767px) and (orientation: landscape)");
+    const mqlPortrait = window.matchMedia("(max-width: 767px) and (orientation: portrait)");
+    const apply = () => {
+      setIsMobileLandscape(mqlLandscape.matches);
+      setIsMobilePortrait(mqlPortrait.matches);
+    };
     apply();
     const onChange = () => apply();
-    if (typeof mql.addEventListener === "function") {
-      mql.addEventListener("change", onChange);
+    if (typeof mqlLandscape.addEventListener === "function") {
+      mqlLandscape.addEventListener("change", onChange);
+      mqlPortrait.addEventListener("change", onChange);
     } else {
-      mql.addListener(onChange);
+      mqlLandscape.addListener(onChange);
+      mqlPortrait.addListener(onChange);
     }
     window.addEventListener("resize", apply);
     return () => {
-      if (typeof mql.removeEventListener === "function") {
-        mql.removeEventListener("change", onChange);
+      if (typeof mqlLandscape.removeEventListener === "function") {
+        mqlLandscape.removeEventListener("change", onChange);
+        mqlPortrait.removeEventListener("change", onChange);
       } else {
-        mql.removeListener(onChange);
+        mqlLandscape.removeListener(onChange);
+        mqlPortrait.removeListener(onChange);
       }
       window.removeEventListener("resize", apply);
     };
@@ -5813,7 +5825,7 @@ export default function PuzzleBoard({
                   {placedPieces} / {totalPieces}
                 </span>
               </div>
-              {isMobileLandscape ? (
+              {isMobileLandscape || isMobilePortrait ? (
                 <div className="flex items-center justify-center gap-1 h-8 rounded-lg bg-[#F4F8FF] px-2 shrink-0 text-[#2F6FE4]">
                   <Clock size={11} className="text-[#2F6FE4]" />
                   <span className="text-[11px] font-semibold whitespace-nowrap font-mono">
@@ -5837,7 +5849,7 @@ export default function PuzzleBoard({
                   {placedPieces} / {totalPieces}
                 </span>
               </div>
-              {isMobileLandscape ? (
+              {isMobileLandscape || isMobilePortrait ? (
                 <div className="flex items-center justify-center gap-1 px-2 h-7 rounded-md border shrink-0 bg-slate-800/50 border-slate-700/50 text-slate-300">
                   <Clock size={11} className="text-slate-400" />
                   <span className="text-[11px] font-medium whitespace-nowrap font-mono">
@@ -5899,7 +5911,7 @@ export default function PuzzleBoard({
           )}
 
           {isTossMode ? (
-            <div className={`${isMobileLandscape ? "hidden" : "flex"} items-center justify-center gap-2 flex-1 min-w-0 h-8 rounded-lg bg-[#F4F8FF] px-3 text-[#2F6FE4]`}>
+            <div className={`${isMobileLandscape || isMobilePortrait ? "hidden" : "flex"} items-center justify-center gap-2 flex-1 min-w-0 h-8 rounded-lg bg-[#F4F8FF] px-3 text-[#2F6FE4]`}>
               <Clock size={12} className="text-[#2F6FE4]" />
               <span className="text-xs font-semibold whitespace-nowrap font-mono">
                 {formatTime(playTime)}
@@ -5907,7 +5919,7 @@ export default function PuzzleBoard({
             </div>
           ) : (
             <div
-              className={`${isMobileLandscape ? "hidden" : "flex"} items-center gap-1 px-2 h-7 rounded-md border flex-1 sm:flex-none justify-center bg-slate-800/50 border-slate-700/50`}
+              className={`${isMobileLandscape || isMobilePortrait ? "hidden" : "flex"} items-center gap-1 px-2 h-7 rounded-md border flex-1 sm:flex-none justify-center bg-slate-800/50 border-slate-700/50`}
               title={isKo ? "플레이 시간" : "Play Time"}
             >
               <Clock size={12} className="text-slate-400" />
