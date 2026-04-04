@@ -1409,8 +1409,8 @@ const Lobby = ({
                   tossSkin ? tossSkin.empty : "text-slate-500"
                 }`}
               >
-                <div className={`w-8 h-8 rounded-full border-2 border-transparent animate-spin ${
-                  tossSkin ? "border-t-[#2F6FE4] border-r-[#D9E8FF]" : "border-t-indigo-400 border-r-slate-600"
+                <div className={`w-8 h-8 rounded-full border-2 animate-spin ${
+                  tossSkin ? "border-[#D9E8FF] border-t-[#2F6FE4]" : "border-slate-700 border-t-indigo-400"
                 }`} />
                 <p className="mt-3 text-sm">{isKo ? "진행 중인 퍼즐방을 불러오는 중..." : "Loading active puzzle rooms..."}</p>
               </div>
@@ -1615,8 +1615,8 @@ const Lobby = ({
                   tossSkin ? tossSkin.empty : "text-slate-500"
                 }`}
               >
-                <div className={`w-8 h-8 rounded-full border-2 border-transparent animate-spin ${
-                  tossSkin ? "border-t-[#2F6FE4] border-r-[#D9E8FF]" : "border-t-amber-400 border-r-slate-600"
+                <div className={`w-8 h-8 rounded-full border-2 animate-spin ${
+                  tossSkin ? "border-[#D9E8FF] border-t-[#2F6FE4]" : "border-slate-700 border-t-amber-400"
                 }`} />
                 <p className="mt-3 text-sm">{isKo ? "완료된 퍼즐방을 불러오는 중..." : "Loading completed puzzle rooms..."}</p>
               </div>

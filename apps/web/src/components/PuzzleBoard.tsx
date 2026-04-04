@@ -4077,6 +4077,10 @@ export default function PuzzleBoard({
             targetX = state.x;
             targetY = state.y;
             isLocked = state.is_locked;
+            const ownerFromState = state?.snapped_by != null ? String(state.snapped_by).trim() : "";
+            if (ownerFromState) {
+              rememberSolvedPieceOwner(i, ownerFromState);
+            }
           } else {
             const pos = initialPositions[i];
             targetX = pos.x;
@@ -4090,10 +4094,6 @@ export default function PuzzleBoard({
             pieceContainer.zIndex = 0;
             initialPlacedCount++;
             snappedSoundedPieceIds.add(i);
-            const ownerFromState = state?.snapped_by != null ? String(state.snapped_by).trim() : "";
-            if (ownerFromState) {
-              rememberSolvedPieceOwner(i, ownerFromState);
-            }
           } else {
             pieceContainer.eventMode = 'static';
             pieceContainer.cursor = 'pointer';
