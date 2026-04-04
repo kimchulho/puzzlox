@@ -5785,10 +5785,6 @@ export default function PuzzleBoard({
               <span className="text-xs font-semibold whitespace-nowrap text-[#2F6FE4]">
                 {placedPieces} / {totalPieces}
               </span>
-              <span className="sm:hidden inline-flex items-center gap-1 text-[11px] font-semibold whitespace-nowrap text-[#2F6FE4]">
-                <Clock size={11} className="text-[#2F6FE4]" />
-                {formatTime(playTime)}
-              </span>
             </div>
           ) : (
             <div
@@ -5810,10 +5806,6 @@ export default function PuzzleBoard({
               </div>
               <span className={`text-xs font-medium whitespace-nowrap ${isTossMode ? "text-blue-700" : "text-indigo-400"}`}>
                 {placedPieces} / {totalPieces}
-              </span>
-              <span className="sm:hidden inline-flex items-center gap-1 text-[11px] font-medium font-mono whitespace-nowrap text-slate-300">
-                <Clock size={11} className="text-slate-400" />
-                {formatTime(playTime)}
               </span>
             </div>
           )}
@@ -5837,32 +5829,39 @@ export default function PuzzleBoard({
         {/* Bottom Row (Mobile) / Right Side (Desktop) */}
         <div className={`flex items-center gap-1 ${isTossMode && isTossWideMode ? "gap-2" : isTossMode ? "w-full justify-between gap-2" : "w-full sm:w-auto gap-1.5 sm:gap-2 justify-center sm:justify-end"}`}>
           {isTossMode ? (
-            <div className="flex items-center justify-center gap-2 flex-1 min-w-0 h-8 rounded-lg bg-[#F4F8FF] px-3 text-[#2F6FE4]">
-              <Users size={12} className="text-[#2F6FE4]" />
-              <span className="text-[11px] font-semibold max-w-[84px] truncate whitespace-nowrap" title={currentPlayerId}>
-                {currentPlayerId}
-              </span>
-              <span className="text-xs font-semibold whitespace-nowrap">{playerCount}/{maxPlayers}</span>
-            </div>
+            <>
+              <div className="flex items-center justify-center gap-2 flex-1 min-w-0 h-8 rounded-lg bg-[#F4F8FF] px-3 text-[#2F6FE4]">
+                <span className="text-[11px] font-semibold max-w-[120px] truncate whitespace-nowrap" title={currentPlayerId}>
+                  {currentPlayerId}
+                </span>
+              </div>
+              <div className="flex items-center justify-center gap-2 flex-1 min-w-0 h-8 rounded-lg bg-[#F4F8FF] px-3 text-[#2F6FE4]">
+                <Users size={12} className="text-[#2F6FE4]" />
+                <span className="text-xs font-semibold whitespace-nowrap">{playerCount}/{maxPlayers}</span>
+              </div>
+            </>
           ) : (
-            <div
-              className={`flex items-center gap-1 px-2 h-7 rounded-md border flex-1 sm:flex-none justify-center ${
-                isTossMode ? "bg-blue-50 border-blue-200" : "bg-slate-800/50 border-slate-700/50"
-              }`}
-              title={isKo ? "인원" : "Players"}
-            >
-              <Users size={12} className={isTossMode ? "text-blue-700" : "text-slate-400"} />
-              <span className="text-[11px] font-medium max-w-[96px] truncate whitespace-nowrap text-slate-300" title={currentPlayerId}>
-                {currentPlayerId}
-              </span>
-              <span className={`text-xs font-medium whitespace-nowrap ${isTossMode ? "text-blue-700" : ""}`}>
-                {playerCount}/{maxPlayers}
-              </span>
-            </div>
+            <>
+              <div
+                className="flex items-center gap-1 px-2 h-7 rounded-md border flex-1 sm:flex-none justify-center bg-slate-800/50 border-slate-700/50"
+                title={isKo ? "현재 플레이어" : "Current player"}
+              >
+                <span className="text-[11px] font-medium max-w-[96px] truncate whitespace-nowrap text-slate-300" title={currentPlayerId}>
+                  {currentPlayerId}
+                </span>
+              </div>
+              <div
+                className="flex items-center gap-1 px-2 h-7 rounded-md border flex-1 sm:flex-none justify-center bg-slate-800/50 border-slate-700/50"
+                title={isKo ? "인원" : "Players"}
+              >
+                <Users size={12} className="text-slate-400" />
+                <span className="text-xs font-medium whitespace-nowrap">{playerCount}/{maxPlayers}</span>
+              </div>
+            </>
           )}
 
           {isTossMode ? (
-            <div className="hidden sm:flex items-center justify-center gap-2 flex-1 min-w-0 h-8 rounded-lg bg-[#F4F8FF] px-3 text-[#2F6FE4]">
+            <div className="flex items-center justify-center gap-2 flex-1 min-w-0 h-8 rounded-lg bg-[#F4F8FF] px-3 text-[#2F6FE4]">
               <Clock size={12} className="text-[#2F6FE4]" />
               <span className="text-xs font-semibold whitespace-nowrap font-mono">
                 {formatTime(playTime)}
@@ -5870,7 +5869,7 @@ export default function PuzzleBoard({
             </div>
           ) : (
             <div
-              className={`hidden sm:flex items-center gap-1 px-2 h-7 rounded-md border flex-1 sm:flex-none justify-center ${
+              className={`flex items-center gap-1 px-2 h-7 rounded-md border flex-1 sm:flex-none justify-center ${
                 isTossMode ? "bg-blue-50 border-blue-200" : "bg-slate-800/50 border-slate-700/50"
               }`}
               title={isKo ? "플레이 시간" : "Play Time"}
