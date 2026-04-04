@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import { Trophy, RefreshCw, Users, Lock, Image as ImageIcon, Play, Plus, Grid, Clock, RotateCcw, Maximize, Minimize, LogOut, ShieldAlert, LogIn, ChevronDown, Languages } from 'lucide-react';
 import { supabase } from '../lib/supabaseClient';
 import { motion } from 'motion/react';
@@ -439,8 +439,8 @@ const Lobby = ({
     void fetchRooms({ background: false });
 
     // Subscribe to changes
-    const channel = supabase.channel('public:pixi_rooms')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'pixi_rooms' }, () => {
+    const channel = supabase.channel('public:rooms')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rooms' }, () => {
         void fetchRooms({ background: true });
       })
       .subscribe();
@@ -478,7 +478,7 @@ const Lobby = ({
     };
     if (user?.id) insertRow.created_by = user.id;
 
-    const { data, error } = await supabase.from('pixi_rooms').insert([insertRow]).select();
+    const { data, error } = await supabase.from('rooms').insert([insertRow]).select();
 
     if (data && data.length > 0) {
       const roomId = data[0].id;
@@ -745,7 +745,7 @@ const Lobby = ({
     }
 
     setIsJoiningByCode(true);
-    const { data, error } = await supabase.from('pixi_rooms').select('*').eq('id', id).maybeSingle();
+    const { data, error } = await supabase.from('rooms').select('*').eq('id', id).maybeSingle();
     setIsJoiningByCode(false);
 
     if (error) {
@@ -1802,4 +1802,5 @@ const Lobby = ({
 };
 
 export default Lobby;
+
 

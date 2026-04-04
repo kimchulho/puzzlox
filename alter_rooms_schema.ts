@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js';
+﻿import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -8,7 +8,7 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 async function alter() {
   const { error } = await supabase.rpc('exec_sql', {
-    sql_string: 'ALTER TABLE pixi_rooms ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMPTZ;'
+    sql_string: 'ALTER TABLE rooms ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMPTZ;'
   });
   if (error) {
     console.error('RPC Error:', error);
@@ -19,3 +19,4 @@ async function alter() {
   }
 }
 alter();
+

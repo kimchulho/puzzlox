@@ -1,4 +1,4 @@
-import { createClient } from "@supabase/supabase-js";
+﻿import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -17,20 +17,20 @@ if (!supabaseUrl || !supabaseKey) {
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 async function check() {
-  const usersResult = await supabase.from("pixi_users").select("*").limit(1);
+  const usersResult = await supabase.from("users").select("*").limit(1);
   const identitiesResult = await supabase
-    .from("pixi_user_identities")
+    .from("user_identities")
     .select("*")
     .limit(1);
 
   if (usersResult.error) {
-    console.error("pixi_users table check failed:", usersResult.error.message);
+    console.error("users table check failed:", usersResult.error.message);
     process.exit(1);
   }
 
   if (identitiesResult.error) {
     console.error(
-      "pixi_user_identities table check failed:",
+      "user_identities table check failed:",
       identitiesResult.error.message
     );
     process.exit(1);
@@ -39,9 +39,9 @@ async function check() {
   const usersColumns = Object.keys(usersResult.data?.[0] || {});
   const identityColumns = Object.keys(identitiesResult.data?.[0] || {});
 
-  console.log("pixi_users table reachable. columns(sample):", usersColumns);
+  console.log("users table reachable. columns(sample):", usersColumns);
   console.log(
-    "pixi_user_identities table reachable. columns(sample):",
+    "user_identities table reachable. columns(sample):",
     identityColumns
   );
 }
@@ -50,3 +50,4 @@ check().catch((error) => {
   console.error("Unexpected check error:", error);
   process.exit(1);
 });
+

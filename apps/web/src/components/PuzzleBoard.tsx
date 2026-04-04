@@ -1,4 +1,4 @@
-import React, {
+﻿import React, {
   type CSSProperties,
   type MutableRefObject,
   useEffect,
@@ -523,7 +523,7 @@ export default function PuzzleBoard({
   useEffect(() => {
     // Fetch room creation time and initial scores
     const fetchRoomData = async () => {
-      const { data: roomData } = await supabase.from('pixi_rooms').select('total_play_time_seconds, max_players, piece_count').eq('id', roomId).single();
+      const { data: roomData } = await supabase.from('rooms').select('total_play_time_seconds, max_players, piece_count').eq('id', roomId).single();
       if (roomData) {
         setPlayTime(roomData.total_play_time_seconds || 0);
         accumulatedTimeRef.current = roomData.total_play_time_seconds || 0;
@@ -531,7 +531,7 @@ export default function PuzzleBoard({
         if (roomData.piece_count) setTotalPieces(roomData.piece_count);
       }
 
-      const { data: scoreData } = await supabase.from('pixi_scores').select('*').eq('room_id', roomId).order('score', { ascending: false });
+      const { data: scoreData } = await supabase.from('scores').select('*').eq('room_id', roomId).order('score', { ascending: false });
       if (scoreData) {
         setScores(scoreData);
       }
@@ -661,7 +661,7 @@ export default function PuzzleBoard({
 
         // Update last active time when entering a room
         if (user && user.id) {
-          supabase.from('pixi_users').update({ last_active_at: new Date().toISOString() }).eq('id', user.id).then();
+          supabase.from('users').update({ last_active_at: new Date().toISOString() }).eq('id', user.id).then();
           void recordUserRoomVisit(roomId);
         }
         
@@ -2244,7 +2244,7 @@ export default function PuzzleBoard({
               return row;
             });
             const { error } = await supabase
-              .from('pixi_pieces')
+              .from('pieces')
               .upsert(payload, { onConflict: 'room_id, piece_index' });
             if (error) {
               console.error('Failed to save piece state', error);
@@ -2467,7 +2467,7 @@ export default function PuzzleBoard({
             if (user?.id) {
               setTimeout(async () => {
                 const { data: uData } = await supabase
-                  .from('pixi_users')
+                  .from('users')
                   .select('completed_puzzles, placed_pieces')
                   .eq('id', user.id)
                   .maybeSingle();
@@ -2535,9 +2535,9 @@ export default function PuzzleBoard({
             return;
           }
           // Fallback for environments where socket is unavailable.
-          const { data } = await supabase.from('pixi_scores').select('score').eq('room_id', roomId).eq('username', uname).maybeSingle();
+          const { data } = await supabase.from('scores').select('score').eq('room_id', roomId).eq('username', uname).maybeSingle();
           const newScore = (data?.score || 0) + points;
-          await supabase.from('pixi_scores').upsert({ room_id: roomId, username: uname, score: newScore }, { onConflict: 'room_id, username' });
+          await supabase.from('scores').upsert({ room_id: roomId, username: uname, score: newScore }, { onConflict: 'room_id, username' });
           enqueueRealtimeBroadcast('scoreUpdate', { username: uname, score: newScore });
         };
 
@@ -3796,7 +3796,7 @@ export default function PuzzleBoard({
         createMosaicFromImageRef.current = createMosaicFromImage;
 
         bumpProgress(46);
-        const { data: existingPieces } = await supabase.from('pixi_pieces').select('*').eq('room_id', roomId);
+        const { data: existingPieces } = await supabase.from('pieces').select('*').eq('room_id', roomId);
         const hasExistingState = existingPieces && existingPieces.length > 0;
         const pieceStates = new Map<number, any>();
         if (hasExistingState) {
@@ -3871,7 +3871,7 @@ export default function PuzzleBoard({
           }));
           
           for (let i = 0; i < inserts.length; i += 500) {
-             const { error } = await supabase.from('pixi_pieces').insert(inserts.slice(i, i + 500));
+             const { error } = await supabase.from('pieces').insert(inserts.slice(i, i + 500));
              if (error) {
                console.error('Error inserting pieces:', error);
                alert(`Error inserting pieces: ${error.message}`);
@@ -3879,7 +3879,7 @@ export default function PuzzleBoard({
           }
           
           // Update the room's piece_count to the actual generated count
-          await supabase.from('pixi_rooms').update({ piece_count: PIECE_COUNT }).eq('id', roomId);
+          await supabase.from('rooms').update({ piece_count: PIECE_COUNT }).eq('id', roomId);
         } else if (existingPieces && existingPieces.length < PIECE_COUNT) {
           // Handle missing pieces
           const missingIndices = [];
@@ -3911,7 +3911,7 @@ export default function PuzzleBoard({
             });
             
             for (let i = 0; i < inserts.length; i += 500) {
-               const { error } = await supabase.from('pixi_pieces').insert(inserts.slice(i, i + 500));
+               const { error } = await supabase.from('pieces').insert(inserts.slice(i, i + 500));
                if (error) {
                  console.error('Error inserting missing pieces:', error);
                }
@@ -4693,7 +4693,7 @@ export default function PuzzleBoard({
           if (socketRef.current) {
             socketRef.current.emit(ROOM_EVENTS.PuzzleCompleted, roomId);
           }
-          supabase.from('pixi_rooms').update({ status: 'completed' }).eq('id', roomId).then(({error}) => {
+          supabase.from('rooms').update({ status: 'completed' }).eq('id', roomId).then(({error}) => {
             if (error) console.error("Failed to update room status:", error);
           });
         } else {
@@ -6562,3 +6562,4 @@ export default function PuzzleBoard({
     </div>
   );
 }
+

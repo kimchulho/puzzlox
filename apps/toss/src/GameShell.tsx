@@ -1,4 +1,4 @@
-import {
+﻿import {
   closeView,
   graniteEvent,
   partner,
@@ -176,7 +176,7 @@ export default function GameShell({
 
       if (decodedId) {
         supabase
-          .from("pixi_rooms")
+          .from("rooms")
           .select("*")
           .eq("id", decodedId)
           .single()
@@ -235,7 +235,7 @@ export default function GameShell({
       const decodedId = isNumeric ? parseInt(rp, 10) : decodeRoomId(rp);
       if (decodedId) {
         supabase
-          .from("pixi_rooms")
+          .from("rooms")
           .select("*")
           .eq("id", decodedId)
           .single()
@@ -411,3 +411,4 @@ export default function GameShell({
     </>
   );
 }
+

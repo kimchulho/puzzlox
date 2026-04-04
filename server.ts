@@ -1,4 +1,4 @@
-import express from "express";
+﻿import express from "express";
 import { existsSync } from "fs";
 import { createServer as createViteServer } from "vite";
 import path from "path";
@@ -137,7 +137,7 @@ async function startServer() {
     }
 
     const { data: existingIdentity, error: existingError } = await authSupabase
-      .from("pixi_user_identities")
+      .from("user_identities")
       .select("id")
       .eq("provider", "web_local")
       .eq("provider_user_id", normalizedUsername)
@@ -153,7 +153,7 @@ async function startServer() {
     const passwordHash = await bcrypt.hash(rawPassword, 10);
 
     const { data: createdUser, error: userInsertError } = await authSupabase
-      .from("pixi_users")
+      .from("users")
       .insert({
         username: normalizedUsername,
         password: passwordHash,
@@ -170,7 +170,7 @@ async function startServer() {
         .json({ message: userInsertError?.message ?? "Failed to create user." });
     }
 
-    const { error: identityInsertError } = await authSupabase.from("pixi_user_identities").insert({
+    const { error: identityInsertError } = await authSupabase.from("user_identities").insert({
       user_id: createdUser.id,
       provider: "web_local",
       provider_user_id: normalizedUsername,
@@ -179,7 +179,7 @@ async function startServer() {
     });
 
     if (identityInsertError) {
-      await authSupabase.from("pixi_users").delete().eq("id", createdUser.id);
+      await authSupabase.from("users").delete().eq("id", createdUser.id);
       return res.status(500).json({ message: identityInsertError.message });
     }
 
@@ -211,7 +211,7 @@ async function startServer() {
     }
 
     const { data: identity, error: identityError } = await authSupabase
-      .from("pixi_user_identities")
+      .from("user_identities")
       .select("id, user_id, password_hash")
       .eq("provider", "web_local")
       .eq("provider_user_id", normalizedUsername)
@@ -230,7 +230,7 @@ async function startServer() {
     }
 
     const { data: user, error: userError } = await authSupabase
-      .from("pixi_users")
+      .from("users")
       .select("id, username, role, completed_puzzles, placed_pieces, created_at, last_active_at")
       .eq("id", identity.user_id)
       .maybeSingle();
@@ -243,12 +243,12 @@ async function startServer() {
     }
 
     await authSupabase
-      .from("pixi_user_identities")
+      .from("user_identities")
       .update({ last_login_at: new Date().toISOString() })
       .eq("id", identity.id);
 
     await authSupabase
-      .from("pixi_users")
+      .from("users")
       .update({ last_active_at: new Date().toISOString() })
       .eq("id", user.id);
 
@@ -376,7 +376,7 @@ async function startServer() {
     }
 
     const { data: existingIdentity, error: identityError } = await authSupabase
-      .from("pixi_user_identities")
+      .from("user_identities")
       .select("id, user_id")
       .eq("provider", "toss")
       .eq("provider_user_id", providerUserId)
@@ -390,7 +390,7 @@ async function startServer() {
     if (!userId) {
       const generatedUsername = `toss_${providerUserId}`.slice(0, 64);
       const { data: createdUser, error: createUserError } = await authSupabase
-        .from("pixi_users")
+        .from("users")
         .insert({
           username: generatedUsername,
           password: "",
@@ -409,7 +409,7 @@ async function startServer() {
       userId = createdUser.id as number;
 
       const { error: createIdentityError } = await authSupabase
-        .from("pixi_user_identities")
+        .from("user_identities")
         .insert({
           user_id: userId,
           provider: "toss",
@@ -419,18 +419,18 @@ async function startServer() {
         });
 
       if (createIdentityError) {
-        await authSupabase.from("pixi_users").delete().eq("id", userId);
+        await authSupabase.from("users").delete().eq("id", userId);
         return res.status(500).json({ message: createIdentityError.message });
       }
     } else {
       await authSupabase
-        .from("pixi_user_identities")
+        .from("user_identities")
         .update({ last_login_at: new Date().toISOString() })
         .eq("id", existingIdentity?.id);
     }
 
     const { data: user, error: userError } = await authSupabase
-      .from("pixi_users")
+      .from("users")
       .select("id, username, role, completed_puzzles, placed_pieces, created_at, last_active_at")
       .eq("id", userId)
       .single();
@@ -440,7 +440,7 @@ async function startServer() {
     }
 
     await authSupabase
-      .from("pixi_users")
+      .from("users")
       .update({ last_active_at: new Date().toISOString() })
       .eq("id", user.id);
 
@@ -470,7 +470,7 @@ async function startServer() {
     }
 
     const { data: user, error } = await authSupabase
-      .from("pixi_users")
+      .from("users")
       .select("id, username, role, completed_puzzles, placed_pieces, created_at, last_active_at")
       .eq("id", userId)
       .maybeSingle();
@@ -485,7 +485,7 @@ async function startServer() {
     return res.json({ user });
   });
 
-  /** 이어하기용 방문 목록 (RLS 우회: service role + JWT sub = pixi_users.id). */
+  /** 이어하기용 방문 목록 (RLS 우회: service role + JWT sub = users.id). */
   app.get("/api/user/room-visits", authRequired, async (req: AuthedRequest, res) => {
     if (!authSupabase) {
       return res.status(503).json({
@@ -498,7 +498,7 @@ async function startServer() {
     }
 
     const { data, error } = await authSupabase
-      .from("pixi_user_room_visits")
+      .from("user_room_visits")
       .select("room_id, last_visited_at")
       .eq("user_id", userId)
       .order("last_visited_at", { ascending: false })
@@ -527,7 +527,7 @@ async function startServer() {
       return res.status(400).json({ message: "roomId must be a positive number." });
     }
 
-    const { error } = await authSupabase.from("pixi_user_room_visits").upsert(
+    const { error } = await authSupabase.from("user_room_visits").upsert(
       {
         user_id: userId,
         room_id: roomId,
@@ -564,7 +564,7 @@ async function startServer() {
       return res.json(cached.payload);
     }
     const { data: activePublic, error: activePublicError } = await supabase
-      .from("pixi_rooms")
+      .from("rooms")
       .select("*")
       .eq("status", "active")
       .eq("is_private", false)
@@ -575,7 +575,7 @@ async function startServer() {
     let activeMine: any[] = [];
     if (userId != null) {
       const { data: mine, error: mineError } = await supabase
-        .from("pixi_rooms")
+        .from("rooms")
         .select("*")
         .eq("status", "active")
         .eq("created_by", userId);
@@ -593,7 +593,7 @@ async function startServer() {
     const active = [...merged.values()];
 
     const { data: completedPublic, error: completedError } = await supabase
-      .from("pixi_rooms")
+      .from("rooms")
       .select("*")
       .eq("status", "completed")
       .eq("is_private", false)
@@ -608,7 +608,7 @@ async function startServer() {
     const scoreByRoom = new Map<number, number>();
     if (roomIds.length > 0) {
       const { data: pieces, error: piecesError } = await supabase
-        .from("pixi_pieces")
+        .from("pieces")
         .select("room_id,is_locked")
         .in("room_id", roomIds);
       if (piecesError) {
@@ -622,7 +622,7 @@ async function startServer() {
         }
       }
       const { data: scores, error: scoresError } = await supabase
-        .from("pixi_scores")
+        .from("scores")
         .select("room_id,score")
         .in("room_id", roomIds);
       if (scoresError) {
@@ -653,7 +653,7 @@ async function startServer() {
     }
     if (newlyCompletedIds.length > 0) {
       const { error: markCompletedError } = await supabase
-        .from("pixi_rooms")
+        .from("rooms")
         .update({ status: "completed" })
         .in("id", newlyCompletedIds);
       if (markCompletedError) {
@@ -733,7 +733,7 @@ async function startServer() {
       await Promise.all(
         entries.map(async ([userId, delta]) => {
           const { data, error } = await supabase
-            .from("pixi_users")
+            .from("users")
             .select("total_play_time")
             .eq("id", userId)
             .maybeSingle();
@@ -743,7 +743,7 @@ async function startServer() {
           }
           const next = Number(data.total_play_time ?? 0) + delta;
           const { error: updateError } = await supabase
-            .from("pixi_users")
+            .from("users")
             .update({ total_play_time: next, last_active_at: new Date().toISOString() })
             .eq("id", userId);
           if (updateError) {
@@ -798,7 +798,7 @@ async function startServer() {
         })(),
       }));
       const { error } = await supabase
-        .from("pixi_pieces")
+        .from("pieces")
         .upsert(payload, { onConflict: "room_id,piece_index" });
       if (error) {
         console.warn("[piece-state/upsert]", { roomId, message: error.message });
@@ -947,7 +947,7 @@ async function startServer() {
       const cached = roomScoreCache.get(roomId);
       if (cached) return cached;
       const { data, error } = await supabase
-        .from("pixi_scores")
+        .from("scores")
         .select("username, score")
         .eq("room_id", roomId);
       if (error) {
@@ -974,7 +974,7 @@ async function startServer() {
       if (roomScores.length === 0) return;
       const usernames = roomScores.map((x) => x.username);
       const { data: users, error: usersError } = await supabase
-        .from("pixi_users")
+        .from("users")
         .select("id, username, completed_puzzles, placed_pieces")
         .in("username", usernames);
       if (usersError) {
@@ -991,7 +991,7 @@ async function startServer() {
           const completed = Number(u.completed_puzzles ?? 0) + 1;
           const placed = Number(u.placed_pieces ?? 0) + score;
           const { error } = await supabase
-            .from("pixi_users")
+            .from("users")
             .update({ completed_puzzles: completed, placed_pieces: placed })
             .eq("id", u.id);
           if (error) {
@@ -1035,7 +1035,7 @@ async function startServer() {
             oldRoom.accumulatedTime += (Date.now() - oldRoom.lastResumeTime) / 1000;
             oldRoom.lastResumeTime = null;
             
-            supabase.from("pixi_rooms").update({ 
+            supabase.from("rooms").update({ 
               total_play_time_seconds: Math.floor(oldRoom.accumulatedTime)
             }).eq("id", currentRoomId).then();
           }
@@ -1047,7 +1047,7 @@ async function startServer() {
 
       if (!roomStates.has(roomId)) {
         const { data } = await supabase
-          .from("pixi_rooms")
+          .from("rooms")
           .select("total_play_time_seconds, status")
           .eq("id", roomId)
           .single();
@@ -1202,7 +1202,7 @@ async function startServer() {
       const payload: ScoreSyncPayload = { roomId, username, score: nextScore };
       io.to(roomId.toString()).emit(ROOM_EVENTS.ScoreSync, payload);
       const { error } = await supabase
-        .from("pixi_scores")
+        .from("scores")
         .upsert({ room_id: roomId, username, score: nextScore }, { onConflict: "room_id,username" });
       if (error) {
         console.warn("[score-delta/upsert]", error.message);
@@ -1221,7 +1221,7 @@ async function startServer() {
         const finalTime = Math.floor(room.accumulatedTime);
 
         await supabase
-          .from("pixi_rooms")
+          .from("rooms")
           .update({ 
             total_play_time_seconds: finalTime,
             status: "completed" 
@@ -1258,7 +1258,7 @@ async function startServer() {
           }
           
           supabase
-            .from("pixi_rooms")
+            .from("rooms")
             .update({ 
               total_play_time_seconds: Math.floor(room.accumulatedTime)
             })
@@ -1281,7 +1281,7 @@ async function startServer() {
       if (room.users.size > 0 && !room.isCompleted) {
         const currentPlayTime = Math.floor(getCurrentPlayTime(room));
         supabase
-          .from("pixi_rooms")
+          .from("rooms")
           .update({ 
             total_play_time_seconds: currentPlayTime
           })
@@ -1328,3 +1328,4 @@ async function startServer() {
 }
 
 startServer();
+

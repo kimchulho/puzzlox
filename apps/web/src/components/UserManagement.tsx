@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { Users, Trash2 } from 'lucide-react';
 
@@ -35,7 +35,7 @@ export default function UserManagement() {
   const fetchUsers = async () => {
     setLoading(true);
     const { data, error } = await supabase
-      .from('pixi_users')
+      .from('users')
       .select('*')
       .order('created_at', { ascending: false });
 
@@ -55,7 +55,7 @@ export default function UserManagement() {
     if (!window.confirm('정말 이 사용자를 삭제하시겠습니까?')) return;
 
     const { error } = await supabase
-      .from('pixi_users')
+      .from('users')
       .delete()
       .eq('id', id);
 
@@ -151,3 +151,4 @@ export default function UserManagement() {
     </div>
   );
 }
+

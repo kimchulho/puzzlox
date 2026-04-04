@@ -1,4 +1,4 @@
-import { createClient } from "@supabase/supabase-js";
+﻿import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import bcrypt from "bcryptjs";
 
@@ -18,12 +18,12 @@ const isBcryptHash = (value: string) => /^\$2[aby]\$\d{2}\$/.test(value);
 
 async function main() {
   const { data: users, error: usersError } = await supabase
-    .from("pixi_users")
+    .from("users")
     .select("id, username, password")
     .not("username", "is", null);
 
   if (usersError) {
-    console.error("Failed to read pixi_users:", usersError.message);
+    console.error("Failed to read users:", usersError.message);
     process.exit(1);
   }
 
@@ -45,7 +45,7 @@ async function main() {
     }
 
     const { data: existingIdentity, error: existingError } = await supabase
-      .from("pixi_user_identities")
+      .from("user_identities")
       .select("id")
       .eq("provider", "web_local")
       .eq("provider_user_id", username)
@@ -66,7 +66,7 @@ async function main() {
       ? passwordRaw
       : await bcrypt.hash(passwordRaw, 10);
 
-    const { error: insertError } = await supabase.from("pixi_user_identities").insert({
+    const { error: insertError } = await supabase.from("user_identities").insert({
       user_id: user.id,
       provider: "web_local",
       provider_user_id: username,
@@ -90,3 +90,4 @@ main().catch((error) => {
   console.error("Unexpected backfill error:", error);
   process.exit(1);
 });
+

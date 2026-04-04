@@ -1,4 +1,4 @@
-import { createClient } from "@supabase/supabase-js";
+﻿import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import { readFileSync } from "fs";
 import path from "path";
@@ -38,10 +38,11 @@ async function main() {
     process.exit(1);
   }
 
-  console.log("Migration applied: pixi_user_room_visits");
+  console.log("Migration applied: user_room_visits");
 }
 
 main().catch((error) => {
   console.error("Unexpected migration error:", error);
   process.exit(1);
 });
+

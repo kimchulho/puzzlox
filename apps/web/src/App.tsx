@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -56,7 +56,7 @@ export default function App() {
       const decodedId = isNumeric ? parseInt(roomParam, 10) : decodeRoomId(roomParam);
 
       if (decodedId) {
-        supabase.from('pixi_rooms').select('*').eq('id', decodedId).single().then(({ data, error }) => {
+        supabase.from('rooms').select('*').eq('id', decodedId).single().then(({ data, error }) => {
           if (data && !error) {
             setCurrentRoom({ id: data.id, imageUrl: data.image_url, pieceCount: data.piece_count });
           } else {
@@ -81,7 +81,7 @@ export default function App() {
         const isNumeric = /^\d+$/.test(roomParam);
         const decodedId = isNumeric ? parseInt(roomParam, 10) : decodeRoomId(roomParam);
         if (decodedId) {
-          supabase.from('pixi_rooms').select('*').eq('id', decodedId).single().then(({ data, error }) => {
+          supabase.from('rooms').select('*').eq('id', decodedId).single().then(({ data, error }) => {
             if (data && !error) {
               setCurrentRoom({ id: data.id, imageUrl: data.image_url, pieceCount: data.piece_count });
             }
@@ -177,3 +177,4 @@ export default function App() {
     />
   );
 }
+
