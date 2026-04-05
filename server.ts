@@ -654,12 +654,20 @@ async function startServer() {
       }
     }
     if (newlyCompletedIds.length > 0) {
+      const completedAtIso = new Date().toISOString();
       const { error: markCompletedError } = await supabase
         .from("rooms")
-        .update({ status: "completed" })
+        .update({ status: "completed", completed_at: completedAtIso } as any)
         .in("id", newlyCompletedIds);
       if (markCompletedError) {
-        console.warn("[rooms-summary/mark-completed]", markCompletedError.message);
+        // Backward compatibility: if DB column is not migrated yet, retry without completed_at.
+        const retry = await supabase
+          .from("rooms")
+          .update({ status: "completed" })
+          .in("id", newlyCompletedIds);
+        if (retry.error) {
+          console.warn("[rooms-summary/mark-completed]", retry.error.message);
+        }
       }
     }
 
@@ -669,7 +677,18 @@ async function startServer() {
     for (const r of active.filter((x) => x.status === "completed")) {
       completedMerged.set(Number(r.id), r);
     }
-    const completedRooms = [...completedMerged.values()];
+    const completionTimeMs = (room: any) => {
+      const completedAtMs = Date.parse(String(room?.completed_at ?? ""));
+      if (Number.isFinite(completedAtMs)) return completedAtMs;
+      const createdAtMs = Date.parse(String(room?.created_at ?? ""));
+      const baseMs = Number.isFinite(createdAtMs) ? createdAtMs : 0;
+      const playSec = Number(room?.total_play_time_seconds ?? 0);
+      const elapsedMs = Number.isFinite(playSec) ? Math.max(0, Math.floor(playSec * 1000)) : 0;
+      return baseMs + elapsedMs;
+    };
+    const completedRooms = [...completedMerged.values()].sort(
+      (a, b) => completionTimeMs(b) - completionTimeMs(a)
+    );
     const payload = {
       activeRooms: finalActive,
       completedRooms,
@@ -1252,13 +1271,28 @@ async function startServer() {
         
         const finalTime = Math.floor(room.accumulatedTime);
 
-        await supabase
+        const completedAtIso = new Date().toISOString();
+        const { error: completeUpdateError } = await supabase
           .from("rooms")
-          .update({ 
+          .update({
             total_play_time_seconds: finalTime,
-            status: "completed" 
-          })
+            status: "completed",
+            completed_at: completedAtIso,
+          } as any)
           .eq("id", roomId);
+        if (completeUpdateError) {
+          // Backward compatibility: if DB column is not migrated yet, retry without completed_at.
+          const retry = await supabase
+            .from("rooms")
+            .update({
+              total_play_time_seconds: finalTime,
+              status: "completed",
+            })
+            .eq("id", roomId);
+          if (retry.error) {
+            console.warn("[puzzle-complete/update-room]", retry.error.message);
+          }
+        }
         await distributeCompletionRewards(roomId);
           
         // 완성 시 모든 유저에게 정지된 최종 시간 동기화

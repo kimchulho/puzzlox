@@ -24,12 +24,17 @@ CREATE TABLE IF NOT EXISTS public.rooms (
   password TEXT NULL,
   status TEXT NULL DEFAULT 'active'::text,
   created_at TIMESTAMPTZ NULL DEFAULT CURRENT_TIMESTAMP,
+  completed_at TIMESTAMPTZ NULL,
+  difficulty TEXT NULL DEFAULT 'medium'::text,
   has_password BOOLEAN NULL DEFAULT false,
   total_play_time_seconds INTEGER NULL DEFAULT 0,
   is_private BOOLEAN NULL DEFAULT false,
   room_code UUID NULL DEFAULT extensions.uuid_generate_v4(),
   created_by BIGINT NULL,
   CONSTRAINT rooms_pkey PRIMARY KEY (id),
+  CONSTRAINT rooms_difficulty_check CHECK (
+    difficulty = ANY (ARRAY['easy'::text, 'medium'::text, 'hard'::text])
+  ),
   CONSTRAINT rooms_created_by_fkey FOREIGN KEY (created_by) REFERENCES users (id) ON DELETE SET NULL
 ) TABLESPACE pg_default;
 

@@ -15,7 +15,7 @@ const graniteWebPort = Number(process.env.TOSS_GRANITE_WEB_PORT ?? "5174");
  * - appName: 콘솔에 만든 미니앱 ID와 반드시 동일 (intoss://{appName} 검증·업로드에 사용).
  * - outdir: `web.commands.build` 결과물 경로와 일치해야 합니다 (기본: apps/toss/dist).
  * - 로컬 샌드박스: `npm run dev:granite` (+ API 필요 시 `npm run dev:server`).
- * - Android 실기기(USB): `npm run android:reverse` 후 샌드박스에서 `intoss://web-puzzle`.
+ * - Android 실기기(USB): `npm run android:reverse` 후 샌드박스에서 `intoss://puzzlox`.
  *   (8081=Granite·5174=Vite·3000=API 가 PC로 붙음.) Wi‑Fi만 쓸 땐 `TOSS_GRANITE_WEB_HOST` 에 PC LAN IP.
  * - 원격(집 등): Cloudflare 터널 URL을 `TOSS_GRANITE_WEB_HOST` / `TOSS_GRANITE_WEB_PORT`(443) 로 지정.
  *
@@ -28,7 +28,7 @@ const graniteWebPort = Number(process.env.TOSS_GRANITE_WEB_PORT ?? "5174");
  * @see https://developers-apps-in-toss.toss.im/bedrock/reference/framework/UI/Config.html
  */
 export default defineConfig({
-  appName: "web-puzzle",
+  appName: "puzzlox",
   brand: {
     displayName: TOSS_APP_DISPLAY_NAME,
     primaryColor: "#3182F6",

@@ -7,6 +7,13 @@ import { recordUserRoomVisit } from '../lib/recordUserRoomVisit';
 import { apiUrl } from '../lib/apiBase';
 import { ImageSelectorModal } from './ImageSelectorModal';
 import {
+  DEFAULT_PUZZLE_DIFFICULTY,
+  normalizePuzzleDifficulty,
+  puzzleDifficultyLabel,
+  PUZZLE_DIFFICULTIES,
+  type PuzzleDifficulty,
+} from '../lib/puzzleDifficulty';
+import {
   TossLobbyBottomBanner,
   TOSS_LOBBY_BANNER_SLOT_H,
   TOSS_LOBBY_BANNER_VERTICAL_PAD,
@@ -233,7 +240,7 @@ const Lobby = ({
   locale = 'ko',
   onToggleLocale,
 }: {
-  onJoinRoom: (roomId: number, imageUrl: string, pieceCount: number) => void;
+  onJoinRoom: (roomId: number, imageUrl: string, pieceCount: number, difficulty: PuzzleDifficulty) => void;
   user?: any;
   onLogout: () => void;
   onAdmin: () => void;
@@ -253,6 +260,7 @@ const Lobby = ({
   const [isRoomsRefreshing, setIsRoomsRefreshing] = useState(false);
   const roomsRefreshDepthRef = useRef(0);
   const [pieceCount, setPieceCount] = useState(100);
+  const [difficulty, setDifficulty] = useState<PuzzleDifficulty>(DEFAULT_PUZZLE_DIFFICULTY);
   const [imageUrl, setImageUrl] = useState('https://ewbjogsolylcbfmpmyfa.supabase.co/storage/v1/object/public/checki/2.jpg');
   const [imageSource, setImageSource] = useState<'public' | 'custom'>('public');
   const [publicImages, setPublicImages] = useState<any[]>([]);
@@ -509,6 +517,7 @@ const Lobby = ({
       creator_name: creatorName,
       image_url: currentImageUrl,
       piece_count: resolvedPieceCount,
+      difficulty,
       max_players: maxPlayers,
       status: 'active',
       has_password: !!password.trim(),
@@ -525,7 +534,8 @@ const Lobby = ({
       const recentRooms = JSON.parse(localStorage.getItem('puzzle_recent_rooms') || '[]');
       const newRecent = [roomId, ...recentRooms.filter((id: number) => id !== roomId)].slice(0, 10);
       localStorage.setItem('puzzle_recent_rooms', JSON.stringify(newRecent));
-      const doEnter = () => onJoinRoom(roomId, data[0].image_url, resolvedPieceCount);
+      const doEnter = () =>
+        onJoinRoom(roomId, data[0].image_url, resolvedPieceCount, normalizePuzzleDifficulty((data[0] as any).difficulty ?? difficulty));
       if (tossUi) {
         const ok = await runTossRewardedRoomEntry(roomId, doEnter);
         if (!ok) {
@@ -721,7 +731,12 @@ const Lobby = ({
     if (user?.id) void recordUserRoomVisit(room.id);
 
     const enter = () => {
-      onJoinRoom(room.id, room.image_url, room.totalPieces || room.piece_count);
+      onJoinRoom(
+        room.id,
+        room.image_url,
+        room.totalPieces || room.piece_count,
+        normalizePuzzleDifficulty(room.difficulty)
+      );
       setRoomCodeInput("");
       setRoomCodeError(null);
     };
@@ -1246,6 +1261,49 @@ const Lobby = ({
               </p>
             </div>
 
+            <div>
+              <label
+                className={`block text-sm font-medium mb-2 flex items-center gap-2 ${
+                  tossSkin ? tossSkin.label : "text-slate-300"
+                }`}
+              >
+                <ShieldAlert className="w-4 h-4" /> {isKo ? "난이도" : "Difficulty"}
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                {PUZZLE_DIFFICULTIES.map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => setDifficulty(d)}
+                    className={`py-2 rounded-lg text-sm font-medium transition-colors ${
+                      difficulty === d
+                        ? tossSkin
+                          ? tossSkin.pillOn
+                          : "bg-indigo-500 text-white"
+                        : tossSkin
+                          ? tossSkin.pillOff
+                          : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+                    }`}
+                  >
+                    {puzzleDifficultyLabel(d, isKo)}
+                  </button>
+                ))}
+              </div>
+              <p className={`text-xs mt-2 ${tossSkin ? tossSkin.empty : "text-slate-500"}`}>
+                {difficulty === "easy"
+                  ? (isKo
+                      ? "초급: 퍼즐판에 20% 투명 밑그림이 항상 표시됩니다."
+                      : "Easy: 20% transparent guide image is always visible.")
+                  : difficulty === "medium"
+                  ? (isKo
+                      ? "중급: 맞춘 조각 주변만 20% 투명 밑그림이 점진적으로 드러납니다."
+                      : "Medium: 20% guide is revealed only around solved pieces.")
+                  : (isKo
+                      ? "고급: 밑그림 없음. 내부 조각은 테두리/고정 체인과 연결될 때만 정위치 고정됩니다."
+                      : "Hard: no guide; inner pieces lock only when connected to border/locked chain.")}
+              </p>
+            </div>
+
             <div className="flex gap-3">
               <div className="flex-1">
                 <label
@@ -1407,7 +1465,7 @@ const Lobby = ({
               tossSkin ? "border-[#D9E8FF]" : "border-slate-800/80"
             }`}
           >
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center justify-between gap-2 min-h-[40px]">
               <h2
                 className={`text-xl font-bold flex items-center gap-2 min-w-0 ${
                   tossSkin ? tossSkin.heading : "text-white"
@@ -1484,7 +1542,7 @@ const Lobby = ({
               return displayActiveRooms.map((room) => (
                 <div
                   key={room.id}
-                  className={`group rounded-2xl overflow-hidden transition-all duration-300 border ${
+                  className={`group h-[224px] rounded-2xl overflow-hidden transition-all duration-300 border flex flex-col ${
                     tossSkin
                       ? tossSkin.roomCard
                       : "bg-slate-950 border-slate-800 hover:border-indigo-500/50"
@@ -1567,11 +1625,11 @@ const Lobby = ({
                     </div>
                   )}
                   <div
-                    className={`p-3 flex items-center justify-between ${
+                    className={`p-3 h-[88px] flex items-center justify-between ${
                       tossSkin ? "bg-white" : ""
                     }`}
                   >
-                    <div className="text-left">
+                    <div className="text-left flex-1 min-w-0">
                       <p
                         className={`text-sm font-medium flex items-center gap-2 ${
                           tossSkin ? "text-slate-800" : "text-slate-300"
@@ -1614,7 +1672,7 @@ const Lobby = ({
                       type="button"
                       onClick={() => void handleJoinSpecificRoom(room)}
                       disabled={tossRewardGateBusy}
-                      className={`max-w-[min(11rem,46%)] px-3 py-2 rounded-xl text-sm font-medium transition-colors leading-tight ${
+                      className={`max-w-[min(11rem,46%)] h-9 px-3 rounded-xl text-sm font-medium transition-colors leading-tight whitespace-nowrap shrink-0 ${
                         tossSkin ? tossSkin.joinBtn : "bg-indigo-500/10 hover:bg-indigo-500 text-indigo-400 hover:text-white"
                       } disabled:opacity-50 disabled:pointer-events-none`}
                     >
@@ -1636,14 +1694,18 @@ const Lobby = ({
               tossSkin ? "border-[#D9E8FF]" : "border-slate-800/80"
             }`}
           >
-            <h2
-              className={`text-xl font-bold flex items-center gap-2 ${
-                tossSkin ? tossSkin.heading : "text-white"
-              }`}
-            >
-              <Trophy className={`w-5 h-5 ${tossSkin ? tossSkin.subtleIcon : "text-amber-400"}`} />
-              {isKo ? "완료된 퍼즐방" : "Completed Puzzles"}
-            </h2>
+            <div className="flex items-center justify-between gap-2 min-h-[40px]">
+              <h2
+                className={`text-xl font-bold flex items-center gap-2 min-w-0 ${
+                  tossSkin ? tossSkin.heading : "text-white"
+                }`}
+              >
+                <Trophy className={`w-5 h-5 ${tossSkin ? tossSkin.subtleIcon : "text-amber-400"}`} />
+                {isKo ? "완료된 퍼즐방" : "Completed Puzzles"}
+              </h2>
+              {/* Height/spacing parity with left header refresh button */}
+              <span className="w-[34px] h-[34px] shrink-0" aria-hidden="true" />
+            </div>
           </div>
 
           <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
@@ -1672,7 +1734,7 @@ const Lobby = ({
                 {completedRooms.map((room) => (
                   <div
                     key={room.id}
-                    className={`group rounded-2xl overflow-hidden transition-all duration-300 border ${
+                    className={`group h-[224px] rounded-2xl overflow-hidden transition-all duration-300 border flex flex-col ${
                       tossSkin
                         ? `${tossSkin.roomCard} hover:border-[#2F6FE4]/45`
                         : "bg-slate-950 border-slate-800 hover:border-amber-500/50"
@@ -1725,8 +1787,8 @@ const Lobby = ({
                     <div className={`w-full h-1.5 overflow-hidden ${tossSkin ? tossSkin.progress : "bg-slate-800"}`}>
                       <div className={`h-full w-full ${tossSkin ? tossSkin.completedBar : "bg-amber-500"}`} />
                     </div>
-                    <div className={`p-3 flex items-center justify-between ${tossSkin ? "bg-white" : ""}`}>
-                      <div className="text-left">
+                    <div className={`p-3 h-[88px] flex items-center justify-between ${tossSkin ? "bg-white" : ""}`}>
+                      <div className="text-left flex-1 min-w-0">
                         <p
                           className={`text-sm font-medium flex items-center gap-2 ${
                             tossSkin ? "text-slate-800" : "text-slate-300"
@@ -1743,7 +1805,7 @@ const Lobby = ({
                         </p>
                         <p className={`text-xs flex items-center mt-1 ${tossSkin ? "text-slate-500" : "text-slate-500"}`}>
                           <Clock className="w-3 h-3 mr-1" />
-                          {new Date(room.created_at).toLocaleDateString()}
+                          {new Date(room.completed_at || room.created_at).toLocaleDateString()}
                           <span
                             className={`font-medium ml-1 ${
                               tossSkin ? tossSkin.completedAccent : "text-amber-400"
@@ -1757,7 +1819,7 @@ const Lobby = ({
                         type="button"
                         onClick={() => void handleJoinSpecificRoom(room, { skipTossRewardedAd: true })}
                         disabled={tossRewardGateBusy}
-                        className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${
+                        className={`h-9 px-4 rounded-xl text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
                           tossSkin ? tossSkin.viewBtn : "bg-amber-500/10 hover:bg-amber-500 text-amber-400 hover:text-white"
                         } disabled:opacity-50 disabled:pointer-events-none`}
                       >

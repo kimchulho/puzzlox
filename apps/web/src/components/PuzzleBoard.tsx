@@ -26,6 +26,8 @@ import { REALTIME_CHANNEL_STATES } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabaseClient';
 import { encodeRoomId } from '../lib/roomCode';
 import { recordUserRoomVisit } from '../lib/recordUserRoomVisit';
+import { canClusterLockOnBoard, normalizePuzzleDifficulty, type PuzzleDifficulty } from '../lib/puzzleDifficulty';
+import { createPuzzleHintLayer, type PuzzleHintLayer } from '../lib/puzzleHintLayer';
 
 const SNAP_THRESHOLD = 30;
 /** 와이드 툴바–퍼즐 사이 빈 줄(측정·라운딩·DP) 보정: 퍼즐 inset 을 살짝 줄임 */
@@ -153,6 +155,7 @@ export default function PuzzleBoard({
   roomId,
   imageUrl,
   pieceCount,
+  difficulty = "medium",
   onBack,
   user,
   setUser,
@@ -169,6 +172,7 @@ export default function PuzzleBoard({
   roomId: number;
   imageUrl: string;
   pieceCount: number;
+  difficulty?: PuzzleDifficulty;
   onBack: () => void;
   user: any;
   setUser: (user: any) => void;
@@ -247,6 +251,7 @@ export default function PuzzleBoard({
   const [bgColor, setBgColor] = useState('#1e293b'); // default slate-800
   const [maxPlayers, setMaxPlayers] = useState(8);
   const isKo = locale === 'ko';
+  const puzzleDifficulty = normalizePuzzleDifficulty(difficulty);
   const [isCopied, setIsCopied] = useState(false);
   const [isTossWideMode, setIsTossWideMode] = useState(false);
   const tossWidePrefHydratedRef = useRef(false);
@@ -259,6 +264,7 @@ export default function PuzzleBoard({
   const refreshPieceOwnerOverlayRef = useRef<(() => void) | null>(null);
   const showPieceOwnerOverlayRef = useRef(showPieceOwnerOverlay);
   const ownerOverlayOpacityRef = useRef(ownerOverlayOpacityPct / 100);
+  const boardLockedPieceIdsRef = useRef<Set<number>>(new Set());
 
   const handleShareLink = () => {
     const url = `${window.location.origin}/?room=${encodeRoomId(roomId)}`;
@@ -584,6 +590,7 @@ export default function PuzzleBoard({
           setScores(scoreData);
         }
         if (Array.isArray(pieceData)) {
+          boardLockedPieceIdsRef.current.clear();
           for (const row of pieceData) {
             const pieceId = Number(row.piece_index);
             if (!Number.isFinite(pieceId)) continue;
@@ -598,6 +605,7 @@ export default function PuzzleBoard({
               piece.zIndex = 0;
               const lockIcon = piece.getChildByLabel("lockIcon");
               if (lockIcon) lockIcon.visible = false;
+              boardLockedPieceIdsRef.current.add(pieceId);
             }
           }
         }
@@ -732,6 +740,7 @@ export default function PuzzleBoard({
     let releaseOwnedPieceLocks: (() => void) | null = null;
     let deferredBevelRafId: number | null = null;
     let appInstance: PIXI.Application | null = null;
+    let hintLayer: PuzzleHintLayer | null = null;
     let deviceMotionHandler: ((event: DeviceMotionEvent) => void) | null = null;
     let easterTicker: (() => void) | null = null;
     /** true: 조각은 벡터+베벨(조각당 generateTexture 생략)·자물쇠 텍스처 1회 공유. false: 기존 래스터 조각+자물쇠. */
@@ -752,6 +761,7 @@ export default function PuzzleBoard({
       try {
         setIsLoading(true);
         setLoadProgress(0);
+        boardLockedPieceIdsRef.current.clear();
 
         let progRaf: number | null = null;
         let progPending = 0;
@@ -1971,6 +1981,18 @@ export default function PuzzleBoard({
         boardBg.stroke({ width: 2 * canvasOutlineScale, color: 0x000000, alpha: 0.5 });
         boardBg.zIndex = -1;
         world.addChild(boardBg);
+        hintLayer = createPuzzleHintLayer({
+          renderer: app.renderer,
+          world,
+          texture,
+          boardStartX,
+          boardStartY,
+          boardWidth,
+          boardHeight,
+          pieceWidth,
+          pieceHeight,
+          difficulty: puzzleDifficulty,
+        });
         bumpProgress(38);
 
         // 탭(돌기) 방향 미리 계산
@@ -2689,6 +2711,13 @@ export default function PuzzleBoard({
           let snapped = false;
           let offsetX = 0;
           let offsetY = 0;
+          const canClusterBoardLock = canClusterLockOnBoard(
+            puzzleDifficulty,
+            cluster,
+            boardLockedPieceIdsRef.current,
+            GRID_COLS,
+            GRID_ROWS
+          );
 
           // 1. Check piece-to-piece snapping
           for (const id of cluster) {
@@ -2728,6 +2757,9 @@ export default function PuzzleBoard({
 
           // 2. Check board snapping if not snapped to a piece
           if (!snapped) {
+            if (!canClusterBoardLock) {
+              // Hard mode: inner clusters must be connected to border/locked chain before board lock.
+            } else {
             // If the cluster contains all pieces, automatically snap it to the board
             if (cluster.size === PIECE_COUNT) {
               const firstId = Array.from(cluster)[0];
@@ -2757,6 +2789,7 @@ export default function PuzzleBoard({
                   break;
                 }
               }
+            }
             }
           }
 
@@ -2796,13 +2829,17 @@ export default function PuzzleBoard({
             const targetY = boardStartY + r * pieceHeight;
             
             let isLocked = false;
-            if (Math.abs(p.x - targetX) < 1 && Math.abs(p.y - targetY) < 1) {
+            if (canClusterBoardLock && Math.abs(p.x - targetX) < 1 && Math.abs(p.y - targetY) < 1) {
               p.eventMode = 'none';
               p.zIndex = 0;
               const lockIcon = p.getChildByLabel('lockIcon');
               if (lockIcon) lockIcon.visible = false;
               isLocked = true;
               lockedPieceIds.add(id);
+              boardLockedPieceIdsRef.current.add(id);
+              hintLayer?.revealPiece(id, GRID_COLS, GRID_ROWS);
+            } else {
+              boardLockedPieceIdsRef.current.delete(id);
             }
             dbUpdates.push({
               piece_index: id,
@@ -4271,6 +4308,8 @@ export default function PuzzleBoard({
             pieceContainer.y = targetY;
             pieceContainer.eventMode = 'none';
             pieceContainer.zIndex = 0;
+            boardLockedPieceIdsRef.current.add(i);
+            hintLayer?.revealPiece(i, GRID_COLS, GRID_ROWS);
             initialPlacedCount++;
             snappedSoundedPieceIds.add(i);
           } else {
@@ -5136,6 +5175,8 @@ export default function PuzzleBoard({
                   pieceContainer.eventMode = 'none';
                   pieceContainer.zIndex = 0;
                   pieceContainer.alpha = 1; // 잠금 해제 및 원래 투명도 복구
+                  boardLockedPieceIdsRef.current.add(u.pieceId);
+                  hintLayer?.revealPiece(u.pieceId, GRID_COLS, GRID_ROWS);
                 } else {
                   // 다른 사용자가 드래그 중인 조각도 위로 올리기
                   topZIndex++;
@@ -5533,6 +5574,12 @@ export default function PuzzleBoard({
             /* noop */
           }
           try {
+            hintLayer?.destroy();
+            hintLayer = null;
+          } catch {
+            /* noop */
+          }
+          try {
             appInst?.destroy(true);
           } catch {
             /* noop */
@@ -5564,7 +5611,7 @@ export default function PuzzleBoard({
         setTimeout(runHeavyTeardown, 0);
       }
     };
-  }, [imageUrl, isTossMode, isTossWideMode]);
+  }, [imageUrl, isTossMode, isTossWideMode, puzzleDifficulty]);
 
   const handleMiniPadPointerDown = (e: React.PointerEvent) => {
     e.preventDefault();

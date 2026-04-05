@@ -11,6 +11,7 @@ import Admin from './components/Admin';
 import TermsOfService from './components/TermsOfService';
 import { supabase } from './lib/supabaseClient';
 import { encodeRoomId, decodeRoomId } from './lib/roomCode';
+import { normalizePuzzleDifficulty, type PuzzleDifficulty } from './lib/puzzleDifficulty';
 
 function readStoredPuzzleUser(): unknown | null {
   try {
@@ -30,7 +31,7 @@ export default function App() {
     return 'ko';
   });
   const [pathname, setPathname] = useState(() => window.location.pathname);
-  const [currentRoom, setCurrentRoom] = useState<{id: number, imageUrl: string, pieceCount: number} | null>(null);
+  const [currentRoom, setCurrentRoom] = useState<{id: number, imageUrl: string, pieceCount: number, difficulty: PuzzleDifficulty} | null>(null);
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<any>(() => readStoredPuzzleUser());
   const [showAdmin, setShowAdmin] = useState(false);
@@ -58,7 +59,12 @@ export default function App() {
       if (decodedId) {
         supabase.from('rooms').select('*').eq('id', decodedId).single().then(({ data, error }) => {
           if (data && !error) {
-            setCurrentRoom({ id: data.id, imageUrl: data.image_url, pieceCount: data.piece_count });
+            setCurrentRoom({
+              id: data.id,
+              imageUrl: data.image_url,
+              pieceCount: data.piece_count,
+              difficulty: normalizePuzzleDifficulty((data as any).difficulty),
+            });
           } else {
             window.history.replaceState({}, '', '/');
           }
@@ -83,7 +89,12 @@ export default function App() {
         if (decodedId) {
           supabase.from('rooms').select('*').eq('id', decodedId).single().then(({ data, error }) => {
             if (data && !error) {
-              setCurrentRoom({ id: data.id, imageUrl: data.image_url, pieceCount: data.piece_count });
+              setCurrentRoom({
+                id: data.id,
+                imageUrl: data.image_url,
+                pieceCount: data.piece_count,
+                difficulty: normalizePuzzleDifficulty((data as any).difficulty),
+              });
             }
           });
         }
@@ -94,10 +105,10 @@ export default function App() {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  const handleJoinRoom = (roomId: number, imageUrl: string, pieceCount: number) => {
+  const handleJoinRoom = (roomId: number, imageUrl: string, pieceCount: number, difficulty: PuzzleDifficulty) => {
     const roomCode = encodeRoomId(roomId);
     window.history.pushState({}, '', `/?room=${roomCode}`);
-    setCurrentRoom({ id: roomId, imageUrl, pieceCount });
+    setCurrentRoom({ id: roomId, imageUrl, pieceCount, difficulty });
   };
 
   const handleLeaveRoom = () => {
@@ -155,6 +166,7 @@ export default function App() {
           roomId={currentRoom.id} 
           imageUrl={currentRoom.imageUrl} 
           pieceCount={currentRoom.pieceCount} 
+          difficulty={currentRoom.difficulty}
           onBack={handleLeaveRoom}
           user={user}
           setUser={setUser}
