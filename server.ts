@@ -863,14 +863,25 @@ async function startServer() {
         for (const u of entries) pending.set(u.piece_index, u);
       } else if (LOG_PIECE_PERSIST) {
         const unlocked = payload.filter((r) => r.is_locked !== true);
-        console.info("[piece-state/upsert:ok]", {
+        const orientLine = unlocked
+          .slice(0, 16)
+          .map((r) => {
+            const q = Number(r.rotation_quarter ?? 0);
+            return `#${r.piece_index} q=${q}(${q * 90}°) ${r.is_back_face ? "back" : "front"}`;
+          })
+          .join(" | ");
+        console.info(
+          `[piece-state/upsert:ok] room=${roomId} rows=${payload.length} serviceRole=${Boolean(authSupabase)} ${orientLine}`
+        );
+        console.info("[piece-state/upsert:ok] detail", {
           roomId,
           rows: payload.length,
           serviceRole: Boolean(authSupabase),
           orientationSample: unlocked.slice(0, 16).map((r) => ({
             i: r.piece_index,
-            q: r.rotation_quarter,
-            back: r.is_back_face,
+            quarter: r.rotation_quarter,
+            deg: Number(r.rotation_quarter ?? 0) * 90,
+            face: r.is_back_face ? "back" : "front",
           })),
         });
       }
@@ -1420,14 +1431,24 @@ async function startServer() {
         };
       });
       if (LOG_PIECE_PERSIST) {
-        console.info("[MoveBatch→enqueueRoomPieceState]", {
+        const orientLine = persistUpdates
+          .map((p) => {
+            const q = Number(p.rotationQuarter ?? 0);
+            return `#${p.pieceId} q=${q}(${q * 90}°) ${p.isBackFace ? "back" : "front"}`;
+          })
+          .join(" | ");
+        console.info(
+          `[MoveBatch→enqueueRoomPieceState] room=${roomId} user=${userId} count=${persistUpdates.length} ${orientLine}`
+        );
+        console.info("[MoveBatch→enqueueRoomPieceState] detail", {
           roomId,
           userId,
           count: persistUpdates.length,
           orientation: persistUpdates.map((p) => ({
             id: p.pieceId,
-            q: p.rotationQuarter,
-            back: p.isBackFace,
+            quarter: p.rotationQuarter,
+            deg: Number(p.rotationQuarter ?? 0) * 90,
+            face: p.isBackFace ? "back" : "front",
           })),
         });
       }

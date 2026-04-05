@@ -2123,6 +2123,15 @@ export default function PuzzleBoard({
         const dbgPiecePersist =
           import.meta.env.VITE_LOG_PIECE_PERSIST === "1" ||
           String(import.meta.env.VITE_LOG_PIECE_PERSIST).toLowerCase() === "true";
+        const dbgFormatOrientation = (
+          rows: { pieceId: number; rotationQuarter?: number; isBackFace?: boolean }[]
+        ) =>
+          rows
+            .map((o) => {
+              const q = o.rotationQuarter ?? 0;
+              return `#${o.pieceId} quarter=${q} (${q * 90}°) ${o.isBackFace ? "back" : "front"}`;
+            })
+            .join(" | ");
 
         const sendMoveBatch = throttle((
           updates: {pieceId: number, x: number, y: number, isLocked?: boolean, snappedBy?: string, rotationQuarter?: number, isBackFace?: boolean}[],
@@ -2150,15 +2159,20 @@ export default function PuzzleBoard({
               };
             });
             if (dbgPiecePersist) {
-              console.info("[Puzzlox:persist] MoveBatch emit (socket)", {
+              console.info(
+                `[Puzzlox:persist] MoveBatch emit room=${roomId} user=${me} ` +
+                  `orientation: ${dbgFormatOrientation(outgoing)}`
+              );
+              console.info("[Puzzlox:persist] MoveBatch emit (socket) detail", {
                 roomId,
                 userId: me,
                 snapped: opts?.snapped === true,
                 count: outgoing.length,
                 orientation: outgoing.map((o) => ({
                   id: o.pieceId,
-                  q: o.rotationQuarter,
-                  back: o.isBackFace,
+                  quarter: o.rotationQuarter,
+                  deg: (o.rotationQuarter ?? 0) * 90,
+                  face: o.isBackFace ? "back" : "front",
                 })),
               });
             }
@@ -2868,6 +2882,8 @@ export default function PuzzleBoard({
         };
 
         const snapCluster = (cluster: Set<number>) => {
+          const ownerSnapshot = new Map(solvedPieceOwner);
+          const localOwner = getLocalUsername();
           let snapped = false;
           let offsetX = 0;
           let offsetY = 0;
@@ -2981,7 +2997,6 @@ export default function PuzzleBoard({
           }
 
           // Check if any piece is in the absolute correct position to lock it
-          const localOwner = getLocalUsername();
           if (snapped) {
             cluster.forEach((id) => {
               rememberSolvedPieceOwner(id, localOwner);
@@ -3053,9 +3068,22 @@ export default function PuzzleBoard({
           }
           
           if (snapped) {
-            updateScore(1);
+            let scoreAdd = 0;
+            if (lockedPieceIds.size > 0) {
+              for (const id of lockedPieceIds) {
+                const prior = (ownerSnapshot.get(id) ?? "").trim();
+                if (prior === "") {
+                  scoreAdd += 1;
+                }
+              }
+            } else {
+              scoreAdd = 1;
+            }
+            if (scoreAdd > 0) {
+              void updateScore(scoreAdd);
+            }
           }
-          
+
           return snapped;
         };
 
@@ -3168,14 +3196,19 @@ export default function PuzzleBoard({
           if (updates.length > 0) {
             if (dbgPiecePersist) {
               const sk = socketRef.current;
-              console.info("[Puzzlox:persist] rotate cluster (before sendMoveBatch)", {
+              console.info(
+                `[Puzzlox:persist] rotate cluster room=${roomId} socket=${Boolean(sk?.connected)} ` +
+                  `orientation: ${dbgFormatOrientation(updates)}`
+              );
+              console.info("[Puzzlox:persist] rotate cluster (before sendMoveBatch) detail", {
                 roomId,
                 socketConnected: Boolean(sk?.connected),
                 count: updates.length,
                 orientation: updates.map((o) => ({
                   id: o.pieceId,
-                  q: o.rotationQuarter,
-                  back: o.isBackFace,
+                  quarter: o.rotationQuarter,
+                  deg: (o.rotationQuarter ?? 0) * 90,
+                  face: o.isBackFace ? "back" : "front",
                 })),
               });
             }
@@ -6285,7 +6318,15 @@ export default function PuzzleBoard({
         }
       >
         {/* Top Row (Mobile) / Left Side (Desktop) */}
-        <div className={`flex items-center gap-1 ${isTossMode && isTossWideMode ? "gap-2" : isTossMode ? "w-full justify-between gap-2" : "w-full justify-between sm:w-auto gap-1.5 sm:gap-2"}`}>
+        <div
+          className={`flex items-center gap-1 min-w-0 ${
+            isTossMode && isTossWideMode
+              ? "gap-2 shrink overflow-x-auto"
+              : isTossMode
+              ? "w-full justify-between gap-2"
+              : "w-full justify-between sm:w-auto gap-1.5 sm:gap-2"
+          }`}
+        >
           <div className={`flex items-center ${isTossMode ? "gap-2" : "gap-1.5"}`}>
             {!isTossMode ? (
               <button 
@@ -6556,8 +6597,16 @@ export default function PuzzleBoard({
           ) : null}
         </div>
 
-        {/* Bottom Row (Mobile) / Right Side (Desktop) */}
-        <div className={`flex items-center gap-1 ${isTossMode && isTossWideMode ? "gap-2" : isTossMode ? "w-full justify-between gap-2" : "w-full sm:w-auto gap-1.5 sm:gap-2 justify-center sm:justify-end"}`}>
+        {/* Bottom Row (Mobile) / Right Side (Desktop) — min-w-0 + overflow-x so actions (e.g. nightmare rotate) stay reachable on narrow phones */}
+        <div
+          className={`flex items-center gap-1 min-w-0 ${
+            isTossMode && isTossWideMode
+              ? "gap-2 min-w-0 overflow-x-auto"
+              : isTossMode
+              ? "w-full justify-start gap-2 overflow-x-auto"
+              : "w-full sm:w-auto gap-1.5 sm:gap-2 justify-center sm:justify-end overflow-x-auto sm:overflow-x-visible"
+          }`}
+        >
           {isTossMode ? (
             <>
               <div className="flex items-center justify-center gap-2 flex-1 min-w-0 h-8 rounded-lg bg-[#F4F8FF] px-3 text-[#2F6FE4]">
@@ -6589,6 +6638,20 @@ export default function PuzzleBoard({
               </div>
             </>
           )}
+
+          {isNightmare ? (
+            <button
+              onClick={() => rotateFlipSelectionRef.current?.()}
+              className={`flex items-center justify-center w-7 h-7 rounded-md transition-colors border shrink-0 ${
+                isTossMode
+                  ? "h-8 w-10 rounded-lg bg-[#F4F8FF] text-[#2F6FE4] border-none"
+                  : "bg-slate-800/50 hover:bg-slate-700 border-slate-700/50 text-slate-300 hover:text-white"
+              }`}
+              title={isKo ? "선택 조각 회전/앞면화" : "Rotate/flip selected pieces"}
+            >
+              <RotateCcw size={14} />
+            </button>
+          ) : null}
 
           {isTossMode ? (
             <div className={`${isMobileLandscape || isMobilePortrait ? "hidden" : "flex"} items-center justify-center gap-2 flex-1 min-w-0 h-8 rounded-lg bg-[#F4F8FF] px-3 text-[#2F6FE4]`}>
@@ -6817,20 +6880,6 @@ export default function PuzzleBoard({
               title={isKo ? "순위표" : "Leaderboard"}
             >
               <Trophy size={14} className={showLeaderboard ? (isTossMode ? 'text-[#2F6FE4]' : 'text-amber-400') : (isTossMode ? 'text-[#2F6FE4]' : 'text-slate-400')} />
-            </button>
-          ) : null}
-
-          {isNightmare ? (
-            <button
-              onClick={() => rotateFlipSelectionRef.current?.()}
-              className={`flex items-center justify-center w-7 h-7 rounded-md transition-colors border shrink-0 ${
-                isTossMode
-                  ? "bg-[#F4F8FF] text-[#2F6FE4] border-none"
-                  : "bg-slate-800/50 hover:bg-slate-700 border-slate-700/50 text-slate-300 hover:text-white"
-              }`}
-              title={isKo ? "선택 조각 회전/앞면화" : "Rotate/flip selected pieces"}
-            >
-              <RotateCcw size={14} />
             </button>
           ) : null}
 
