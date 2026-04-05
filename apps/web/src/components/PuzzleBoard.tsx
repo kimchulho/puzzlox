@@ -277,6 +277,9 @@ export default function PuzzleBoard({
   } | null>(null);
   const setNightmareFloatingRotatePosRef = useRef(setNightmareFloatingRotatePos);
   setNightmareFloatingRotatePosRef.current = setNightmareFloatingRotatePos;
+  const [nightmareMiniPadRotateEnabled, setNightmareMiniPadRotateEnabled] = useState(false);
+  const setNightmareMiniPadRotateEnabledRef = useRef(setNightmareMiniPadRotateEnabled);
+  setNightmareMiniPadRotateEnabledRef.current = setNightmareMiniPadRotateEnabled;
   const nightmareFloatRotateBtnRef = useRef<HTMLButtonElement | null>(null);
   const isNightmareRef = useRef(isNightmare);
   isNightmareRef.current = isNightmare;
@@ -2383,6 +2386,7 @@ export default function PuzzleBoard({
           return false;
         };
 
+        let lastNightmareMiniPadRotateAllowed = false;
         let lastNightmareFloatingHudKey = "\uffff";
         const pushNightmareFloatingHud = (next: { left: number; top: number } | null) => {
           const key = next ? `${Math.round(next.left)}:${Math.round(next.top)}` : "";
@@ -2400,7 +2404,41 @@ export default function PuzzleBoard({
         };
 
         const tickNightmareFloatingRotateHud = () => {
-          if (!isNightmareRef.current || !isSmartphoneUiRef.current) {
+          /** 미니 패드 원형 회전: rotateFlipSelectedCluster 와 동일 조건(선택/드래그 클러스터·잠금·원격 점유) */
+          if (!isNightmareRef.current) {
+            if (lastNightmareMiniPadRotateAllowed) {
+              lastNightmareMiniPadRotateAllowed = false;
+              setNightmareMiniPadRotateEnabledRef.current(false);
+            }
+            pushNightmareFloatingHud(null);
+            return;
+          }
+          const targetClusterForRotate =
+            selectedCluster && selectedCluster.size > 0
+              ? selectedCluster
+              : isDragging && dragCluster.size > 0
+                ? dragCluster
+                : null;
+          let rotateAllowed = false;
+          if (
+            targetClusterForRotate &&
+            targetClusterForRotate.size > 0 &&
+            !isClusterHeldRemotely(targetClusterForRotate)
+          ) {
+            for (const id of targetClusterForRotate) {
+              const piece = pieces.current.get(id);
+              if (piece && piece.eventMode !== "none") {
+                rotateAllowed = true;
+                break;
+              }
+            }
+          }
+          if (rotateAllowed !== lastNightmareMiniPadRotateAllowed) {
+            lastNightmareMiniPadRotateAllowed = rotateAllowed;
+            setNightmareMiniPadRotateEnabledRef.current(rotateAllowed);
+          }
+
+          if (!isSmartphoneUiRef.current) {
             pushNightmareFloatingHud(null);
             return;
           }
@@ -6276,6 +6314,7 @@ export default function PuzzleBoard({
 
     return () => {
       isMounted = false;
+      setNightmareMiniPadRotateEnabledRef.current(false);
       socketLockAppliedRef.current = null;
       socketLockReleasedRef.current = null;
       socketLockDeniedRef.current = null;
@@ -7582,23 +7621,63 @@ export default function PuzzleBoard({
               : undefined
           }
         >
-        {/* Zoom Pad */}
-        <div 
-          className={`w-36 sm:w-48 h-9 rounded-full border-2 backdrop-blur-md flex items-center justify-center cursor-ew-resize touch-none ${
-            isTossMode
-              ? "border-[#D9E8FF] bg-[#F4F8FF]/95 text-[#2F6FE4] shadow-[0_8px_20px_rgba(47,111,228,0.12)]"
-              : "border-indigo-500/35 bg-slate-800/80 text-indigo-400"
-          }`}
-          onPointerDown={handleZoomPadPointerDown}
-          onPointerMove={handleZoomPadPointerMove}
-          onPointerUp={handleZoomPadPointerUp}
-          onPointerCancel={handleZoomPadPointerUp}
-          title="Drag left/right to zoom"
-        >
-          <div className={`flex items-center justify-between w-full px-3 pointer-events-none ${isTossMode ? "text-[#2F6FE4]" : "text-slate-400"}`}>
-            <Plus size={16} />
-            <div className={`w-6 sm:w-10 h-1 rounded-full ${isTossMode ? "bg-[#B7CDF9]" : "bg-slate-600"}`}></div>
-            <Minus size={16} />
+        <div className="flex items-center gap-2">
+          {isNightmare ? (
+            <button
+              type="button"
+              disabled={!nightmareMiniPadRotateEnabled}
+              onClick={() => rotateFlipSelectionRef.current?.()}
+              onPointerDown={(e) => e.stopPropagation()}
+              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-2 backdrop-blur-md touch-none select-none transition-opacity ${
+                nightmareMiniPadRotateEnabled
+                  ? isTossMode
+                    ? "border-[#D9E8FF] bg-[#F4F8FF]/95 text-[#2F6FE4] shadow-[0_8px_20px_rgba(47,111,228,0.12)] active:bg-[#EAF2FF]"
+                    : "border-indigo-500/35 bg-slate-800/80 text-indigo-300 hover:text-white active:bg-slate-700/80"
+                  : isTossMode
+                    ? "cursor-not-allowed border-[#E8EEF8] bg-[#F4F8FF]/60 text-[#B7C5E0] opacity-70"
+                    : "cursor-not-allowed border-slate-600/50 bg-slate-800/50 text-slate-500 opacity-60"
+              }`}
+              style={{ touchAction: "none", overscrollBehavior: "none" }}
+              title={
+                isKo
+                  ? nightmareMiniPadRotateEnabled
+                    ? "선택 조각 회전/앞면화"
+                    : "회전할 조각을 선택하세요"
+                  : nightmareMiniPadRotateEnabled
+                    ? "Rotate/flip selected pieces"
+                    : "Select pieces to rotate"
+              }
+              aria-label={
+                isKo
+                  ? nightmareMiniPadRotateEnabled
+                    ? "선택 조각 회전"
+                    : "회전 비활성"
+                  : nightmareMiniPadRotateEnabled
+                    ? "Rotate selected pieces"
+                    : "Rotate unavailable"
+              }
+            >
+              <RotateCcw size={16} className="pointer-events-none shrink-0" strokeWidth={2.25} />
+            </button>
+          ) : null}
+          {/* Zoom Pad */}
+          <div
+            className={`w-36 sm:w-48 h-9 rounded-full border-2 backdrop-blur-md flex items-center justify-center cursor-ew-resize touch-none ${
+              isTossMode
+                ? "border-[#D9E8FF] bg-[#F4F8FF]/95 text-[#2F6FE4] shadow-[0_8px_20px_rgba(47,111,228,0.12)]"
+                : "border-indigo-500/35 bg-slate-800/80 text-indigo-400"
+            }`}
+            onPointerDown={handleZoomPadPointerDown}
+            onPointerMove={handleZoomPadPointerMove}
+            onPointerUp={handleZoomPadPointerUp}
+            onPointerCancel={handleZoomPadPointerUp}
+            title="Drag left/right to zoom"
+          >
+            <div className={`flex items-center justify-between w-full px-3 pointer-events-none ${isTossMode ? "text-[#2F6FE4]" : "text-slate-400"}`}>
+              <Plus size={16} />
+              <div className={`w-6 sm:w-10 h-1 rounded-full ${isTossMode ? "bg-[#B7CDF9]" : "bg-slate-600"}`}></div>
+              <Minus size={16} />
+            </div>
           </div>
         </div>
 
