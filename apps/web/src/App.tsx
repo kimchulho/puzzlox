@@ -9,6 +9,7 @@ import Lobby from './components/Lobby';
 import Auth from './components/Auth';
 import Admin from './components/Admin';
 import TermsOfService from './components/TermsOfService';
+import UserDashboard from './components/UserDashboard';
 import { supabase } from './lib/supabaseClient';
 import { encodeRoomId, decodeRoomId } from './lib/roomCode';
 import { normalizePuzzleDifficulty, type PuzzleDifficulty } from './lib/puzzleDifficulty';
@@ -142,6 +143,36 @@ export default function App() {
     return <TermsOfService onBack={() => navigateToPath('/')} />;
   }
 
+  const publicProfileMatch = pathname.match(/^\/u\/([^/]+)\/?$/);
+  const publicProfileUsername = publicProfileMatch
+    ? decodeURIComponent(publicProfileMatch[1])
+    : null;
+
+  if (pathname === '/dashboard' || pathname === '/dashboard/') {
+    return (
+      <UserDashboard
+        mode="self"
+        onBack={() => navigateToPath('/')}
+        onJoinRoom={handleJoinRoom}
+        locale={locale}
+        user={user}
+        setUser={setUser}
+      />
+    );
+  }
+
+  if (publicProfileUsername) {
+    return (
+      <UserDashboard
+        mode="public"
+        publicUsername={publicProfileUsername}
+        onBack={() => navigateToPath('/')}
+        onJoinRoom={handleJoinRoom}
+        locale={locale}
+      />
+    );
+  }
+
   if (showAuth) {
     return (
       <Auth
@@ -184,6 +215,7 @@ export default function App() {
       onAdmin={() => setShowAdmin(true)}
       onLoginClick={() => setShowAuth(true)}
       onOpenTerms={() => navigateToPath('/terms')}
+      onOpenDashboard={() => navigateToPath('/dashboard')}
       locale={locale}
       onToggleLocale={toggleLocale}
     />

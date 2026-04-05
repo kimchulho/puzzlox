@@ -3012,7 +3012,7 @@ export default function PuzzleBoard({
               setTimeout(async () => {
                 const { data: uData } = await supabase
                   .from('users')
-                  .select('completed_puzzles, placed_pieces')
+                  .select('completed_puzzles, placed_pieces, profile_public')
                   .eq('id', user.id)
                   .maybeSingle();
                 if (!uData) return;
@@ -3020,6 +3020,7 @@ export default function PuzzleBoard({
                   ...user,
                   completed_puzzles: uData.completed_puzzles,
                   placed_pieces: uData.placed_pieces,
+                  profile_public: (uData as { profile_public?: boolean }).profile_public,
                 };
                 localStorage.setItem('puzzle_user', JSON.stringify(updatedUser));
                 setUser(updatedUser);

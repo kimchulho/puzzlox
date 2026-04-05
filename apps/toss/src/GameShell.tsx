@@ -12,7 +12,9 @@ import Admin from "@web/components/Admin";
 import Lobby from "@web/components/Lobby";
 import PuzzleBoard from "@web/components/PuzzleBoard";
 import TermsOfService from "@web/components/TermsOfService";
+import UserDashboard from "@web/components/UserDashboard";
 import { decodeRoomId, encodeRoomId } from "@web/lib/roomCode";
+import { normalizePuzzleDifficulty, type PuzzleDifficulty } from "@web/lib/puzzleDifficulty";
 import { supabase } from "@web/lib/supabaseClient";
 import { clearSession } from "./lib/tossSession";
 import { LeavePuzzleConfirmDialog } from "./LeavePuzzleConfirmDialog";
@@ -40,6 +42,7 @@ export default function GameShell({
     id: number;
     imageUrl: string;
     pieceCount: number;
+    difficulty: PuzzleDifficulty;
   } | null>(null);
   const [loading, setLoading] = useState(true);
   const [showAdmin, setShowAdmin] = useState(false);
@@ -191,6 +194,7 @@ export default function GameShell({
                 id: data.id,
                 imageUrl: data.image_url,
                 pieceCount: data.piece_count,
+                difficulty: normalizePuzzleDifficulty((data as { difficulty?: string }).difficulty),
               });
             } else {
               window.history.replaceState({}, "", "/");
@@ -245,6 +249,7 @@ export default function GameShell({
                 id: data.id,
                 imageUrl: data.image_url,
                 pieceCount: data.piece_count,
+                difficulty: normalizePuzzleDifficulty((data as { difficulty?: string }).difficulty),
               });
             }
           });
@@ -255,12 +260,17 @@ export default function GameShell({
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
-  const handleJoinRoom = (roomId: number, imageUrl: string, pieceCount: number) => {
+  const handleJoinRoom = (
+    roomId: number,
+    imageUrl: string,
+    pieceCount: number,
+    difficulty: PuzzleDifficulty = "medium"
+  ) => {
     const roomCode = encodeRoomId(roomId);
     const url = `/?room=${roomCode}`;
     window.history.pushState({ layer: "puzzle" }, "", url);
     window.history.pushState({ layer: "puzzle-top" }, "", url);
-    setCurrentRoom({ id: roomId, imageUrl, pieceCount });
+    setCurrentRoom({ id: roomId, imageUrl, pieceCount, difficulty });
   };
 
   const handleLeaveRoom = () => {
@@ -348,6 +358,59 @@ export default function GameShell({
     );
   }
 
+  if (pathname === "/dashboard" || pathname === "/dashboard/") {
+    return (
+      <>
+        <div
+          className="min-h-screen box-border bg-slate-950"
+          style={{
+            paddingTop: tossSafeArea.top,
+            paddingLeft: tossSafeArea.left,
+            paddingRight: tossSafeArea.right,
+            paddingBottom: tossSafeArea.bottom,
+          }}
+        >
+          <UserDashboard
+            mode="self"
+            onBack={() => navigateToPath("/")}
+            onJoinRoom={handleJoinRoom}
+            locale="ko"
+            user={user ?? undefined}
+            setUser={(u) => setUser(u as AuthUser)}
+          />
+        </div>
+        {navLoginModal}
+      </>
+    );
+  }
+
+  const tossProfileMatch = pathname.match(/^\/u\/([^/]+)\/?$/);
+  if (tossProfileMatch) {
+    const un = decodeURIComponent(tossProfileMatch[1]);
+    return (
+      <>
+        <div
+          className="min-h-screen box-border bg-slate-950"
+          style={{
+            paddingTop: tossSafeArea.top,
+            paddingLeft: tossSafeArea.left,
+            paddingRight: tossSafeArea.right,
+            paddingBottom: tossSafeArea.bottom,
+          }}
+        >
+          <UserDashboard
+            mode="public"
+            publicUsername={un}
+            onBack={() => navigateToPath("/")}
+            onJoinRoom={handleJoinRoom}
+            locale="ko"
+          />
+        </div>
+        {navLoginModal}
+      </>
+    );
+  }
+
   if (showAdmin && user?.role === "admin") {
     return (
       <>
@@ -375,6 +438,7 @@ export default function GameShell({
             roomId={currentRoom.id}
             imageUrl={currentRoom.imageUrl}
             pieceCount={currentRoom.pieceCount}
+            difficulty={currentRoom.difficulty}
             onBack={handleLeaveRoom}
             user={user}
             setUser={setUser as (u: unknown) => void}
@@ -397,6 +461,7 @@ export default function GameShell({
         onLogout={handleLogout}
         onAdmin={() => setShowAdmin(true)}
         onLoginClick={onRequestTossLogin}
+        onOpenDashboard={() => navigateToPath("/dashboard")}
         onOpenTerms={() => {
           navigateToPath("/terms");
         }}

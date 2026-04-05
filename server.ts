@@ -49,6 +49,24 @@ const authSupabase = supabaseServiceRoleKey
 const pieceStateSupabase = authSupabase ?? supabase;
 const jwtSecret = process.env.JWT_SECRET || "dev-jwt-secret-change-me";
 
+/** Same algorithm as apps/web `encodeRoomId` (for API payloads). */
+function encodeRoomCodeForApi(id: number): string {
+  const M = 2176782336n;
+  const A = 1234567n;
+  const C = 890123n;
+  const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  const BASE = 36n;
+  const idBig = BigInt(id);
+  const encodedNum = (idBig * A + C) % M;
+  let num = encodedNum;
+  let str = "";
+  for (let i = 0; i < 6; i++) {
+    str = ALPHABET[Number(num % BASE)] + str;
+    num = num / BASE;
+  }
+  return str;
+}
+
 type AuthProvider = "web_local" | "toss";
 
 interface JwtPayload {
@@ -168,7 +186,7 @@ async function startServer() {
         completed_puzzles: 0,
         placed_pieces: 0,
       })
-      .select("id, username, role, completed_puzzles, placed_pieces, created_at, last_active_at")
+      .select("id, username, role, completed_puzzles, placed_pieces, profile_public, created_at, last_active_at")
       .single();
 
     if (userInsertError || !createdUser) {
@@ -238,7 +256,7 @@ async function startServer() {
 
     const { data: user, error: userError } = await authSupabase
       .from("users")
-      .select("id, username, role, completed_puzzles, placed_pieces, created_at, last_active_at")
+      .select("id, username, role, completed_puzzles, placed_pieces, profile_public, created_at, last_active_at")
       .eq("id", identity.user_id)
       .maybeSingle();
 
@@ -438,7 +456,7 @@ async function startServer() {
 
     const { data: user, error: userError } = await authSupabase
       .from("users")
-      .select("id, username, role, completed_puzzles, placed_pieces, created_at, last_active_at")
+      .select("id, username, role, completed_puzzles, placed_pieces, profile_public, created_at, last_active_at")
       .eq("id", userId)
       .single();
 
@@ -478,7 +496,7 @@ async function startServer() {
 
     const { data: user, error } = await authSupabase
       .from("users")
-      .select("id, username, role, completed_puzzles, placed_pieces, created_at, last_active_at")
+      .select("id, username, role, completed_puzzles, placed_pieces, profile_public, created_at, last_active_at")
       .eq("id", userId)
       .maybeSingle();
 
@@ -490,6 +508,288 @@ async function startServer() {
     }
 
     return res.json({ user });
+  });
+
+  app.patch("/api/user/profile", authRequired, async (req: AuthedRequest, res) => {
+    if (!authSupabase) {
+      return res.status(503).json({
+        message: "Auth server misconfigured. Set SUPABASE_SERVICE_ROLE_KEY in .env.",
+      });
+    }
+    const userId = Number(req.user?.sub);
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return res.status(401).json({ message: "Invalid token subject." });
+    }
+    const body = req.body ?? {};
+    const profilePublic = body.profilePublic;
+    if (typeof profilePublic !== "boolean") {
+      return res.status(400).json({ message: "profilePublic (boolean) is required." });
+    }
+    const { error: upErr } = await authSupabase
+      .from("users")
+      .update({ profile_public: profilePublic })
+      .eq("id", userId);
+    if (upErr) {
+      console.warn("[api/user/profile]", upErr.message);
+      return res.status(500).json({ message: upErr.message });
+    }
+    const { data: user, error: readErr } = await authSupabase
+      .from("users")
+      .select("id, username, role, completed_puzzles, placed_pieces, profile_public, created_at, last_active_at")
+      .eq("id", userId)
+      .maybeSingle();
+    if (readErr || !user) {
+      return res.status(500).json({ message: readErr?.message ?? "Failed to load user." });
+    }
+    return res.json({ user });
+  });
+
+  app.get("/api/user/dashboard", authRequired, async (req: AuthedRequest, res) => {
+    if (!authSupabase) {
+      return res.status(503).json({
+        message: "Auth server misconfigured. Set SUPABASE_SERVICE_ROLE_KEY in .env.",
+      });
+    }
+    const userId = Number(req.user?.sub);
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return res.status(401).json({ message: "Invalid token subject." });
+    }
+
+    const { data: me, error: meErr } = await authSupabase
+      .from("users")
+      .select("id, username, role, completed_puzzles, placed_pieces, profile_public, created_at, last_active_at")
+      .eq("id", userId)
+      .maybeSingle();
+    if (meErr || !me) {
+      return res.status(500).json({ message: meErr?.message ?? "User not found." });
+    }
+
+    const subjectUsername = String(me.username);
+
+    const { data: visits } = await authSupabase
+      .from("user_room_visits")
+      .select("room_id, last_visited_at")
+      .eq("user_id", userId);
+
+    const { data: scoreRows } = await authSupabase
+      .from("scores")
+      .select("room_id, score")
+      .eq("username", subjectUsername);
+
+    const roomIdSet = new Set<number>();
+    for (const v of visits ?? []) {
+      const rid = Number((v as { room_id?: unknown }).room_id);
+      if (Number.isFinite(rid) && rid > 0) roomIdSet.add(rid);
+    }
+    for (const s of scoreRows ?? []) {
+      const rid = Number((s as { room_id?: unknown }).room_id);
+      if (Number.isFinite(rid) && rid > 0) roomIdSet.add(rid);
+    }
+
+    const visitByRoom = new Map<number, string>();
+    for (const v of visits ?? []) {
+      const rid = Number((v as { room_id?: unknown }).room_id);
+      const t = (v as { last_visited_at?: unknown }).last_visited_at;
+      if (Number.isFinite(rid) && rid > 0 && typeof t === "string") visitByRoom.set(rid, t);
+    }
+    const scoreByRoom = new Map<number, number>();
+    for (const s of scoreRows ?? []) {
+      const rid = Number((s as { room_id?: unknown }).room_id);
+      const sc = Number((s as { score?: unknown }).score ?? 0);
+      if (Number.isFinite(rid) && rid > 0) scoreByRoom.set(rid, sc);
+    }
+
+    let participatedRooms: Array<Record<string, unknown>> = [];
+    if (roomIdSet.size > 0) {
+      const { data: rooms, error: roomsErr } = await authSupabase
+        .from("rooms")
+        .select(
+          "id, image_url, piece_count, difficulty, status, creator_name, created_by, created_at, completed_at"
+        )
+        .in("id", [...roomIdSet]);
+      if (roomsErr) {
+        return res.status(500).json({ message: roomsErr.message });
+      }
+      participatedRooms = (rooms ?? []).map((room: Record<string, unknown>) => {
+        const rid = Number(room.id);
+        const createdBy = room.created_by != null ? Number(room.created_by) : NaN;
+        const iAmCreator = Number.isFinite(createdBy) && createdBy === userId;
+        return {
+          roomId: rid,
+          roomCode: encodeRoomCodeForApi(rid),
+          imageUrl: (room.image_url as string) ?? null,
+          difficulty: (room.difficulty as string) ?? null,
+          status: (room.status as string) ?? null,
+          pieceCount: Number(room.piece_count ?? 0),
+          creatorName: (room.creator_name as string) ?? null,
+          lastVisitedAt: visitByRoom.get(rid) ?? null,
+          scoreInRoom: scoreByRoom.get(rid) ?? 0,
+          iAmCreator,
+        };
+      });
+      participatedRooms.sort((a, b) => {
+        const ta = a.lastVisitedAt ? Date.parse(String(a.lastVisitedAt)) : 0;
+        const tb = b.lastVisitedAt ? Date.parse(String(b.lastVisitedAt)) : 0;
+        if (tb !== ta) return tb - ta;
+        return Number(b.roomId) - Number(a.roomId);
+      });
+    }
+
+    const { data: createdRooms, error: crErr } = await authSupabase
+      .from("rooms")
+      .select("id, image_url, piece_count, difficulty, status, creator_name, created_at, completed_at")
+      .eq("created_by", userId)
+      .order("created_at", { ascending: false })
+      .limit(80);
+
+    if (crErr) {
+      return res.status(500).json({ message: crErr.message });
+    }
+
+    const myUploads = (createdRooms ?? []).map((room: Record<string, unknown>) => ({
+      roomId: Number(room.id),
+      roomCode: encodeRoomCodeForApi(Number(room.id)),
+      imageUrl: (room.image_url as string) ?? null,
+      difficulty: (room.difficulty as string) ?? null,
+      status: (room.status as string) ?? null,
+      pieceCount: Number(room.piece_count ?? 0),
+      createdAt: (room.created_at as string) ?? null,
+      completedAt: (room.completed_at as string) ?? null,
+    }));
+
+    return res.json({ user: me, participatedRooms, myUploads });
+  });
+
+  app.get("/api/profile/:username", async (req, res) => {
+    if (!authSupabase) {
+      return res.status(503).json({
+        message: "Auth server misconfigured. Set SUPABASE_SERVICE_ROLE_KEY in .env.",
+      });
+    }
+    const raw = (req.params.username ?? "").toString().trim().toLowerCase();
+    if (!raw) {
+      return res.status(400).json({ message: "username is required." });
+    }
+
+    const { data: subject, error: subErr } = await authSupabase
+      .from("users")
+      .select("id, username, completed_puzzles, placed_pieces, profile_public")
+      .eq("username", raw)
+      .maybeSingle();
+
+    if (subErr) {
+      return res.status(500).json({ message: subErr.message });
+    }
+    if (!subject) {
+      return res.status(404).json({ message: "User not found." });
+    }
+    if (!subject.profile_public) {
+      return res.status(404).json({ message: "Profile is private." });
+    }
+
+    const subjectId = Number(subject.id);
+    const subjectUsername = String(subject.username);
+
+    const { data: visits } = await authSupabase
+      .from("user_room_visits")
+      .select("room_id, last_visited_at")
+      .eq("user_id", subjectId);
+
+    const { data: scoreRows } = await authSupabase
+      .from("scores")
+      .select("room_id, score")
+      .eq("username", subjectUsername);
+
+    const roomIdSet = new Set<number>();
+    for (const v of visits ?? []) {
+      const rid = Number((v as { room_id?: unknown }).room_id);
+      if (Number.isFinite(rid) && rid > 0) roomIdSet.add(rid);
+    }
+    for (const s of scoreRows ?? []) {
+      const rid = Number((s as { room_id?: unknown }).room_id);
+      if (Number.isFinite(rid) && rid > 0) roomIdSet.add(rid);
+    }
+
+    const visitByRoom = new Map<number, string>();
+    for (const v of visits ?? []) {
+      const rid = Number((v as { room_id?: unknown }).room_id);
+      const t = (v as { last_visited_at?: unknown }).last_visited_at;
+      if (Number.isFinite(rid) && rid > 0 && typeof t === "string") visitByRoom.set(rid, t);
+    }
+    const scoreByRoom = new Map<number, number>();
+    for (const s of scoreRows ?? []) {
+      const rid = Number((s as { room_id?: unknown }).room_id);
+      const sc = Number((s as { score?: unknown }).score ?? 0);
+      if (Number.isFinite(rid) && rid > 0) scoreByRoom.set(rid, sc);
+    }
+
+    let participatedRooms: Array<Record<string, unknown>> = [];
+    if (roomIdSet.size > 0) {
+      const { data: rooms, error: roomsErr } = await authSupabase
+        .from("rooms")
+        .select(
+          "id, image_url, piece_count, difficulty, status, creator_name, created_by, created_at, completed_at"
+        )
+        .in("id", [...roomIdSet]);
+      if (roomsErr) {
+        return res.status(500).json({ message: roomsErr.message });
+      }
+      participatedRooms = (rooms ?? []).map((room: Record<string, unknown>) => {
+        const rid = Number(room.id);
+        const createdBy = room.created_by != null ? Number(room.created_by) : NaN;
+        const subjectCreatedThis = Number.isFinite(createdBy) && createdBy === subjectId;
+        return {
+          roomId: rid,
+          roomCode: encodeRoomCodeForApi(rid),
+          imageUrl: subjectCreatedThis ? null : ((room.image_url as string) ?? null),
+          imageHiddenReason: subjectCreatedThis ? ("creator_private" as const) : null,
+          difficulty: (room.difficulty as string) ?? null,
+          status: (room.status as string) ?? null,
+          pieceCount: Number(room.piece_count ?? 0),
+          creatorName: (room.creator_name as string) ?? null,
+          lastVisitedAt: visitByRoom.get(rid) ?? null,
+          scoreInRoom: scoreByRoom.get(rid) ?? 0,
+          iAmCreator: subjectCreatedThis,
+        };
+      });
+      participatedRooms.sort((a, b) => {
+        const ta = a.lastVisitedAt ? Date.parse(String(a.lastVisitedAt)) : 0;
+        const tb = b.lastVisitedAt ? Date.parse(String(b.lastVisitedAt)) : 0;
+        if (tb !== ta) return tb - ta;
+        return Number(b.roomId) - Number(a.roomId);
+      });
+    }
+
+    const { data: createdMeta, error: cmErr } = await authSupabase
+      .from("rooms")
+      .select("id, piece_count, difficulty, status, created_at, completed_at")
+      .eq("created_by", subjectId)
+      .order("created_at", { ascending: false })
+      .limit(80);
+
+    if (cmErr) {
+      return res.status(500).json({ message: cmErr.message });
+    }
+
+    const createdRooms = (createdMeta ?? []).map((room: Record<string, unknown>) => ({
+      roomId: Number(room.id),
+      roomCode: encodeRoomCodeForApi(Number(room.id)),
+      difficulty: (room.difficulty as string) ?? null,
+      status: (room.status as string) ?? null,
+      pieceCount: Number(room.piece_count ?? 0),
+      createdAt: (room.created_at as string) ?? null,
+      completedAt: (room.completed_at as string) ?? null,
+    }));
+
+    return res.json({
+      user: {
+        username: subject.username,
+        completed_puzzles: subject.completed_puzzles,
+        placed_pieces: subject.placed_pieces,
+      },
+      participatedRooms,
+      createdRooms,
+    });
   });
 
   /** 이어하기용 방문 목록 (RLS 우회: service role + JWT sub = users.id). */
@@ -1162,7 +1462,7 @@ async function startServer() {
       const usernames = roomScores.map((x) => x.username);
       const { data: users, error: usersError } = await supabase
         .from("users")
-        .select("id, username, completed_puzzles, placed_pieces")
+        .select("id, username, completed_puzzles, placed_pieces, profile_public")
         .in("username", usernames);
       if (usersError) {
         console.warn("[completion-reward/load-users]", usersError.message);

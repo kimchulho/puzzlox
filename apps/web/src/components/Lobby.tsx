@@ -258,6 +258,7 @@ const Lobby = ({
   onAdmin,
   onLoginClick,
   onOpenTerms,
+  onOpenDashboard,
   tossUi,
   locale = 'ko',
   onToggleLocale,
@@ -268,6 +269,8 @@ const Lobby = ({
   onAdmin: () => void;
   onLoginClick: () => void;
   onOpenTerms?: () => void;
+  /** 로그인 시 헤더의 아이디 탭 → 개인 대시보드 */
+  onOpenDashboard?: () => void;
   /** 앱인토스: 상태바 인셋 + TDS 상단(내비 영역) */
   tossUi?: TossLobbyUi;
   locale?: 'ko' | 'en';
@@ -287,7 +290,6 @@ const Lobby = ({
   const [imageSource, setImageSource] = useState<'public' | 'custom'>('public');
   const [publicImages, setPublicImages] = useState<any[]>([]);
   const [isImageModalOpen, setIsImageModalOpen] = useState(false);
-  const [showStatsModal, setShowStatsModal] = useState(false);
   const [showRoomFullModal, setShowRoomFullModal] = useState(false);
   const [roomFullInfo, setRoomFullInfo] = useState<{ roomCode: string; current: number; max: number } | null>(null);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(!!document.fullscreenElement);
@@ -897,7 +899,8 @@ const Lobby = ({
                     환영합니다,
                   </span>
                   <button
-                    onClick={() => setShowStatsModal(true)}
+                    type="button"
+                    onClick={() => onOpenDashboard?.()}
                     className={`font-medium transition-colors ${
                       tossLight
                         ? "text-[#2F6FE4] hover:text-[#2563EB]"
@@ -926,53 +929,6 @@ const Lobby = ({
                   </span>
                 </div>
               </div>
-
-              {/* Stats Modal (Mobile Only) */}
-              {showStatsModal && (
-                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 md:hidden">
-                  <div
-                    className={`rounded-2xl p-5 w-full max-w-sm shadow-2xl border ${
-                      tossUi
-                        ? "bg-white border-[#D9E8FF] text-slate-900"
-                        : "bg-slate-900 border-slate-700 text-white"
-                    }`}
-                  >
-                    <h3 className="text-base font-bold mb-4">나의 전적</h3>
-                    <div className="space-y-2.5 mb-5 text-sm">
-                      <div className="flex justify-between">
-                        <span className={tossUi ? "text-slate-500" : "text-slate-400"}>완성한 퍼즐</span>
-                        <span className="font-medium">{user.completed_puzzles || 0}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className={tossUi ? "text-slate-500" : "text-slate-400"}>맞춘 조각</span>
-                        <span className="font-medium">{user.placed_pieces || 0}</span>
-                      </div>
-                    </div>
-                    <div className="flex gap-3">
-                      <button
-                        onClick={onLogout}
-                        className={`flex-1 py-2 rounded-lg transition-colors text-sm ${
-                          tossUi
-                            ? "bg-red-50 hover:bg-red-100 text-red-600 border border-red-100"
-                            : "bg-red-500/10 hover:bg-red-500/20 text-red-400"
-                        }`}
-                      >
-                        로그아웃
-                      </button>
-                      <button
-                        onClick={() => setShowStatsModal(false)}
-                        className={`flex-1 py-2 rounded-lg transition-colors text-sm ${
-                          tossUi
-                            ? "bg-[#EAF2FF] hover:bg-[#D9E8FF] text-[#2F6FE4] font-medium"
-                            : "bg-slate-800 hover:bg-slate-700"
-                        }`}
-                      >
-                        닫기
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
 
               {user.role === 'admin' && (
                 <button 

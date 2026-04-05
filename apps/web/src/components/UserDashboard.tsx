@@ -1,0 +1,447 @@
+import React, { useCallback, useEffect, useState } from "react";
+import {
+  ArrowLeft,
+  Copy,
+  Grid,
+  Image as ImageIcon,
+  Loader2,
+  Lock,
+  Share2,
+  Trophy,
+  Users,
+} from "lucide-react";
+import { supabase } from "../lib/supabaseClient";
+import { apiUrl } from "../lib/apiBase";
+import {
+  normalizePuzzleDifficulty,
+  puzzleDifficultyLabel,
+  type PuzzleDifficulty,
+} from "../lib/puzzleDifficulty";
+
+type DashboardUser = {
+  id?: number;
+  username: string;
+  role?: string;
+  completed_puzzles?: number;
+  placed_pieces?: number;
+  profile_public?: boolean;
+};
+
+type RoomRow = {
+  roomId: number;
+  roomCode: string;
+  imageUrl: string | null;
+  difficulty: string | null;
+  status: string | null;
+  pieceCount: number;
+  creatorName?: string | null;
+  lastVisitedAt?: string | null;
+  scoreInRoom?: number;
+  iAmCreator?: boolean;
+  imageHiddenReason?: string | null;
+};
+
+type UploadRow = {
+  roomId: number;
+  roomCode: string;
+  imageUrl: string | null;
+  difficulty: string | null;
+  status: string | null;
+  pieceCount: number;
+  createdAt?: string | null;
+  completedAt?: string | null;
+};
+
+export default function UserDashboard({
+  mode,
+  publicUsername,
+  onBack,
+  onJoinRoom,
+  locale,
+  user,
+  setUser,
+}: {
+  mode: "self" | "public";
+  publicUsername?: string;
+  onBack: () => void;
+  onJoinRoom: (roomId: number, imageUrl: string, pieceCount: number, difficulty: PuzzleDifficulty) => void;
+  locale: "ko" | "en";
+  user?: DashboardUser | null;
+  setUser?: (u: DashboardUser) => void;
+}) {
+  const isKo = locale === "ko";
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [dashUser, setDashUser] = useState<DashboardUser | null>(null);
+  const [participated, setParticipated] = useState<RoomRow[]>([]);
+  const [myUploads, setMyUploads] = useState<UploadRow[]>([]);
+  const [createdOnly, setCreatedOnly] = useState<Omit<UploadRow, "imageUrl">[]>([]);
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [copyOk, setCopyOk] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      if (mode === "self") {
+        const token = localStorage.getItem("puzzle_access_token");
+        if (!token) {
+          setError(isKo ? "로그인이 필요합니다." : "Please sign in.");
+          setLoading(false);
+          return;
+        }
+        const res = await fetch(apiUrl("/api/user/dashboard"), {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const j = (await res.json().catch(() => ({}))) as {
+          message?: string;
+          user?: DashboardUser;
+          participatedRooms?: RoomRow[];
+          myUploads?: UploadRow[];
+        };
+        if (!res.ok) {
+          setError(j?.message || `HTTP ${res.status}`);
+          setLoading(false);
+          return;
+        }
+        setDashUser(j.user ?? null);
+        setParticipated(Array.isArray(j.participatedRooms) ? j.participatedRooms : []);
+        setMyUploads(Array.isArray(j.myUploads) ? j.myUploads : []);
+        setCreatedOnly([]);
+      } else {
+        const u = (publicUsername ?? "").trim().toLowerCase();
+        if (!u) {
+          setError(isKo ? "사용자를 찾을 수 없습니다." : "User not found.");
+          setLoading(false);
+          return;
+        }
+        const res = await fetch(apiUrl(`/api/profile/${encodeURIComponent(u)}`));
+        const j = (await res.json().catch(() => ({}))) as {
+          message?: string;
+          user?: { username: string; completed_puzzles?: number; placed_pieces?: number };
+          participatedRooms?: RoomRow[];
+          createdRooms?: Omit<UploadRow, "imageUrl">[];
+        };
+        if (!res.ok) {
+          setError(j?.message || (isKo ? "비공개이거나 없는 프로필입니다." : "Profile is private or not found."));
+          setLoading(false);
+          return;
+        }
+        setDashUser(
+          j.user
+            ? {
+                username: j.user.username,
+                completed_puzzles: j.user.completed_puzzles,
+                placed_pieces: j.user.placed_pieces,
+              }
+            : null
+        );
+        setParticipated(Array.isArray(j.participatedRooms) ? j.participatedRooms : []);
+        setMyUploads([]);
+        setCreatedOnly(Array.isArray(j.createdRooms) ? j.createdRooms : []);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [mode, publicUsername, isKo]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const toggleProfilePublic = async (next: boolean) => {
+    const token = localStorage.getItem("puzzle_access_token");
+    if (!token) return;
+    setProfileSaving(true);
+    try {
+      const res = await fetch(apiUrl("/api/user/profile"), {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ profilePublic: next }),
+      });
+      const j = (await res.json().catch(() => ({}))) as { user?: DashboardUser; message?: string };
+      if (!res.ok || !j.user) {
+        setError(j?.message || `HTTP ${res.status}`);
+        return;
+      }
+      setDashUser(j.user);
+      if (setUser && user) {
+        const merged = { ...user, ...j.user };
+        localStorage.setItem("puzzle_user", JSON.stringify(merged));
+        setUser(merged);
+      }
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
+  const enterRoom = async (roomId: number) => {
+    const { data, error: qErr } = await supabase.from("rooms").select("*").eq("id", roomId).maybeSingle();
+    if (qErr || !data) {
+      setError(isKo ? "방 정보를 불러올 수 없습니다." : "Could not load room.");
+      return;
+    }
+    onJoinRoom(
+      data.id,
+      data.image_url,
+      data.piece_count,
+      normalizePuzzleDifficulty((data as { difficulty?: string }).difficulty)
+    );
+  };
+
+  const copyProfileLink = () => {
+    const un = dashUser?.username ?? publicUsername ?? "";
+    if (!un) return;
+    const url = `${window.location.origin}/u/${encodeURIComponent(un)}`;
+    void navigator.clipboard.writeText(url).then(() => {
+      setCopyOk(true);
+      window.setTimeout(() => setCopyOk(false), 2000);
+    });
+  };
+
+  const title =
+    mode === "self"
+      ? isKo
+        ? "내 대시보드"
+        : "My dashboard"
+      : isKo
+        ? `${dashUser?.username ?? publicUsername ?? ""}님의 프로필`
+        : `${dashUser?.username ?? publicUsername ?? ""}'s profile`;
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <header className="sticky top-0 z-10 border-b border-slate-800 bg-slate-950/95 backdrop-blur-sm">
+        <div className="mx-auto flex max-w-3xl items-center gap-3 px-4 py-3">
+          <button
+            type="button"
+            onClick={onBack}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800"
+            aria-label={isKo ? "뒤로" : "Back"}
+          >
+            <ArrowLeft size={20} />
+          </button>
+          <h1 className="min-w-0 flex-1 truncate text-lg font-bold text-white">{title}</h1>
+        </div>
+      </header>
+
+      <main className="mx-auto max-w-3xl space-y-8 px-4 py-6">
+        {loading ? (
+          <div className="flex justify-center py-16 text-slate-400">
+            <Loader2 className="h-10 w-10 animate-spin" />
+          </div>
+        ) : error ? (
+          <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-6 text-center text-rose-200">
+            {error}
+            {mode === "self" && error.includes("로그인") ? (
+              <p className="mt-3 text-sm text-slate-400">{isKo ? "로비에서 로그인해 주세요." : "Sign in from the lobby."}</p>
+            ) : null}
+          </div>
+        ) : (
+          <>
+            <section className="grid gap-4 sm:grid-cols-2">
+              <div className="rounded-2xl border border-slate-800 bg-slate-900/80 p-4">
+                <div className="mb-1 flex items-center gap-2 text-slate-400">
+                  <Trophy size={18} className="text-amber-400" />
+                  <span className="text-sm">{isKo ? "완성한 퍼즐" : "Completed puzzles"}</span>
+                </div>
+                <p className="text-3xl font-bold text-white">{dashUser?.completed_puzzles ?? 0}</p>
+              </div>
+              <div className="rounded-2xl border border-slate-800 bg-slate-900/80 p-4">
+                <div className="mb-1 flex items-center gap-2 text-slate-400">
+                  <Grid size={18} className="text-indigo-400" />
+                  <span className="text-sm">{isKo ? "맞춘 조각(누적)" : "Pieces placed (total)"}</span>
+                </div>
+                <p className="text-3xl font-bold text-white">{dashUser?.placed_pieces ?? 0}</p>
+              </div>
+            </section>
+
+            {mode === "self" ? (
+              <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-start gap-3">
+                    <Users className="mt-0.5 h-5 w-5 shrink-0 text-indigo-400" />
+                    <div>
+                      <p className="font-semibold text-white">{isKo ? "프로필 공개" : "Public profile"}</p>
+                      <p className="mt-1 text-sm text-slate-400">
+                        {isKo
+                          ? "켜면 통계·참여 방 목록이 /u/아이디 로 열립니다. 내가 올린 퍼즐 이미지는 항상 비공개입니다."
+                          : "When on, stats and room history are visible at /u/username. Images you uploaded as room photos stay private."}
+                      </p>
+                    </div>
+                  </div>
+                  <label className="flex cursor-pointer items-center gap-2 self-start sm:self-center">
+                    <span className="text-sm text-slate-400">{isKo ? "공개" : "On"}</span>
+                    <input
+                      type="checkbox"
+                      className="h-5 w-5 rounded border-slate-600 bg-slate-800 text-indigo-500 focus:ring-indigo-500"
+                      checked={Boolean(dashUser?.profile_public)}
+                      disabled={profileSaving}
+                      onChange={(e) => void toggleProfilePublic(e.target.checked)}
+                    />
+                  </label>
+                </div>
+                {dashUser?.profile_public ? (
+                  <div className="mt-4 flex flex-wrap gap-2 border-t border-slate-800 pt-4">
+                    <button
+                      type="button"
+                      onClick={copyProfileLink}
+                      className="inline-flex items-center gap-2 rounded-xl border border-slate-600 bg-slate-800 px-3 py-2 text-sm hover:bg-slate-700"
+                    >
+                      {copyOk ? (
+                        isKo ? "복사됨" : "Copied"
+                      ) : (
+                        <>
+                          <Copy size={16} />
+                          {isKo ? "프로필 링크 복사" : "Copy profile link"}
+                        </>
+                      )}
+                    </button>
+                    <span className="flex items-center gap-1 text-xs text-slate-500">
+                      <Share2 size={14} />
+                      {`${window.location.origin}/u/${dashUser.username}`}
+                    </span>
+                  </div>
+                ) : null}
+              </section>
+            ) : null}
+
+            {mode === "self" && myUploads.length > 0 ? (
+              <section>
+                <h2 className="mb-3 flex items-center gap-2 text-base font-bold text-white">
+                  <ImageIcon size={20} className="text-sky-400" />
+                  {isKo ? "내가 올린 사진(방)" : "Rooms with my photos"}
+                </h2>
+                <p className="mb-3 text-sm text-slate-400">
+                  {isKo ? "이 섹션은 본인에게만 보입니다." : "Only you can see thumbnails here."}
+                </p>
+                <ul className="grid gap-3 sm:grid-cols-2">
+                  {myUploads.map((r) => (
+                    <li
+                      key={r.roomId}
+                      className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/80"
+                    >
+                      <div className="relative aspect-[4/3] bg-slate-800">
+                        {r.imageUrl ? (
+                          <img src={r.imageUrl} alt="" className="h-full w-full object-cover" />
+                        ) : (
+                          <div className="flex h-full items-center justify-center text-slate-500">
+                            <ImageIcon size={32} />
+                          </div>
+                        )}
+                      </div>
+                      <div className="space-y-2 p-3">
+                        <p className="font-mono text-sm text-indigo-300">#{r.roomCode}</p>
+                        <p className="text-xs text-slate-400">
+                          {puzzleDifficultyLabel(normalizePuzzleDifficulty(r.difficulty), isKo)} · {r.pieceCount}{" "}
+                          {isKo ? "조각" : "pcs"}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => void enterRoom(r.roomId)}
+                          className="w-full rounded-lg bg-indigo-600 py-2 text-sm font-medium text-white hover:bg-indigo-500"
+                        >
+                          {isKo ? "입장" : "Enter"}
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
+
+            {mode === "public" && createdOnly.length > 0 ? (
+              <section>
+                <h2 className="mb-3 flex items-center gap-2 text-base font-bold text-white">
+                  <Lock size={18} className="text-slate-400" />
+                  {isKo ? "만든 방 (이미지 비공개)" : "Created rooms (images private)"}
+                </h2>
+                <ul className="space-y-2">
+                  {createdOnly.map((r) => (
+                    <li
+                      key={r.roomId}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-3"
+                    >
+                      <div>
+                        <p className="font-mono text-sm text-indigo-300">#{r.roomCode}</p>
+                        <p className="text-xs text-slate-400">
+                          {puzzleDifficultyLabel(normalizePuzzleDifficulty(r.difficulty), isKo)} · {r.status}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void enterRoom(r.roomId)}
+                        className="rounded-lg border border-slate-600 px-3 py-1.5 text-sm hover:bg-slate-800"
+                      >
+                        {isKo ? "입장" : "Enter"}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
+
+            <section>
+              <h2 className="mb-3 flex items-center gap-2 text-base font-bold text-white">
+                <Users size={20} className="text-emerald-400" />
+                {isKo ? "참여한 퍼즐방" : "Puzzle rooms joined"}
+              </h2>
+              {participated.length === 0 ? (
+                <p className="text-sm text-slate-500">{isKo ? "아직 기록이 없습니다." : "No history yet."}</p>
+              ) : (
+                <ul className="space-y-3">
+                  {participated.map((r) => (
+                    <li
+                      key={r.roomId}
+                      className="flex gap-3 rounded-2xl border border-slate-800 bg-slate-900/60 p-3"
+                    >
+                      <div className="relative h-20 w-28 shrink-0 overflow-hidden rounded-lg bg-slate-800">
+                        {r.imageUrl ? (
+                          <img src={r.imageUrl} alt="" className="h-full w-full object-cover" />
+                        ) : (
+                          <div className="flex h-full flex-col items-center justify-center gap-1 px-1 text-center text-[10px] text-slate-500">
+                            <Lock size={16} />
+                            {isKo ? "이미지 비공개" : "Image private"}
+                          </div>
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-mono text-sm text-indigo-300">#{r.roomCode}</p>
+                        <p className="text-xs text-slate-400">
+                          {puzzleDifficultyLabel(normalizePuzzleDifficulty(r.difficulty), isKo)} · {r.pieceCount}{" "}
+                          {isKo ? "조각" : "pcs"}
+                          {typeof r.scoreInRoom === "number" && r.scoreInRoom > 0 ? (
+                            <span>
+                              {" "}
+                              · {isKo ? "이 방 점수" : "Score"} {r.scoreInRoom}
+                            </span>
+                          ) : null}
+                        </p>
+                        {r.lastVisitedAt ? (
+                          <p className="mt-1 text-[11px] text-slate-500">
+                            {isKo ? "최근 방문" : "Last visit"}: {new Date(r.lastVisitedAt).toLocaleString()}
+                          </p>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={() => void enterRoom(r.roomId)}
+                          className="mt-2 rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700"
+                        >
+                          {isKo ? "입장" : "Enter"}
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          </>
+        )}
+      </main>
+    </div>
+  );
+}
