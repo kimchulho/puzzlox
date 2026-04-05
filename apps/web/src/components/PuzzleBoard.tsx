@@ -3048,27 +3048,48 @@ export default function PuzzleBoard({
             } else {
             // If the cluster contains all pieces, automatically snap it to the board
             if (cluster.size === PIECE_COUNT) {
-              const firstId = Array.from(cluster)[0];
-              const c1 = firstId % GRID_COLS;
-              const r1 = Math.floor(firstId / GRID_COLS);
-              const p1 = pieces.current.get(firstId)!;
-              
-              const targetX = boardStartX + c1 * pieceWidth;
-              const targetY = boardStartY + r1 * pieceHeight;
-              
-              offsetX = targetX - p1.x;
-              offsetY = targetY - p1.y;
-              snapped = true;
+              const nightmareAllUprightFront =
+                !isNightmare ||
+                Array.from(cluster).every((pid) => {
+                  const pc = pieces.current.get(pid)!;
+                  return canPieceLockOnBoard(puzzleDifficulty, {
+                    rotationQuarter: (pc as any).__rotationQuarter,
+                    isBackFace: (pc as any).__isBackFace,
+                  });
+                });
+              if (nightmareAllUprightFront) {
+                const firstId = Array.from(cluster)[0];
+                const c1 = firstId % GRID_COLS;
+                const r1 = Math.floor(firstId / GRID_COLS);
+                const p1 = pieces.current.get(firstId)!;
+
+                const targetX = boardStartX + c1 * pieceWidth;
+                const targetY = boardStartY + r1 * pieceHeight;
+
+                offsetX = targetX - p1.x;
+                offsetY = targetY - p1.y;
+                snapped = true;
+              }
             } else {
               for (const id of cluster) {
                 const c1 = id % GRID_COLS;
                 const r1 = Math.floor(id / GRID_COLS);
                 const p1 = pieces.current.get(id)!;
-                
+
                 const targetX = boardStartX + c1 * pieceWidth;
                 const targetY = boardStartY + r1 * pieceHeight;
-                
-                if (Math.abs(p1.x - targetX) < SNAP_THRESHOLD && Math.abs(p1.y - targetY) < SNAP_THRESHOLD) {
+
+                const orientOkForBoardSnap =
+                  !isNightmare ||
+                  canPieceLockOnBoard(puzzleDifficulty, {
+                    rotationQuarter: (p1 as any).__rotationQuarter,
+                    isBackFace: (p1 as any).__isBackFace,
+                  });
+                if (
+                  orientOkForBoardSnap &&
+                  Math.abs(p1.x - targetX) < SNAP_THRESHOLD &&
+                  Math.abs(p1.y - targetY) < SNAP_THRESHOLD
+                ) {
                   offsetX = targetX - p1.x;
                   offsetY = targetY - p1.y;
                   snapped = true;
@@ -3180,7 +3201,8 @@ export default function PuzzleBoard({
                   scoreAdd += 1;
                 }
               }
-            } else {
+            } else if (!isNightmare) {
+              // 악몽: 정위치+정방향으로 실제 잠금될 때만 위에서 점수. 잠금 없는 스냅에 +1 하면 뒤집힌 조각도 점수가 오름
               scoreAdd = 1;
             }
             if (scoreAdd > 0) {

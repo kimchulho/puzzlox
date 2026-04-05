@@ -39,9 +39,12 @@ export const canPieceLockOnBoard = (
   orientation: { rotationQuarter?: number; isBackFace?: boolean }
 ) => {
   if (difficulty !== "nightmare") return true;
-  const q = Number(orientation.rotationQuarter ?? 0);
+  if (orientation.isBackFace === true) return false;
+  const rq = orientation.rotationQuarter;
+  if (!Number.isFinite(Number(rq))) return false;
+  const q = Number(rq);
   const normalized = ((Math.round(q) % 4) + 4) % 4;
-  return orientation.isBackFace !== true && normalized === 0;
+  return normalized === 0;
 };
 
 export const canClusterLockOnBoard = (
