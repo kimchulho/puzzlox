@@ -2312,6 +2312,13 @@ export default function PuzzleBoard({
             pushNightmareFloatingHud(null);
             return;
           }
+          /** getBounds / pointer global 은 app.screen 과 같은 논리 좌표계. canvas.width 는 DPR 버퍼라 비율이 어긋나면 HUD가 덜 움직이고 위치가 틀어짐 */
+          const screenW = app.screen.width;
+          const screenH = app.screen.height;
+          if (screenW < 1 || screenH < 1) {
+            pushNightmareFloatingHud(null);
+            return;
+          }
           let minX = Infinity;
           let minY = Infinity;
           let maxX = -Infinity;
@@ -2323,20 +2330,22 @@ export default function PuzzleBoard({
             const visual = p.getChildByLabel("pieceVisual") as PIXI.Container | null;
             if (!visual || visual.visible === false) return;
             const b = visual.getBounds();
-            if (!Number.isFinite(b.width) || !Number.isFinite(b.height)) return;
-            if (b.width <= 0 && b.height <= 0) return;
+            const bw = b.width;
+            const bh = b.height;
+            if (!Number.isFinite(bw) || !Number.isFinite(bh)) return;
+            if (bw <= 0 && bh <= 0) return;
             any = true;
-            minX = Math.min(minX, b.x);
-            minY = Math.min(minY, b.y);
-            maxX = Math.max(maxX, b.x + b.width);
-            maxY = Math.max(maxY, b.y + b.height);
+            minX = Math.min(minX, b.minX);
+            minY = Math.min(minY, b.minY);
+            maxX = Math.max(maxX, b.maxX);
+            maxY = Math.max(maxY, b.maxY);
           });
           if (!any || minX === Infinity) {
             pushNightmareFloatingHud(null);
             return;
           }
-          const scaleX = rect.width / canvasEl.width;
-          const scaleY = rect.height / canvasEl.height;
+          const scaleX = rect.width / screenW;
+          const scaleY = rect.height / screenH;
           const centerXCss = rect.left + ((minX + maxX) / 2) * scaleX;
           const bottomCss = rect.top + maxY * scaleY;
           const btn = NIGHTMARE_FLOAT_ROTATE_BTN_PX;
