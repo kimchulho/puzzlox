@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import {
   ArrowLeft,
   Copy,
+  Filter,
   Grid,
   Image as ImageIcon,
   Loader2,
@@ -78,6 +79,8 @@ export default function UserDashboard({
   const [createdOnly, setCreatedOnly] = useState<Omit<UploadRow, "imageUrl">[]>([]);
   const [profileSaving, setProfileSaving] = useState(false);
   const [copyOk, setCopyOk] = useState(false);
+  /** 참여 목록에서 내가 만든 방 제외 */
+  const [hideRoomsICreated, setHideRoomsICreated] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -213,6 +216,11 @@ export default function UserDashboard({
         ? `${dashUser?.username ?? publicUsername ?? ""}님의 프로필`
         : `${dashUser?.username ?? publicUsername ?? ""}'s profile`;
 
+  const participatedFiltered = hideRoomsICreated
+    ? participated.filter((r) => !r.iAmCreator)
+    : participated;
+  const hasMyCreatedInParticipated = participated.some((r) => r.iAmCreator);
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="sticky top-0 z-10 border-b border-slate-800 bg-slate-950/95 backdrop-blur-sm">
@@ -314,36 +322,49 @@ export default function UserDashboard({
               <section>
                 <h2 className="mb-3 flex items-center gap-2 text-base font-bold text-white">
                   <ImageIcon size={20} className="text-sky-400" />
-                  {isKo ? "내가 올린 사진(방)" : "Rooms with my photos"}
+                  {isKo ? "직접 업로드한 사진(방)" : "Rooms from my uploads"}
                 </h2>
                 <p className="mb-3 text-sm text-slate-400">
-                  {isKo ? "이 섹션은 본인에게만 보입니다." : "Only you can see thumbnails here."}
+                  {isKo
+                    ? "퍼즐록스에서 제공한 이미지로 만든 방은 제외됩니다. 썸네일은 본인만 볼 수 있어요."
+                    : "Rooms created from the built-in image catalog are not listed here. Only you see these thumbnails."}
                 </p>
-                <ul className="grid gap-3 sm:grid-cols-2">
+                <ul className="space-y-3">
                   {myUploads.map((r) => (
                     <li
                       key={r.roomId}
-                      className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/80"
+                      className="flex gap-3 rounded-2xl border border-slate-800 bg-slate-900/60 p-3"
                     >
-                      <div className="relative aspect-[4/3] bg-slate-800">
+                      <div className="relative h-20 w-28 shrink-0 overflow-hidden rounded-lg bg-slate-800">
                         {r.imageUrl ? (
                           <img src={r.imageUrl} alt="" className="h-full w-full object-cover" />
                         ) : (
                           <div className="flex h-full items-center justify-center text-slate-500">
-                            <ImageIcon size={32} />
+                            <ImageIcon size={28} />
                           </div>
                         )}
                       </div>
-                      <div className="space-y-2 p-3">
-                        <p className="font-mono text-sm text-indigo-300">#{r.roomCode}</p>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-mono text-sm text-sky-300">#{r.roomCode}</p>
                         <p className="text-xs text-slate-400">
                           {puzzleDifficultyLabel(normalizePuzzleDifficulty(r.difficulty), isKo)} · {r.pieceCount}{" "}
                           {isKo ? "조각" : "pcs"}
+                          {r.status ? (
+                            <span>
+                              {" "}
+                              · {r.status}
+                            </span>
+                          ) : null}
                         </p>
+                        {r.createdAt ? (
+                          <p className="mt-1 text-[11px] text-slate-500">
+                            {isKo ? "만든 날" : "Created"}: {new Date(r.createdAt).toLocaleString()}
+                          </p>
+                        ) : null}
                         <button
                           type="button"
                           onClick={() => void enterRoom(r.roomId)}
-                          className="w-full rounded-lg bg-indigo-600 py-2 text-sm font-medium text-white hover:bg-indigo-500"
+                          className="mt-2 rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700"
                         >
                           {isKo ? "입장" : "Enter"}
                         </button>
@@ -386,15 +407,35 @@ export default function UserDashboard({
             ) : null}
 
             <section>
-              <h2 className="mb-3 flex items-center gap-2 text-base font-bold text-white">
-                <Users size={20} className="text-emerald-400" />
-                {isKo ? "참여한 퍼즐방" : "Puzzle rooms joined"}
-              </h2>
+              <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <h2 className="flex items-center gap-2 text-base font-bold text-white">
+                  <Users size={20} className="text-emerald-400" />
+                  {isKo ? "참여한 퍼즐방" : "Puzzle rooms joined"}
+                </h2>
+                {participated.length > 0 && hasMyCreatedInParticipated ? (
+                  <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800">
+                    <Filter size={16} className="shrink-0 text-slate-500" />
+                    <span className="select-none">
+                      {isKo ? "내가 만든 방 숨기기" : "Hide rooms I created"}
+                    </span>
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-slate-600 bg-slate-800 text-emerald-500 focus:ring-emerald-500"
+                      checked={hideRoomsICreated}
+                      onChange={(e) => setHideRoomsICreated(e.target.checked)}
+                    />
+                  </label>
+                ) : null}
+              </div>
               {participated.length === 0 ? (
                 <p className="text-sm text-slate-500">{isKo ? "아직 기록이 없습니다." : "No history yet."}</p>
+              ) : participatedFiltered.length === 0 ? (
+                <p className="text-sm text-slate-500">
+                  {isKo ? "필터 조건에 맞는 방이 없습니다." : "No rooms match this filter."}
+                </p>
               ) : (
                 <ul className="space-y-3">
-                  {participated.map((r) => (
+                  {participatedFiltered.map((r) => (
                     <li
                       key={r.roomId}
                       className="flex gap-3 rounded-2xl border border-slate-800 bg-slate-900/60 p-3"
@@ -410,7 +451,14 @@ export default function UserDashboard({
                         )}
                       </div>
                       <div className="min-w-0 flex-1">
-                        <p className="font-mono text-sm text-indigo-300">#{r.roomCode}</p>
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                          <p className="font-mono text-sm text-indigo-300">#{r.roomCode}</p>
+                          {r.iAmCreator ? (
+                            <span className="rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-300">
+                              {isKo ? "내 방" : "Mine"}
+                            </span>
+                          ) : null}
+                        </div>
                         <p className="text-xs text-slate-400">
                           {puzzleDifficultyLabel(normalizePuzzleDifficulty(r.difficulty), isKo)} · {r.pieceCount}{" "}
                           {isKo ? "조각" : "pcs"}

@@ -635,10 +635,12 @@ async function startServer() {
       });
     }
 
+    /** 로비에서 직접 업로드(custom)로 만든 방만 `is_private=true`; 퍼즐록스 제공 이미지 선택 방은 `false`. */
     const { data: createdRooms, error: crErr } = await authSupabase
       .from("rooms")
       .select("id, image_url, piece_count, difficulty, status, creator_name, created_at, completed_at")
       .eq("created_by", userId)
+      .eq("is_private", true)
       .order("created_at", { ascending: false })
       .limit(80);
 
