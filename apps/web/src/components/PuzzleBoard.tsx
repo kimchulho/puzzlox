@@ -36,7 +36,8 @@ const TOSS_WIDE_TOOLBAR_WIDTH_FALLBACK_PX = 44;
 const MINI_PAD_VISIBLE_STORAGE_KEY = 'puzzle_show_mini_pad';
 /** 악몽·스마트폰: 플로팅 조각 회전 버튼 — 월드 줌과 무관한 CSS px 고정 크기 */
 const NIGHTMARE_FLOAT_ROTATE_BTN_PX = 48;
-const NIGHTMARE_FLOAT_ROTATE_GAP_PX = 10;
+/** 조각 하단과 버튼 상단 사이 (CSS px) */
+const NIGHTMARE_FLOAT_ROTATE_GAP_PX = 4;
 const TOSS_WIDE_MODE_STORAGE_KEY = 'puzzle_toss_wide_mode';
 const OWNER_OVERLAY_OPACITY_STORAGE_KEY = "puzzle_owner_overlay_opacity_pct";
 const readStoredBool = (key: string, fallback: boolean) => {
@@ -2319,7 +2320,9 @@ export default function PuzzleBoard({
           selectedCluster.forEach((id) => {
             const p = pieces.current.get(id);
             if (!p?.visible) return;
-            const b = p.getBounds();
+            const visual = p.getChildByLabel("pieceVisual") as PIXI.Container | null;
+            if (!visual || visual.visible === false) return;
+            const b = visual.getBounds();
             if (!Number.isFinite(b.width) || !Number.isFinite(b.height)) return;
             if (b.width <= 0 && b.height <= 0) return;
             any = true;
