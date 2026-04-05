@@ -2411,14 +2411,8 @@ export default function PuzzleBoard({
             }
             const pieceContainer = pieces.current.get(id);
             if (!pieceContainer) continue;
-            const col = id % GRID_COLS;
-            const row = Math.floor(id / GRID_COLS);
-            const targetX = boardStartX + col * pieceWidth;
-            const targetY = boardStartY + row * pieceHeight;
-            const snapped =
-              Math.abs(pieceContainer.x - targetX) < 1 && Math.abs(pieceContainer.y - targetY) < 1;
-
-            if (snapped) {
+            // 정위치만으로 입력을 끄면 악몽(뒤집힘·회전)에서 잠기지 않은 조각도 붙은 것처럼 보임 — 실제 판 잠금 집합만 반영
+            if (boardLockedPieceIdsRef.current.has(id)) {
               pieceContainer.alpha = 1;
               pieceContainer.eventMode = 'none';
               continue;
