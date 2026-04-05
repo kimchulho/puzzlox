@@ -1,5 +1,6 @@
 export const ROOM_EVENTS = {
   JoinRoom: "join_room",
+  PlayerPresence: "player_presence",
   PuzzleCompleted: "puzzle_completed",
   SyncTime: "sync_time",
   MoveBatch: "move_batch",
@@ -16,8 +17,15 @@ export const ROOM_EVENTS = {
 export interface JoinRoomPayload {
   roomId: number;
   userId?: number;
+  username?: string;
 }
 export type PuzzleCompletedPayload = number;
+
+export interface PlayerPresencePayload {
+  roomId: number;
+  playerCount: number;
+  users: string[];
+}
 
 export interface SyncTimePayload {
   accumulatedTime: number;

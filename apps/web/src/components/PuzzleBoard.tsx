@@ -17,6 +17,7 @@ import {
   LockDeniedPayload,
   LockReleasedPayload,
   MoveBatchPayload,
+  PlayerPresencePayload,
   ROOM_EVENTS,
   ScoreSyncPayload,
   SyncTimePayload,
@@ -381,6 +382,7 @@ export default function PuzzleBoard({
 
   const isLeaderboardPeerLive = (scoreUsername: string) => {
     void peerWatchEpoch;
+    if (activeUsers.has(scoreUsername)) return true;
     const currentUsername = user?.username ?? localStorage.getItem("puzzle_guest_name");
     const meStr =
       currentUsername != null && String(currentUsername) !== ""
@@ -388,8 +390,7 @@ export default function PuzzleBoard({
         : "guest";
     if (scoreUsername === meStr) return true;
     if (isBotLikeUser(scoreUsername)) return true;
-    const t = peerLastSeenMsRef.current.get(scoreUsername);
-    return t != null && Date.now() - t < PEER_ACTIVITY_STALE_MS;
+    return false;
   };
 
   useEffect(() => {
@@ -562,9 +563,15 @@ export default function PuzzleBoard({
     const socket = backendUrl ? io(backendUrl) : io();
     socketRef.current = socket;
     const joinRoomOnSocket = () => {
+      const localUsername = user?.username ?? localStorage.getItem("puzzle_guest_name");
+      const username =
+        localUsername != null && String(localUsername).trim() !== ""
+          ? String(localUsername).trim()
+          : "guest";
       socket.emit(ROOM_EVENTS.JoinRoom, {
         roomId,
         userId: user?.id != null ? Number(user.id) : undefined,
+        username,
       });
     };
     const refreshStateAfterReconnect = async () => {
@@ -619,16 +626,21 @@ export default function PuzzleBoard({
       setSocketDisconnectedAt((prev) => prev ?? Date.now());
     });
 
-    if (socket.connected) {
-      joinRoomOnSocket();
-      void refreshStateAfterReconnect();
-    }
-
     socket.on(ROOM_EVENTS.SyncTime, (data: SyncTimePayload) => {
       accumulatedTimeRef.current = data.accumulatedTime;
       isRunningRef.current = data.isRunning;
       localStartTimeRef.current = Date.now();
       setPlayTime(Math.floor(data.accumulatedTime));
+    });
+    socket.on(ROOM_EVENTS.PlayerPresence, (payload: PlayerPresencePayload) => {
+      if (payload.roomId !== roomId) return;
+      const users = new Set(
+        (Array.isArray(payload.users) ? payload.users : [])
+          .map((u) => String(u ?? "").trim())
+          .filter((u) => u !== "")
+      );
+      setPlayerCount(Math.max(1, Number(payload.playerCount) || users.size || 1));
+      setActiveUsers(users);
     });
     socket.on(ROOM_EVENTS.LockApplied, (payload: LockAppliedPayload) => {
       socketLockAppliedRef.current?.(payload);
@@ -648,6 +660,11 @@ export default function PuzzleBoard({
     socket.on(ROOM_EVENTS.CursorMove, (payload: CursorMovePayload) => {
       socketCursorMoveRef.current?.(payload);
     });
+
+    if (socket.connected) {
+      joinRoomOnSocket();
+      void refreshStateAfterReconnect();
+    }
 
     return () => {
       socket.disconnect();
@@ -4836,12 +4853,16 @@ export default function PuzzleBoard({
         const bumpInbound = () => {
           lastRealtimeInboundAt = Date.now();
         };
+        let applyPresenceSync: () => void = () => {};
 
         let lastPeerUiBumpAt = 0;
         const markPeerSeen = (uname: string) => {
           const s = String(uname).trim();
           if (s === "" || isBotLikeUser(s)) return;
           peerLastSeenMsRef.current.set(s, Date.now());
+          if (offlineAfterByeRef.current.delete(s)) {
+            applyPresenceSync();
+          }
           const now = Date.now();
           if (now - lastPeerUiBumpAt > 1500) {
             lastPeerUiBumpAt = now;
@@ -4903,6 +4924,7 @@ export default function PuzzleBoard({
           channelRef.current = channel;
           let prevPresenceUsers = new Set<string>();
           let presenceInitialSyncDone = false;
+          let applyingPresenceSync = false;
 
           const canSendRealtimeNow = (ch: any): boolean =>
             Boolean(
@@ -4911,7 +4933,6 @@ export default function PuzzleBoard({
               supabase.realtime.isConnected() &&
               ch.state === REALTIME_CHANNEL_STATES.joined
             );
-
           const enqueueOrMergeRealtime = (event: string, payload: unknown) => {
             if (event === 'heartbeat' && realtimeBroadcastQueue.length > 0) {
               const last = realtimeBroadcastQueue[realtimeBroadcastQueue.length - 1];
@@ -4961,7 +4982,10 @@ export default function PuzzleBoard({
             }
           };
 
-          const applyPresenceSync = () => {
+          applyPresenceSync = () => {
+          if (applyingPresenceSync) return;
+          applyingPresenceSync = true;
+          try {
           const chP = channelRef.current;
           if (!chP) return;
           const state = chP.presenceState();
@@ -4997,6 +5021,9 @@ export default function PuzzleBoard({
               });
             });
           }
+          if (socketRef.current?.connected && me !== "") {
+            users.add(me);
+          }
 
           for (const u of offlineAfterByeRef.current) {
             users.delete(u);
@@ -5018,8 +5045,11 @@ export default function PuzzleBoard({
               ? [...users].filter((u) => u !== me && !prevPresenceUsers.has(u))
               : [];
 
-          setPlayerCount(users.size);
-          setActiveUsers(users);
+          // Primary source for player count/online list is server socket presence event.
+          if (!socketRef.current?.connected) {
+            setPlayerCount(users.size);
+            setActiveUsers(users);
+          }
 
           for (const uid of [...remoteLockedPieces.keys()]) {
             if (uid === "bot") continue;
@@ -5068,6 +5098,9 @@ export default function PuzzleBoard({
               cursors.delete(username);
             }
           });
+          } finally {
+            applyingPresenceSync = false;
+          }
         };
 
           const handleRemoteMoveBatch = (updatesRaw: unknown, moveUserIdRaw?: unknown, snappedRaw?: unknown) => {

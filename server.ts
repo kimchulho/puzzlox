@@ -12,7 +12,9 @@ import jwt from "jsonwebtoken";
 import type { Request, Response, NextFunction } from "express";
 import {
   CursorMovePayload,
+  JoinRoomPayload,
   MoveBatchPayload,
+  PlayerPresencePayload,
   ROOM_EVENTS,
   LockAppliedPayload,
   LockDeniedPayload,
@@ -856,6 +858,23 @@ async function startServer() {
     socketUserPlaySessions.delete(socketId);
     enqueueUserPlaySeconds(session.userId, (Date.now() - session.startedAt) / 1000);
   };
+  const emitRoomPresence = (roomId: number) => {
+    const room = roomStates.get(roomId);
+    if (!room) return;
+    const users = Array.from(
+      new Set(
+        [...room.users]
+          .map((sid) => String(socketUserId.get(sid) ?? "").trim())
+          .filter((u) => u !== "")
+      )
+    );
+    const payload: PlayerPresencePayload = {
+      roomId,
+      playerCount: room.users.size,
+      users,
+    };
+    io.to(roomId.toString()).emit(ROOM_EVENTS.PlayerPresence, payload);
+  };
 
   io.on("connection", (socket) => {
     let currentRoomId: number | null = null;
@@ -1001,16 +1020,21 @@ async function startServer() {
       );
     };
 
-    socket.on(ROOM_EVENTS.JoinRoom, async (raw: number | { roomId?: unknown; userId?: unknown }) => {
+    socket.on(ROOM_EVENTS.JoinRoom, async (raw: number | JoinRoomPayload) => {
       const roomId =
         typeof raw === "number" ? raw : Number((raw as { roomId?: unknown })?.roomId);
       const joinedUserIdRaw =
         typeof raw === "number" ? NaN : Number((raw as { userId?: unknown })?.userId);
+      const joinedUsernameRaw =
+        typeof raw === "number" ? "" : String((raw as { username?: unknown })?.username ?? "").trim();
       if (!Number.isFinite(roomId) || roomId <= 0) return;
       const joinedUserId =
         Number.isFinite(joinedUserIdRaw) && joinedUserIdRaw > 0
           ? Math.floor(joinedUserIdRaw)
           : null;
+      if (joinedUsernameRaw !== "") {
+        socketUserId.set(socket.id, joinedUsernameRaw);
+      }
       pendingMoveByPiece.clear();
       pendingMoveSnapped = false;
       pendingCursor = null;
@@ -1030,6 +1054,7 @@ async function startServer() {
         const oldRoom = roomStates.get(currentRoomId);
         if (oldRoom) {
           oldRoom.users.delete(socket.id);
+          emitRoomPresence(currentRoomId);
           // 마지막 유저가 나갔다면 타이머 일시정지
           if (oldRoom.users.size === 0 && !oldRoom.isCompleted && oldRoom.lastResumeTime) {
             oldRoom.accumulatedTime += (Date.now() - oldRoom.lastResumeTime) / 1000;
@@ -1068,6 +1093,7 @@ async function startServer() {
       }
       
       room.users.add(socket.id);
+      emitRoomPresence(roomId);
       if (joinedUserId != null) {
         socketUserPlaySessions.set(socket.id, {
           userId: joinedUserId,
@@ -1090,7 +1116,9 @@ async function startServer() {
       const roomId = Number(raw?.roomId);
       if (!Number.isFinite(roomId) || roomId <= 0 || currentRoomId !== roomId) return;
       const userId = String(raw?.userId ?? "").trim() || "guest";
+      const prevUserId = socketUserId.get(socket.id);
       socketUserId.set(socket.id, userId);
+      if (prevUserId !== userId) emitRoomPresence(roomId);
       const input = Array.isArray(raw?.pieceIds) ? raw.pieceIds : [];
       const req = [...new Set(input.filter((x) => Number.isFinite(x) && x >= 0).map((x) => Math.floor(x)))];
       if (req.length === 0) return;
@@ -1147,7 +1175,11 @@ async function startServer() {
       const roomId = Number(raw?.roomId);
       if (!Number.isFinite(roomId) || roomId <= 0 || currentRoomId !== roomId) return;
       const userId = String(raw?.userId ?? "").trim() || socketUserId.get(socket.id) || "guest";
-      if (userId) socketUserId.set(socket.id, userId);
+      if (userId) {
+        const prevUserId = socketUserId.get(socket.id);
+        socketUserId.set(socket.id, userId);
+        if (prevUserId !== userId) emitRoomPresence(roomId);
+      }
       const updatesRaw = Array.isArray(raw?.updates) ? raw.updates : [];
       if (updatesRaw.length === 0) return;
       const snapped = raw?.snapped === true;
@@ -1249,6 +1281,7 @@ async function startServer() {
         releaseOwnedLocks(currentRoomId, socketUserId.get(socket.id) ?? "guest");
         const room = roomStates.get(currentRoomId)!;
         room.users.delete(socket.id);
+        emitRoomPresence(currentRoomId);
         
         // 마지막 유저가 나갔다면 타이머 일시정지 및 DB 저장
         if (room.users.size === 0 && !room.isCompleted) {
