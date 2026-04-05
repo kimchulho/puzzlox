@@ -34,6 +34,9 @@ const SNAP_THRESHOLD = 30;
 const TOSS_WIDE_PUZZLE_INSET_TRIM_PX = 3;
 const TOSS_WIDE_TOOLBAR_WIDTH_FALLBACK_PX = 44;
 const MINI_PAD_VISIBLE_STORAGE_KEY = 'puzzle_show_mini_pad';
+/** 악몽·스마트폰: 플로팅 조각 회전 버튼 — 월드 줌과 무관한 CSS px 고정 크기 */
+const NIGHTMARE_FLOAT_ROTATE_BTN_PX = 48;
+const NIGHTMARE_FLOAT_ROTATE_GAP_PX = 10;
 const TOSS_WIDE_MODE_STORAGE_KEY = 'puzzle_toss_wide_mode';
 const OWNER_OVERLAY_OPACITY_STORAGE_KEY = "puzzle_owner_overlay_opacity_pct";
 const readStoredBool = (key: string, fallback: boolean) => {
@@ -254,6 +257,16 @@ export default function PuzzleBoard({
   const isKo = locale === 'ko';
   const puzzleDifficulty = normalizePuzzleDifficulty(difficulty);
   const isNightmare = puzzleDifficulty === "nightmare";
+  const [nightmareFloatingRotatePos, setNightmareFloatingRotatePos] = useState<{
+    left: number;
+    top: number;
+  } | null>(null);
+  const setNightmareFloatingRotatePosRef = useRef(setNightmareFloatingRotatePos);
+  setNightmareFloatingRotatePosRef.current = setNightmareFloatingRotatePos;
+  const isNightmareRef = useRef(isNightmare);
+  isNightmareRef.current = isNightmare;
+  const isSmartphoneUiRef = useRef(false);
+  isSmartphoneUiRef.current = isMobilePortrait || isMobileLandscape;
   const [isCopied, setIsCopied] = useState(false);
   const [isTossWideMode, setIsTossWideMode] = useState(false);
   const tossWidePrefHydratedRef = useRef(false);
@@ -781,6 +794,8 @@ export default function PuzzleBoard({
     /** initPixi 안에서 할당: 방 나가기 시 스티키/드래그 중 lock 브로드캐스트 해제 */
     let releaseOwnedPieceLocks: (() => void) | null = null;
     let deferredBevelRafId: number | null = null;
+    /** 악몽 플로팅 회전 HUD rAF (언마운트 시 취소) */
+    let nightmareFloatingHudRaf: number | null = null;
     let appInstance: PIXI.Application | null = null;
     let hintLayer: PuzzleHintLayer | null = null;
     let deviceMotionHandler: ((event: DeviceMotionEvent) => void) | null = null;
@@ -2256,6 +2271,83 @@ export default function PuzzleBoard({
           }
           return false;
         };
+
+        let lastNightmareFloatingHudKey = "\uffff";
+        const pushNightmareFloatingHud = (next: { left: number; top: number } | null) => {
+          const key = next ? `${Math.round(next.left)}:${Math.round(next.top)}` : "";
+          if (key === lastNightmareFloatingHudKey) return;
+          lastNightmareFloatingHudKey = key;
+          if (nightmareFloatingHudRaf != null) {
+            cancelAnimationFrame(nightmareFloatingHudRaf);
+            nightmareFloatingHudRaf = null;
+          }
+          nightmareFloatingHudRaf = requestAnimationFrame(() => {
+            nightmareFloatingHudRaf = null;
+            if (!isMounted) return;
+            setNightmareFloatingRotatePosRef.current(next);
+          });
+        };
+
+        const tickNightmareFloatingRotateHud = () => {
+          if (!isNightmareRef.current || !isSmartphoneUiRef.current) {
+            pushNightmareFloatingHud(null);
+            return;
+          }
+          if (!selectedCluster || selectedCluster.size === 0) {
+            pushNightmareFloatingHud(null);
+            return;
+          }
+          if (isClusterHeldRemotely(selectedCluster)) {
+            pushNightmareFloatingHud(null);
+            return;
+          }
+          const canvasEl = app.canvas as HTMLCanvasElement;
+          if (!canvasEl) {
+            pushNightmareFloatingHud(null);
+            return;
+          }
+          const rect = canvasEl.getBoundingClientRect();
+          if (rect.width < 1 || rect.height < 1) {
+            pushNightmareFloatingHud(null);
+            return;
+          }
+          let minX = Infinity;
+          let minY = Infinity;
+          let maxX = -Infinity;
+          let maxY = -Infinity;
+          let any = false;
+          selectedCluster.forEach((id) => {
+            const p = pieces.current.get(id);
+            if (!p?.visible) return;
+            const b = p.getBounds();
+            if (!Number.isFinite(b.width) || !Number.isFinite(b.height)) return;
+            if (b.width <= 0 && b.height <= 0) return;
+            any = true;
+            minX = Math.min(minX, b.x);
+            minY = Math.min(minY, b.y);
+            maxX = Math.max(maxX, b.x + b.width);
+            maxY = Math.max(maxY, b.y + b.height);
+          });
+          if (!any || minX === Infinity) {
+            pushNightmareFloatingHud(null);
+            return;
+          }
+          const scaleX = rect.width / canvasEl.width;
+          const scaleY = rect.height / canvasEl.height;
+          const centerXCss = rect.left + ((minX + maxX) / 2) * scaleX;
+          const bottomCss = rect.top + maxY * scaleY;
+          const btn = NIGHTMARE_FLOAT_ROTATE_BTN_PX;
+          const margin = 8;
+          let left = centerXCss;
+          let top = bottomCss + NIGHTMARE_FLOAT_ROTATE_GAP_PX;
+          const vw = typeof window !== "undefined" ? window.innerWidth : left + btn;
+          const vh = typeof window !== "undefined" ? window.innerHeight : top + btn;
+          left = Math.min(Math.max(left, margin + btn / 2), vw - margin - btn / 2);
+          top = Math.min(Math.max(top, margin), vh - margin - btn);
+          pushNightmareFloatingHud({ left, top });
+        };
+
+        app.ticker.add(tickNightmareFloatingRotateHud);
 
         /** 원격 유저의 lock이 우선 — 겹치면 로컬 스티키/드래그를 즉시 해제하고 unlock 브로드캐스트 */
         const abortLocalInteractionForRemoteClaim = (remoteUserId: string, incomingPieceIds: number[]) => {
@@ -6016,6 +6108,11 @@ export default function PuzzleBoard({
             /* noop */
           }
         } finally {
+          if (nightmareFloatingHudRaf != null) {
+            cancelAnimationFrame(nightmareFloatingHudRaf);
+            nightmareFloatingHudRaf = null;
+          }
+          setNightmareFloatingRotatePosRef.current(null);
           if (objUrl) {
             try {
               URL.revokeObjectURL(objUrl);
@@ -6177,6 +6274,45 @@ export default function PuzzleBoard({
 
   return (
     <div className="w-full h-full relative" style={boardFrameStyle}>
+      {nightmareFloatingRotatePos != null &&
+      isNightmare &&
+      (isMobilePortrait || isMobileLandscape) ? (
+        <button
+          type="button"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            rotateFlipSelectionRef.current?.();
+          }}
+          className={`fixed flex items-center justify-center rounded-full shadow-lg border touch-manipulation select-none ${
+            isTossMode
+              ? "bg-white border-[#BBD5FF] text-[#2F6FE4] shadow-[0_4px_14px_rgba(47,111,228,0.25)] active:bg-[#EAF2FF]"
+              : "bg-slate-800/95 border-slate-600 text-slate-100 shadow-black/40 active:bg-slate-700"
+          }`}
+          style={{
+            left: nightmareFloatingRotatePos.left,
+            top: nightmareFloatingRotatePos.top,
+            width: NIGHTMARE_FLOAT_ROTATE_BTN_PX,
+            height: NIGHTMARE_FLOAT_ROTATE_BTN_PX,
+            minWidth: NIGHTMARE_FLOAT_ROTATE_BTN_PX,
+            minHeight: NIGHTMARE_FLOAT_ROTATE_BTN_PX,
+            maxWidth: NIGHTMARE_FLOAT_ROTATE_BTN_PX,
+            maxHeight: NIGHTMARE_FLOAT_ROTATE_BTN_PX,
+            transform: "translate(-50%, 0)",
+            zIndex: 60,
+            boxSizing: "border-box",
+            touchAction: "manipulation",
+          }}
+          title={isKo ? "선택 조각 회전/앞면화" : "Rotate/flip selected pieces"}
+          aria-label={isKo ? "선택 조각 회전" : "Rotate selected pieces"}
+        >
+          <RotateCcw
+            size={22}
+            className="pointer-events-none shrink-0"
+            strokeWidth={2.25}
+          />
+        </button>
+      ) : null}
       {imageLoadError && (
         <div
           className={`z-[100] flex flex-col items-center justify-center bg-slate-900/90 backdrop-blur-sm text-white p-4 text-center ${
@@ -6639,7 +6775,7 @@ export default function PuzzleBoard({
             </>
           )}
 
-          {isNightmare ? (
+          {isNightmare && !(isMobilePortrait || isMobileLandscape) ? (
             <button
               onClick={() => rotateFlipSelectionRef.current?.()}
               className={`flex items-center justify-center w-7 h-7 rounded-md transition-colors border shrink-0 ${
