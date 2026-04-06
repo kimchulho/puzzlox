@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { motion } from "motion/react";
 import { Camera, SwitchCamera, X } from "lucide-react";
 import {
   PS_BOARD_H,
@@ -11,6 +12,21 @@ import {
 } from "../lib/puzzleShotGrid";
 
 type Phase = "camera" | "playback";
+
+const SHAKE_DELTA_THRESHOLD = 14;
+const SHAKE_COOLDOWN_MS = 450;
+
+type PieceFallTarget = { x: number; y: number; rotate: number; duration: number; delay: number };
+
+function requestDeviceMotionPermission(): Promise<boolean> {
+  const DM = DeviceMotionEvent as typeof DeviceMotionEvent & {
+    requestPermission?: () => Promise<string>;
+  };
+  if (typeof DM.requestPermission === "function") {
+    return DM.requestPermission().then((s) => s === "granted");
+  }
+  return Promise.resolve(true);
+}
 
 /** PuzzleBoard `pieceGraphics.stroke` + deferred bevel(흰·검 오프셋 블러)에 가깝게 */
 function applyPuzzlePieceBevel(
@@ -49,30 +65,69 @@ function applyPuzzlePieceBevel(
   ctx.restore();
 }
 
-function captureBoardCanvas(video: HTMLVideoElement): HTMLCanvasElement | null {
+/**
+ * 화면에 보이는 퍼즐 프레임(내부 2:3 영역)과 동일한 구간을 비디오에서 잘라 보드로 그립니다.
+ * `frameEl`은 프레임 안쪽(테두리 안 퍼즐 홀) DOM 요소.
+ */
+function captureBoardCanvasFromFrame(video: HTMLVideoElement, frameEl: HTMLElement): HTMLCanvasElement | null {
   const vw = video.videoWidth;
   const vh = video.videoHeight;
   if (vw < 2 || vh < 2) return null;
 
-  const targetRatio = PS_BOARD_W / PS_BOARD_H;
-  let sx: number;
-  let sy: number;
-  let sw: number;
-  let sh: number;
-  if (vw / vh > targetRatio) {
-    sh = vh;
-    sw = sh * targetRatio;
-    sx = (vw - sw) / 2;
-    sy = 0;
+  const vRect = video.getBoundingClientRect();
+  const fRect = frameEl.getBoundingClientRect();
+
+  const ix = Math.max(fRect.left, vRect.left);
+  const iy = Math.max(fRect.top, vRect.top);
+  const ix2 = Math.min(fRect.right, vRect.right);
+  const iy2 = Math.min(fRect.bottom, vRect.bottom);
+  const rw = Math.max(0, ix2 - ix);
+  const rh = Math.max(0, iy2 - iy);
+  if (rw < 2 || rh < 2) return null;
+
+  const rx = ix - vRect.left;
+  const ry = iy - vRect.top;
+  const Dw = vRect.width;
+  const Dh = vRect.height;
+  if (Dw < 2 || Dh < 2) return null;
+
+  const ir = vw / vh;
+  const er = Dw / Dh;
+  let srcX: number;
+  let srcY: number;
+  let srcW: number;
+  let srcH: number;
+  if (er > ir) {
+    srcH = vh;
+    srcW = vh * er;
+    srcX = (vw - srcW) / 2;
+    srcY = 0;
   } else {
-    sw = vw;
-    sh = sw / targetRatio;
-    sx = 0;
-    sy = (vh - sh) / 2;
+    srcW = vw;
+    srcH = vw / er;
+    srcX = 0;
+    srcY = (vh - srcH) / 2;
   }
 
-  const maxW = 320;
-  const W = Math.min(maxW, Math.max(200, Math.floor(sw)));
+  let u0 = srcX + (rx / Dw) * srcW;
+  let v0 = srcY + (ry / Dh) * srcH;
+  let uw = (rw / Dw) * srcW;
+  let uh = (rh / Dh) * srcH;
+
+  const targetR = PS_BOARD_W / PS_BOARD_H;
+  const cropR = uw / uh;
+  if (cropR > targetR) {
+    const nuw = uh * targetR;
+    u0 += (uw - nuw) / 2;
+    uw = nuw;
+  } else if (cropR < targetR) {
+    const nuh = uw / targetR;
+    v0 += (uh - nuh) / 2;
+    uh = nuh;
+  }
+
+  const maxW = 400;
+  const W = Math.min(maxW, Math.max(160, Math.round(uw)));
   const H = Math.round((W * PS_BOARD_H) / PS_BOARD_W);
 
   const canvas = document.createElement("canvas");
@@ -80,9 +135,7 @@ function captureBoardCanvas(video: HTMLVideoElement): HTMLCanvasElement | null {
   canvas.height = H;
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
-
-  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, W, H);
-
+  ctx.drawImage(video, u0, v0, uw, uh, 0, 0, W, H);
   return canvas;
 }
 
@@ -154,30 +207,72 @@ function extractPieceImages(board: HTMLCanvasElement): PuzzleShotExtractResult {
   };
 }
 
-/** 퍼즐판(boardBg)과 비슷한 직사각 테두리 */
 const FRAME_BORDER_CLASS =
   "box-border border-[3px] border-black/50 bg-black/[0.12] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05)]";
-/** 촬영 가이드: 고정 CSS 폭만 사용해 뷰포트·주소창 변화에 덜 민감하게 */
-const FRAME_CAMERA_BOX_CLASS = `${FRAME_BORDER_CLASS} aspect-[2/3] w-44 sm:w-48 shrink-0`;
+/** 1.5× (w-44→264px, sm:w-48→288px) */
+const FRAME_CAMERA_BOX_CLASS = `${FRAME_BORDER_CLASS} aspect-[2/3] w-[264px] sm:w-[288px] shrink-0`;
 
-function PuzzleShotGridSvg({ className }: { className?: string }) {
+/** 촬영 화면 격자 — 확인 화면 베벨과 같은 구조를 SVG로 */
+function PuzzleShotGridSvgBeveled({ className }: { className?: string }) {
+  const reactId = useId();
+  const blurId = `psf-blur-${reactId.replace(/:/g, "")}`;
   const pieces = puzzleShotPieceIndexList();
+
   return (
     <svg
       viewBox={`0 0 ${PS_BOARD_W} ${PS_BOARD_H}`}
       className={className ?? "block h-full w-full"}
       preserveAspectRatio="xMidYMid meet"
     >
-      {pieces.map(({ col, row }, i) => (
-        <path
-          key={`o-${i}`}
-          d={piecePathSvgD(col, row)}
-          fill="none"
-          stroke="rgba(255,255,255,0.82)"
-          strokeWidth={1.25}
-          vectorEffect="nonScalingStroke"
-        />
-      ))}
+      <defs>
+        <filter id={blurId} x="-30%" y="-30%" width="160%" height="160%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="0.85" />
+        </filter>
+      </defs>
+      {pieces.map(({ col, row }, i) => {
+        const d = piecePathSvgD(col, row);
+        return (
+          <g key={`g-${i}`}>
+            <path
+              d={d}
+              fill="none"
+              stroke="rgba(0,0,0,0.22)"
+              strokeWidth={1.15}
+              strokeLinejoin="round"
+              strokeLinecap="round"
+            />
+            <g filter={`url(#${blurId})`} opacity={0.88}>
+              <path
+                d={d}
+                fill="none"
+                stroke="rgba(255,255,255,0.58)"
+                strokeWidth={0.95}
+                strokeLinejoin="round"
+                strokeLinecap="round"
+                transform="translate(1.15, 1.15)"
+              />
+              <path
+                d={d}
+                fill="none"
+                stroke="rgba(0,0,0,0.58)"
+                strokeWidth={0.95}
+                strokeLinejoin="round"
+                strokeLinecap="round"
+                transform="translate(-1.15, -1.15)"
+              />
+            </g>
+            <path
+              d={d}
+              fill="none"
+              stroke="rgba(255,255,255,0.78)"
+              strokeWidth={0.65}
+              strokeLinejoin="round"
+              strokeLinecap="round"
+              vectorEffect="nonScalingStroke"
+            />
+          </g>
+        );
+      })}
     </svg>
   );
 }
@@ -192,6 +287,7 @@ export function PuzzleShotModal({
   isKo: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const puzzleHoleRef = useRef<HTMLDivElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [phase, setPhase] = useState<Phase>("camera");
   const [camError, setCamError] = useState<string | null>(null);
@@ -199,6 +295,8 @@ export function PuzzleShotModal({
   const [burstKey, setBurstKey] = useState(0);
   const [fitScale, setFitScale] = useState(1);
   const [facingUser, setFacingUser] = useState(true);
+  const [fallStarted, setFallStarted] = useState(false);
+  const [fallTargets, setFallTargets] = useState<PieceFallTarget[]>([]);
   const [boardMetrics, setBoardMetrics] = useState({
     boardW: 200,
     boardH: 300,
@@ -208,6 +306,10 @@ export function PuzzleShotModal({
     cellW: 120,
     cellH: 120,
   });
+
+  const fallStartedRef = useRef(false);
+  const lastAccelRef = useRef<{ x: number; y: number; z: number } | null>(null);
+  const lastShakeAtRef = useRef(0);
 
   const stopStream = useCallback(() => {
     const s = streamRef.current;
@@ -219,6 +321,58 @@ export function PuzzleShotModal({
     }
   }, []);
 
+  const buildFallTargets = useCallback((): PieceFallTarget[] => {
+    const vh = typeof window !== "undefined" ? window.innerHeight : 700;
+    const vw = typeof window !== "undefined" ? window.innerWidth : 400;
+    return puzzleShotPieceIndexList().map((_, i) => ({
+      x: (Math.random() - 0.5) * Math.min(160, vw * 0.35),
+      y: vh * 0.55 + Math.random() * vh * 0.28,
+      rotate: (Math.random() - 0.5) * 260,
+      duration: 1.0 + (i % 3) * 0.09 + Math.random() * 0.12,
+      delay: i * 0.04 + Math.random() * 0.07,
+    }));
+  }, []);
+
+  const startFall = useCallback(() => {
+    if (fallStartedRef.current) return;
+    fallStartedRef.current = true;
+    const targets = buildFallTargets();
+    setFallTargets(targets);
+    setFallStarted(true);
+  }, [buildFallTargets]);
+
+  useEffect(() => {
+    fallStartedRef.current = fallStarted;
+  }, [fallStarted]);
+
+  useEffect(() => {
+    if (!open || phase !== "playback" || fallStarted) return;
+    lastAccelRef.current = null;
+
+    const onMotion = (e: DeviceMotionEvent) => {
+      if (fallStartedRef.current) return;
+      const a =
+        e.acceleration && (e.acceleration.x != null || e.acceleration.y != null)
+          ? e.acceleration
+          : e.accelerationIncludingGravity;
+      if (!a || a.x == null || a.y == null || a.z == null) return;
+      const cur = { x: a.x, y: a.y, z: a.z };
+      const prev = lastAccelRef.current;
+      lastAccelRef.current = cur;
+      if (!prev) return;
+      const delta =
+        Math.abs(cur.x - prev.x) + Math.abs(cur.y - prev.y) + Math.abs(cur.z - prev.z);
+      const now = performance.now();
+      if (delta < SHAKE_DELTA_THRESHOLD) return;
+      if (now - lastShakeAtRef.current < SHAKE_COOLDOWN_MS) return;
+      lastShakeAtRef.current = now;
+      startFall();
+    };
+
+    window.addEventListener("devicemotion", onMotion);
+    return () => window.removeEventListener("devicemotion", onMotion);
+  }, [open, phase, fallStarted, burstKey, startFall]);
+
   useEffect(() => {
     if (!open) {
       stopStream();
@@ -226,6 +380,9 @@ export function PuzzleShotModal({
       setPieceUrls([]);
       setCamError(null);
       setFacingUser(true);
+      setFallStarted(false);
+      fallStartedRef.current = false;
+      setFallTargets([]);
       return;
     }
 
@@ -270,6 +427,14 @@ export function PuzzleShotModal({
     };
   }, [open, isKo, stopStream, facingUser]);
 
+  /** 재촬영·낙하 후 카메라로 돌아올 때 재생 보장 (비디오는 항상 마운트) */
+  useEffect(() => {
+    if (!open || phase !== "camera") return;
+    const v = videoRef.current;
+    if (!v?.srcObject) return;
+    void v.play().catch(() => undefined);
+  }, [open, phase, facingUser]);
+
   useLayoutEffect(() => {
     if (!open || phase !== "playback") return;
     const { boardW, boardH } = boardMetrics;
@@ -283,10 +448,20 @@ export function PuzzleShotModal({
     return () => window.removeEventListener("resize", ro);
   }, [open, phase, boardMetrics.boardW, boardMetrics.boardH, burstKey]);
 
+  const returnToCamera = useCallback(() => {
+    setPhase("camera");
+    setPieceUrls([]);
+    setFallStarted(false);
+    fallStartedRef.current = false;
+    setFallTargets([]);
+  }, []);
+
   const handleCapture = useCallback(() => {
     const v = videoRef.current;
+    const hole = puzzleHoleRef.current;
     if (!v) return;
-    const board = captureBoardCanvas(v);
+    void requestDeviceMotionPermission();
+    const board = hole ? captureBoardCanvasFromFrame(v, hole) : null;
     if (!board) return;
     const extracted = extractPieceImages(board);
     setBoardMetrics({
@@ -299,14 +474,16 @@ export function PuzzleShotModal({
       cellH: extracted.cellH,
     });
     setPieceUrls(extracted.urls);
+    setFallStarted(false);
+    fallStartedRef.current = false;
+    setFallTargets([]);
     setBurstKey((k) => k + 1);
     setPhase("playback");
   }, []);
 
   const handleRetake = useCallback(() => {
-    setPhase("camera");
-    setPieceUrls([]);
-  }, []);
+    returnToCamera();
+  }, [returnToCamera]);
 
   const handleClose = useCallback(() => {
     stopStream();
@@ -314,6 +491,7 @@ export function PuzzleShotModal({
   }, [onClose, stopStream]);
 
   const pieces = puzzleShotPieceIndexList();
+  const lastIndex = pieces.length - 1;
 
   if (!open) return null;
 
@@ -339,27 +517,29 @@ export function PuzzleShotModal({
       </div>
 
       <div className="flex-1 relative min-h-0 flex items-center justify-center p-3">
+        {!camError ? (
+          <video
+            ref={videoRef}
+            className="absolute inset-0 z-0 w-full h-full object-cover"
+            playsInline
+            muted
+            autoPlay
+          />
+        ) : null}
+        {phase === "playback" ? <div className="absolute inset-0 z-[5] bg-black" aria-hidden /> : null}
+
         {phase === "camera" && (
           <>
             {camError ? (
-              <p className="px-6 text-center text-sm text-amber-200/90">{camError}</p>
+              <p className="px-6 text-center text-sm text-amber-200/90 z-10">{camError}</p>
             ) : (
-              <>
-                <video
-                  ref={videoRef}
-                  className="absolute inset-0 w-full h-full object-cover"
-                  playsInline
-                  muted
-                  autoPlay
-                />
-                <div className="relative z-10 pointer-events-none flex items-center justify-center">
-                  <div className={FRAME_CAMERA_BOX_CLASS}>
-                    <div className="absolute inset-[3px] overflow-hidden">
-                      <PuzzleShotGridSvg />
-                    </div>
+              <div className="relative z-10 pointer-events-none flex items-center justify-center">
+                <div className={FRAME_CAMERA_BOX_CLASS}>
+                  <div ref={puzzleHoleRef} className="absolute inset-[3px] overflow-hidden">
+                    <PuzzleShotGridSvgBeveled />
                   </div>
                 </div>
-              </>
+              </div>
             )}
           </>
         )}
@@ -374,7 +554,7 @@ export function PuzzleShotModal({
               }}
             >
               <div
-                className="relative"
+                className="relative overflow-visible"
                 style={{
                   width: boardW,
                   height: boardH,
@@ -385,20 +565,49 @@ export function PuzzleShotModal({
                 {pieces.map(({ col, row }, i) => {
                   const href = pieceUrls[i];
                   if (!href) return null;
+                  const cx = ((col + 0.5) * PS_PIECE_W) / PS_BOARD_W;
+                  const cy = ((row + 0.5) * PS_PIECE_H) / PS_BOARD_H;
+                  const t = fallTargets[i];
+                  const dropping = Boolean(fallStarted && t);
+                  const commonStyle = {
+                    transformOrigin: `${cx * 100}% ${cy * 100}%`,
+                  } as const;
                   return (
-                    <img
+                    <motion.img
                       key={`${burstKey}-${i}`}
                       src={href}
                       alt=""
                       width={cellW}
                       height={cellH}
-                      className="absolute select-none block max-w-none"
+                      className="absolute select-none block max-w-none will-change-transform"
                       draggable={false}
                       style={{
+                        ...commonStyle,
                         left: col * pieceWpx - pad,
                         top: row * pieceHpx - pad,
                         width: cellW,
                         height: cellH,
+                      }}
+                      initial={false}
+                      animate={
+                        dropping
+                          ? { opacity: 0, x: t!.x, y: t!.y, rotate: t!.rotate }
+                          : { opacity: 1, x: 0, y: 0, rotate: 0 }
+                      }
+                      transition={
+                        dropping
+                          ? {
+                              duration: t!.duration,
+                              delay: t!.delay,
+                              ease: [0.55, 0.055, 0.675, 0.19],
+                            }
+                          : { duration: 0 }
+                      }
+                      onAnimationComplete={() => {
+                        if (!dropping || i !== lastIndex) return;
+                        window.setTimeout(() => {
+                          returnToCamera();
+                        }, 280);
                       }}
                     />
                   );
@@ -432,14 +641,39 @@ export function PuzzleShotModal({
       ) : null}
 
       {phase === "playback" ? (
-        <div className="pb-5 px-4 flex justify-center safe-area-pb">
-          <button
-            type="button"
-            onClick={handleRetake}
-            className="rounded-full bg-white/15 text-white px-6 py-2.5 text-sm font-semibold border border-white/25 hover:bg-white/25 active:scale-[0.98] transition-transform"
-          >
-            {isKo ? "다시 찍기" : "Retake"}
-          </button>
+        <div className="pb-5 px-4 flex flex-col items-center gap-3 safe-area-pb">
+          {!fallStarted ? (
+            <>
+              <p className="text-center text-xs text-white/60 max-w-sm">
+                {isKo
+                  ? "폰을 흔들면 조각이 떨어져요. (PC·센서 없음: 아래 버튼)"
+                  : "Shake to drop pieces, or use the button on desktop."}
+              </p>
+              <div className="flex flex-wrap justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    void requestDeviceMotionPermission();
+                    startFall();
+                  }}
+                  className="rounded-full bg-amber-500/90 text-black px-5 py-2.5 text-sm font-semibold hover:bg-amber-400 active:scale-[0.98] transition-transform"
+                >
+                  {isKo ? "조각 떨어뜨리기" : "Drop pieces"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRetake}
+                  className="rounded-full bg-white/15 text-white px-5 py-2.5 text-sm font-semibold border border-white/25 hover:bg-white/25 active:scale-[0.98] transition-transform"
+                >
+                  {isKo ? "다시 찍기" : "Retake"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <p className="text-center text-xs text-white/45">
+              {isKo ? "끝나면 카메라로 돌아갑니다." : "Returning to camera when done."}
+            </p>
+          )}
         </div>
       ) : null}
     </div>
