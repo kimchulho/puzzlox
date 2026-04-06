@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { motion } from "motion/react";
-import { Camera, X } from "lucide-react";
+import { Camera, SwitchCamera, X } from "lucide-react";
 import {
   PS_BOARD_H,
   PS_BOARD_W,
@@ -12,6 +12,21 @@ import {
 } from "../lib/puzzleShotGrid";
 
 type Phase = "camera" | "playback";
+
+type PieceFallTarget = { x: number; y: number; rotate: number; duration: number; delay: number };
+
+const SHAKE_DELTA_THRESHOLD = 14;
+const SHAKE_COOLDOWN_MS = 450;
+
+function requestDeviceMotionPermission(): Promise<boolean> {
+  const DM = DeviceMotionEvent as typeof DeviceMotionEvent & {
+    requestPermission?: () => Promise<string>;
+  };
+  if (typeof DM.requestPermission === "function") {
+    return DM.requestPermission().then((s) => s === "granted");
+  }
+  return Promise.resolve(true);
+}
 
 function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   const rr = Math.min(r, w / 2, h / 2);
@@ -46,7 +61,7 @@ function captureBoardCanvas(video: HTMLVideoElement): HTMLCanvasElement | null {
     sy = (vh - sh) / 2;
   }
 
-  const maxW = 420;
+  const maxW = 320;
   const W = Math.min(maxW, Math.max(200, Math.floor(sw)));
   const H = Math.round((W * PS_BOARD_H) / PS_BOARD_W);
 
@@ -137,6 +152,13 @@ export function PuzzleShotModal({
   const [cellSize, setCellSize] = useState({ w: 120, h: 120 });
   const [burstKey, setBurstKey] = useState(0);
   const [fitScale, setFitScale] = useState(1);
+  const [facingUser, setFacingUser] = useState(true);
+  const [fallStarted, setFallStarted] = useState(false);
+  const [fallTargets, setFallTargets] = useState<PieceFallTarget[]>([]);
+  const lastAccelRef = useRef<{ x: number; y: number; z: number } | null>(null);
+  const lastShakeAtRef = useRef(0);
+  const fallTargetsRef = useRef<PieceFallTarget[]>([]);
+  const fallStartedRef = useRef(false);
 
   const stopStream = useCallback(() => {
     const s = streamRef.current;
@@ -148,12 +170,37 @@ export function PuzzleShotModal({
     }
   }, []);
 
+  const buildFallTargets = useCallback((): PieceFallTarget[] => {
+    const vh = typeof window !== "undefined" ? window.innerHeight : 700;
+    const vw = typeof window !== "undefined" ? window.innerWidth : 400;
+    return puzzleShotPieceIndexList().map((_, i) => ({
+      x: (Math.random() - 0.5) * Math.min(160, vw * 0.35),
+      y: vh * 0.55 + Math.random() * vh * 0.28,
+      rotate: (Math.random() - 0.5) * 260,
+      duration: 1.0 + (i % 3) * 0.09 + Math.random() * 0.12,
+      delay: i * 0.04 + Math.random() * 0.07,
+    }));
+  }, []);
+
+  const startFall = useCallback(() => {
+    if (fallStartedRef.current) return;
+    fallStartedRef.current = true;
+    const targets = buildFallTargets();
+    fallTargetsRef.current = targets;
+    setFallTargets(targets);
+    setFallStarted(true);
+  }, [buildFallTargets]);
+
   useEffect(() => {
     if (!open) {
       stopStream();
       setPhase("camera");
       setPieceUrls([]);
       setCamError(null);
+      setFallStarted(false);
+      fallStartedRef.current = false;
+      setFallTargets([]);
+      setFacingUser(true);
       return;
     }
 
@@ -161,9 +208,14 @@ export function PuzzleShotModal({
     setCamError(null);
 
     void (async () => {
+      stopStream();
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
+          video: {
+            facingMode: facingUser ? "user" : "environment",
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
           audio: false,
         });
         if (cancelled) {
@@ -191,7 +243,39 @@ export function PuzzleShotModal({
       cancelled = true;
       stopStream();
     };
-  }, [open, isKo, stopStream]);
+  }, [open, isKo, stopStream, facingUser]);
+
+  useEffect(() => {
+    fallStartedRef.current = fallStarted;
+  }, [fallStarted]);
+
+  useEffect(() => {
+    if (!open || phase !== "playback" || fallStarted) return;
+    lastAccelRef.current = null;
+
+    const onMotion = (e: DeviceMotionEvent) => {
+      if (fallStartedRef.current) return;
+      const a =
+        e.acceleration && (e.acceleration.x != null || e.acceleration.y != null)
+          ? e.acceleration
+          : e.accelerationIncludingGravity;
+      if (!a || a.x == null || a.y == null || a.z == null) return;
+      const cur = { x: a.x, y: a.y, z: a.z };
+      const prev = lastAccelRef.current;
+      lastAccelRef.current = cur;
+      if (!prev) return;
+      const delta =
+        Math.abs(cur.x - prev.x) + Math.abs(cur.y - prev.y) + Math.abs(cur.z - prev.z);
+      const now = performance.now();
+      if (delta < SHAKE_DELTA_THRESHOLD) return;
+      if (now - lastShakeAtRef.current < SHAKE_COOLDOWN_MS) return;
+      lastShakeAtRef.current = now;
+      startFall();
+    };
+
+    window.addEventListener("devicemotion", onMotion);
+    return () => window.removeEventListener("devicemotion", onMotion);
+  }, [open, phase, fallStarted, burstKey, startFall]);
 
   useLayoutEffect(() => {
     if (!open || phase !== "playback") return;
@@ -211,11 +295,15 @@ export function PuzzleShotModal({
   const handleCapture = useCallback(() => {
     const v = videoRef.current;
     if (!v) return;
+    void requestDeviceMotionPermission();
     const board = captureBoardCanvas(v);
     if (!board) return;
     const { urls, cellW, cellH } = extractPieceImages(board);
     setCellSize({ w: cellW, h: cellH });
     setPieceUrls(urls);
+    setFallStarted(false);
+    fallStartedRef.current = false;
+    setFallTargets([]);
     setBurstKey((k) => k + 1);
     setPhase("playback");
   }, []);
@@ -263,7 +351,7 @@ export function PuzzleShotModal({
                   muted
                   autoPlay
                 />
-                <div className="relative z-10 w-[min(88vw,calc(88vh*2/3))] aspect-[2/3] pointer-events-none">
+                <div className="relative z-10 w-[min(48vw,176px)] sm:w-[min(48vw,200px)] aspect-[2/3] pointer-events-none">
                   <svg
                     viewBox={`0 0 ${PS_BOARD_W} ${PS_BOARD_H}`}
                     className="w-full h-full drop-shadow-[0_0_1px_rgba(0,0,0,0.8)]"
@@ -287,12 +375,9 @@ export function PuzzleShotModal({
         )}
 
         {phase === "playback" && pieceUrls.length > 0 && (
-          <div
-            className="relative z-10 flex justify-center items-center w-full h-full px-2"
-            style={{ perspective: "900px" }}
-          >
+          <div className="relative z-10 flex justify-center items-center w-full h-full px-2 overflow-visible">
             <div
-              className="grid gap-1"
+              className="grid gap-1 overflow-visible"
               style={{
                 gridTemplateColumns: `repeat(2, ${cellSize.w}px)`,
                 transform: `scale(${fitScale})`,
@@ -304,6 +389,13 @@ export function PuzzleShotModal({
                 if (!href) return null;
                 const cx = ((col + 0.5) * PS_PIECE_W) / PS_BOARD_W;
                 const cy = ((row + 0.5) * PS_PIECE_H) / PS_BOARD_H;
+                const t = fallTargets[i];
+                const dropping = Boolean(fallStarted && t);
+                const commonStyle = {
+                  transformOrigin: `${cx * 100}% ${cy * 100}%`,
+                  filter:
+                    "drop-shadow(0 6px 14px rgba(0,0,0,0.55)) drop-shadow(0 0 2px rgba(255,255,255,0.25))",
+                } as const;
                 return (
                   <motion.img
                     key={`${burstKey}-${i}`}
@@ -311,31 +403,32 @@ export function PuzzleShotModal({
                     alt=""
                     width={cellSize.w}
                     height={cellSize.h}
-                    className="block select-none rounded-sm"
-                    style={{
-                      transformOrigin: `${cx * 100}% ${cy * 100}%`,
-                      filter:
-                        "drop-shadow(0 6px 14px rgba(0,0,0,0.55)) drop-shadow(0 0 2px rgba(255,255,255,0.25))",
-                    }}
-                    initial={{ opacity: 1, rotateX: 0, y: 0, scale: 1 }}
-                    animate={{
-                      opacity: 0,
-                      rotateX: 68,
-                      y: 220,
-                      scale: 0.92,
-                    }}
-                    transition={{
-                      duration: 1.15,
-                      delay: i * 0.06,
-                      ease: [0.22, 1, 0.36, 1],
-                    }}
+                    className="block select-none rounded-sm will-change-transform"
+                    style={commonStyle}
+                    draggable={false}
+                    initial={false}
+                    animate={
+                      dropping
+                        ? { opacity: 0, x: t!.x, y: t!.y, rotate: t!.rotate }
+                        : { opacity: 1, x: 0, y: 0, rotate: 0 }
+                    }
+                    transition={
+                      dropping
+                        ? {
+                            duration: t!.duration,
+                            delay: t!.delay,
+                            ease: [0.55, 0.055, 0.675, 0.19],
+                          }
+                        : { duration: 0 }
+                    }
                     onAnimationComplete={() => {
-                      if (i === lastIndex) {
-                        window.setTimeout(() => {
-                          setPhase("camera");
-                          setPieceUrls([]);
-                        }, 350);
-                      }
+                      if (!dropping || i !== lastIndex) return;
+                      window.setTimeout(() => {
+                        setPhase("camera");
+                        setPieceUrls([]);
+                        setFallStarted(false);
+                        fallStartedRef.current = false;
+                      }, 280);
                     }}
                   />
                 );
@@ -346,7 +439,16 @@ export function PuzzleShotModal({
       </div>
 
       {phase === "camera" && !camError ? (
-        <div className="p-4 pb-6 flex justify-center safe-area-pb">
+        <div className="p-4 pb-6 flex flex-wrap justify-center items-center gap-3 safe-area-pb">
+          <button
+            type="button"
+            onClick={() => setFacingUser((f) => !f)}
+            className="flex items-center gap-2 rounded-full bg-white/15 text-white px-5 py-3 text-sm font-semibold border border-white/25 hover:bg-white/25 active:scale-[0.98] transition-transform"
+            aria-label={isKo ? "카메라 전환" : "Switch camera"}
+          >
+            <SwitchCamera className="w-5 h-5" />
+            {isKo ? "전환" : "Flip"}
+          </button>
           <button
             type="button"
             onClick={handleCapture}
@@ -359,9 +461,33 @@ export function PuzzleShotModal({
       ) : null}
 
       {phase === "playback" ? (
-        <p className="text-center text-xs text-white/50 pb-3 px-4">
-          {isKo ? "조각이 떨어지면 카메라로 돌아갑니다." : "Pieces fall away, then the camera returns."}
-        </p>
+        <div className="pb-4 px-4 space-y-2">
+          {!fallStarted ? (
+            <>
+              <p className="text-center text-xs text-white/60">
+                {isKo
+                  ? "폰을 흔들면 조각이 떨어져요. (PC·센서 없음: 아래 버튼)"
+                  : "Shake the phone to drop pieces. (Or use the button on desktop.)"}
+              </p>
+              <div className="flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => {
+                    void requestDeviceMotionPermission();
+                    startFall();
+                  }}
+                  className="rounded-full bg-amber-500/90 text-black px-5 py-2.5 text-sm font-semibold hover:bg-amber-400 active:scale-[0.98] transition-transform"
+                >
+                  {isKo ? "조각 떨어뜨리기" : "Drop pieces"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <p className="text-center text-xs text-white/45">
+              {isKo ? "끝나면 카메라로 돌아갑니다." : "Returning to camera when done."}
+            </p>
+          )}
+        </div>
       ) : null}
     </div>
   );
