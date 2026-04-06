@@ -94,6 +94,16 @@ async function loadPieceProgressMaps(
   return { lockedByRoom, rowsByRoom };
 }
 
+/**
+ * Match lobby `snappedCount`: min(total, max(pieces.is_locked count, user's score sum in room)).
+ * Progress can come from `scores` before/without `is_locked` rows matching lobby behavior.
+ */
+function dashboardProgressSnapped(totalPieces: number, lockedFromDb: number, userScoreSum: number): number {
+  if (totalPieces <= 0) return 0;
+  const scored = Math.max(0, Math.floor(userScoreSum));
+  return Math.min(totalPieces, Math.max(lockedFromDb, scored));
+}
+
 type AuthProvider = "web_local" | "toss";
 
 interface JwtPayload {
@@ -625,13 +635,33 @@ async function startServer() {
     for (const s of scoreRows ?? []) {
       const rid = Number((s as { room_id?: unknown }).room_id);
       const sc = Number((s as { score?: unknown }).score ?? 0);
-      if (Number.isFinite(rid) && rid > 0) scoreByRoom.set(rid, sc);
+      if (!Number.isFinite(rid) || rid <= 0 || !Number.isFinite(sc)) continue;
+      scoreByRoom.set(rid, (scoreByRoom.get(rid) ?? 0) + Math.floor(sc));
     }
 
     const roomIdsForProgress = [...roomIdSet];
     const pieceMaps = await loadPieceProgressMaps(authSupabase, roomIdsForProgress);
     const lockedByRoom = pieceMaps?.lockedByRoom ?? new Map<number, number>();
     const pieceRowsByRoom = pieceMaps?.rowsByRoom ?? new Map<number, number>();
+
+    /** Same as lobby: sum of all players' scores per room (not only the dashboard user). */
+    const roomScoreSumByRoom = new Map<number, number>();
+    if (roomIdsForProgress.length > 0) {
+      const { data: allScores, error: allScoresErr } = await authSupabase
+        .from("scores")
+        .select("room_id, score")
+        .in("room_id", roomIdsForProgress);
+      if (allScoresErr) {
+        console.warn("[dashboard/room-scores]", allScoresErr.message);
+      } else {
+        for (const row of allScores ?? []) {
+          const rid = Number((row as { room_id?: unknown }).room_id);
+          const sc = Number((row as { score?: unknown }).score ?? 0);
+          if (!Number.isFinite(rid) || rid <= 0 || !Number.isFinite(sc) || sc <= 0) continue;
+          roomScoreSumByRoom.set(rid, (roomScoreSumByRoom.get(rid) ?? 0) + Math.floor(sc));
+        }
+      }
+    }
 
     let participatedRooms: Array<Record<string, unknown>> = [];
     if (roomIdSet.size > 0) {
@@ -651,7 +681,10 @@ async function startServer() {
         const pieceCountDb = Number(room.piece_count ?? 0);
         const rowTotal = pieceRowsByRoom.get(rid) ?? 0;
         const totalPieces = Math.max(pieceCountDb, rowTotal);
-        const lockedPieces = lockedByRoom.get(rid) ?? 0;
+        const lockedFromDb = lockedByRoom.get(rid) ?? 0;
+        const userScoreSum = scoreByRoom.get(rid) ?? 0;
+        const roomScoreSum = roomScoreSumByRoom.get(rid) ?? 0;
+        const lockedPieces = dashboardProgressSnapped(totalPieces, lockedFromDb, roomScoreSum);
         const progressPercent =
           totalPieces > 0 ? Math.min(100, Math.round((lockedPieces / totalPieces) * 100)) : 0;
         const statusStr = String(room.status ?? "");
@@ -671,7 +704,7 @@ async function startServer() {
           completedAt: (room.completed_at as string) ?? null,
           creatorName: (room.creator_name as string) ?? null,
           lastVisitedAt: visitByRoom.get(rid) ?? null,
-          scoreInRoom: scoreByRoom.get(rid) ?? 0,
+          scoreInRoom: userScoreSum,
           iAmCreator,
         };
       });
@@ -770,13 +803,32 @@ async function startServer() {
     for (const s of scoreRows ?? []) {
       const rid = Number((s as { room_id?: unknown }).room_id);
       const sc = Number((s as { score?: unknown }).score ?? 0);
-      if (Number.isFinite(rid) && rid > 0) scoreByRoom.set(rid, sc);
+      if (!Number.isFinite(rid) || rid <= 0 || !Number.isFinite(sc)) continue;
+      scoreByRoom.set(rid, (scoreByRoom.get(rid) ?? 0) + Math.floor(sc));
     }
 
     const profileRoomIds = [...roomIdSet];
     const profilePieceMaps = await loadPieceProgressMaps(authSupabase, profileRoomIds);
     const profileLockedByRoom = profilePieceMaps?.lockedByRoom ?? new Map<number, number>();
     const profilePieceRowsByRoom = profilePieceMaps?.rowsByRoom ?? new Map<number, number>();
+
+    const profileRoomScoreSumByRoom = new Map<number, number>();
+    if (profileRoomIds.length > 0) {
+      const { data: profileAllScores, error: profileScoresErr } = await authSupabase
+        .from("scores")
+        .select("room_id, score")
+        .in("room_id", profileRoomIds);
+      if (profileScoresErr) {
+        console.warn("[profile/room-scores]", profileScoresErr.message);
+      } else {
+        for (const row of profileAllScores ?? []) {
+          const rid = Number((row as { room_id?: unknown }).room_id);
+          const sc = Number((row as { score?: unknown }).score ?? 0);
+          if (!Number.isFinite(rid) || rid <= 0 || !Number.isFinite(sc) || sc <= 0) continue;
+          profileRoomScoreSumByRoom.set(rid, (profileRoomScoreSumByRoom.get(rid) ?? 0) + Math.floor(sc));
+        }
+      }
+    }
 
     let participatedRooms: Array<Record<string, unknown>> = [];
     if (roomIdSet.size > 0) {
@@ -796,7 +848,10 @@ async function startServer() {
         const pieceCountDb = Number(room.piece_count ?? 0);
         const rowTotal = profilePieceRowsByRoom.get(rid) ?? 0;
         const totalPieces = Math.max(pieceCountDb, rowTotal);
-        const lockedPieces = profileLockedByRoom.get(rid) ?? 0;
+        const lockedFromDb = profileLockedByRoom.get(rid) ?? 0;
+        const userScoreSum = scoreByRoom.get(rid) ?? 0;
+        const roomScoreSum = profileRoomScoreSumByRoom.get(rid) ?? 0;
+        const lockedPieces = dashboardProgressSnapped(totalPieces, lockedFromDb, roomScoreSum);
         const progressPercent =
           totalPieces > 0 ? Math.min(100, Math.round((lockedPieces / totalPieces) * 100)) : 0;
         const statusStr = String(room.status ?? "");
@@ -817,7 +872,7 @@ async function startServer() {
           completedAt: (room.completed_at as string) ?? null,
           creatorName: (room.creator_name as string) ?? null,
           lastVisitedAt: visitByRoom.get(rid) ?? null,
-          scoreInRoom: scoreByRoom.get(rid) ?? 0,
+          scoreInRoom: userScoreSum,
           iAmCreator: subjectCreatedThis,
         };
       });
