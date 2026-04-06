@@ -279,17 +279,11 @@ function puzzleViewportCornerRadiusPx(w: number, h: number) {
   return Math.max(6, Math.min(w, h) * BEVEL_CORNER_RATIO);
 }
 
-/**
- * 조각 경계: 맞닿는 변은 두 번 그려져 겹침 시 ~50% 느낌이 되도록 메인 흰 선 25%.
- * 보드 외곽(둥근 사각)은 한 겹만 50%로 그려 안쪽 격자와 구분.
- */
+/** 퍼즐 격자: 흰색 틀은 투명(미리보기·카메라에서 비디오만 보이게). 어두운 베벨만 남김. */
 function PuzzleShotGridSvgBeveled({ className }: { className?: string }) {
   const reactId = useId();
   const blurId = `psf-blur-${reactId.replace(/:/g, "")}`;
   const pieces = puzzleShotPieceIndexList();
-  const outerRx = Math.min(PS_BOARD_W, PS_BOARD_H) * BEVEL_CORNER_RATIO;
-  const outerStroke = 0.9;
-  const outerInset = outerStroke * 0.5;
 
   return (
     <svg
@@ -318,15 +312,6 @@ function PuzzleShotGridSvgBeveled({ className }: { className?: string }) {
               <path
                 d={d}
                 fill="none"
-                stroke="rgba(255,255,255,0.12)"
-                strokeWidth={0.85}
-                strokeLinejoin="round"
-                strokeLinecap="round"
-                transform="translate(1.1, 1.1)"
-              />
-              <path
-                d={d}
-                fill="none"
                 stroke="rgba(0,0,0,0.12)"
                 strokeWidth={0.85}
                 strokeLinejoin="round"
@@ -334,30 +319,9 @@ function PuzzleShotGridSvgBeveled({ className }: { className?: string }) {
                 transform="translate(-1.1, -1.1)"
               />
             </g>
-            <path
-              d={d}
-              fill="none"
-              stroke="rgba(255,255,255,0.25)"
-              strokeWidth={0.65}
-              strokeLinejoin="round"
-              strokeLinecap="round"
-              vectorEffect="nonScalingStroke"
-            />
           </g>
         );
       })}
-      <rect
-        x={outerInset}
-        y={outerInset}
-        width={PS_BOARD_W - 2 * outerInset}
-        height={PS_BOARD_H - 2 * outerInset}
-        rx={Math.max(0, outerRx - outerInset)}
-        ry={Math.max(0, outerRx - outerInset)}
-        fill="none"
-        stroke="rgba(255,255,255,0.5)"
-        strokeWidth={outerStroke}
-        vectorEffect="nonScalingStroke"
-      />
     </svg>
   );
 }
