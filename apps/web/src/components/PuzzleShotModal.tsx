@@ -4,8 +4,10 @@ import { Camera, SwitchCamera, X } from "lucide-react";
 import {
   PS_BOARD_H,
   PS_BOARD_W,
+  PS_COLS,
   PS_PIECE_H,
   PS_PIECE_W,
+  PS_ROWS,
   buildPiecePath2D,
   piecePathSvgD,
   puzzleShotPieceIndexList,
@@ -179,7 +181,9 @@ function captureBoardCanvasFromFrame(video: HTMLVideoElement, clipEl: Element): 
   if (uw < 2 || uh < 2) return null;
 
   const maxW = 400;
-  const W = Math.min(maxW, Math.max(1, Math.round(uw)));
+  let W = Math.min(maxW, Math.max(PS_COLS, Math.round(uw)));
+  W -= W % PS_COLS;
+  if (W < PS_COLS) W = PS_COLS;
   const H = Math.round((W * PS_BOARD_H) / PS_BOARD_W);
 
   const canvas = document.createElement("canvas");
@@ -210,12 +214,12 @@ function extractPieceImages(board: HTMLCanvasElement): PuzzleShotExtractResult {
   const sy = H / PS_BOARD_H;
   const tabDepth = Math.min(PS_PIECE_W, PS_PIECE_H) * 0.2 * Math.min(sx, sy);
   const pad = Math.ceil(tabDepth * 1.25);
-  const pieceW = Math.ceil(PS_PIECE_W * sx);
-  const pieceH = Math.ceil(PS_PIECE_H * sy);
+  const pieceW = W / PS_COLS;
+  const pieceH = H / PS_ROWS;
   const cw = pieceW + 2 * pad;
   const ch = pieceH + 2 * pad;
-  const pieceWpx = (PS_PIECE_W * W) / PS_BOARD_W;
-  const pieceHpx = (PS_PIECE_H * H) / PS_BOARD_H;
+  const pieceWpx = pieceW;
+  const pieceHpx = pieceH;
   const scaleRef = Math.min(sx, sy);
 
   const urls: string[] = [];
@@ -270,13 +274,16 @@ function puzzleViewportCornerRadiusPx(w: number, h: number) {
 }
 
 /**
- * 격자: 내부 맞닿는 변은 두 번 그려져 진해지므로 메인 흰 선은 25% (겹치면 ~50% 느낌).
- * 바깥 테두리·홈(조각 경계) 동일 규칙.
+ * 조각 경계: 맞닿는 변은 두 번 그려져 겹침 시 ~50% 느낌이 되도록 메인 흰 선 25%.
+ * 보드 외곽(둥근 사각)은 한 겹만 50%로 그려 안쪽 격자와 구분.
  */
 function PuzzleShotGridSvgBeveled({ className }: { className?: string }) {
   const reactId = useId();
   const blurId = `psf-blur-${reactId.replace(/:/g, "")}`;
   const pieces = puzzleShotPieceIndexList();
+  const outerRx = Math.min(PS_BOARD_W, PS_BOARD_H) * BEVEL_CORNER_RATIO;
+  const outerStroke = 0.9;
+  const outerInset = outerStroke * 0.5;
 
   return (
     <svg
@@ -333,6 +340,18 @@ function PuzzleShotGridSvgBeveled({ className }: { className?: string }) {
           </g>
         );
       })}
+      <rect
+        x={outerInset}
+        y={outerInset}
+        width={PS_BOARD_W - 2 * outerInset}
+        height={PS_BOARD_H - 2 * outerInset}
+        rx={Math.max(0, outerRx - outerInset)}
+        ry={Math.max(0, outerRx - outerInset)}
+        fill="none"
+        stroke="rgba(255,255,255,0.5)"
+        strokeWidth={outerStroke}
+        vectorEffect="nonScalingStroke"
+      />
     </svg>
   );
 }
@@ -633,14 +652,17 @@ export function PuzzleShotModal({
 
         {phase === "playback" && pieceUrls.length > 0 && (
           <div className="relative z-10 flex items-center justify-center">
-            <div
-              ref={puzzleFrameOuterRef}
-              className={PUZZLE_VIEWPORT_CLASS}
-              style={{ borderRadius: clipRadiusPx, overflow: "hidden" }}
-            >
-              <div className="absolute inset-0 flex items-center justify-center">
+            {/* 카메라 단계와 동일: 바깥은 비율 박스만, 둥근 클립은 안쪽 레이어에만 */}
+            <div ref={puzzleFrameOuterRef} className={PUZZLE_VIEWPORT_CLASS}>
+              <div
+                className="absolute inset-0 flex items-center justify-center"
+                style={{
+                  borderRadius: clipRadiusPx,
+                  overflow: fallStarted ? "visible" : "hidden",
+                }}
+              >
                 <div
-                  className="relative overflow-visible"
+                  className="relative"
                   style={{
                     width: boardW,
                     height: boardH,
@@ -648,56 +670,59 @@ export function PuzzleShotModal({
                     transformOrigin: "center center",
                   }}
                 >
-                {pieces.map(({ col, row }, i) => {
-                  const href = pieceUrls[i];
-                  if (!href) return null;
-                  const cx = ((col + 0.5) * PS_PIECE_W) / PS_BOARD_W;
-                  const cy = ((row + 0.5) * PS_PIECE_H) / PS_BOARD_H;
-                  const t = fallTargets[i];
-                  const dropping = Boolean(fallStarted && t);
-                  const commonStyle = {
-                    transformOrigin: `${cx * 100}% ${cy * 100}%`,
-                  } as const;
-                  return (
-                    <motion.img
-                      key={`${burstKey}-${i}`}
-                      src={href}
-                      alt=""
-                      width={cellW}
-                      height={cellH}
-                      className="absolute select-none block max-w-none will-change-transform"
-                      draggable={false}
-                      style={{
-                        ...commonStyle,
-                        left: col * pieceWpx - pad,
-                        top: row * pieceHpx - pad,
-                        width: cellW,
-                        height: cellH,
-                      }}
-                      initial={false}
-                      animate={
-                        dropping
-                          ? { opacity: 0, x: t!.x, y: t!.y, rotate: t!.rotate }
-                          : { opacity: 1, x: 0, y: 0, rotate: 0 }
-                      }
-                      transition={
-                        dropping
-                          ? {
-                              duration: t!.duration,
-                              delay: t!.delay,
-                              ease: [0.55, 0.055, 0.675, 0.19],
-                            }
-                          : { duration: 0 }
-                      }
-                      onAnimationComplete={() => {
-                        if (!dropping || i !== lastIndex) return;
-                        window.setTimeout(() => {
-                          returnToCamera();
-                        }, 280);
-                      }}
-                    />
-                  );
-                })}
+                  {pieces.map(({ col, row }, i) => {
+                    const href = pieceUrls[i];
+                    if (!href) return null;
+                    const cx = ((col + 0.5) * PS_PIECE_W) / PS_BOARD_W;
+                    const cy = ((row + 0.5) * PS_PIECE_H) / PS_BOARD_H;
+                    const t = fallTargets[i];
+                    const dropping = Boolean(fallStarted && t);
+                    const commonStyle = {
+                      transformOrigin: `${cx * 100}% ${cy * 100}%`,
+                    } as const;
+                    return (
+                      <motion.img
+                        key={`${burstKey}-${i}`}
+                        src={href}
+                        alt=""
+                        width={cellW}
+                        height={cellH}
+                        className="absolute select-none block max-w-none will-change-transform"
+                        draggable={false}
+                        style={{
+                          ...commonStyle,
+                          left: col * pieceWpx - pad,
+                          top: row * pieceHpx - pad,
+                          width: cellW,
+                          height: cellH,
+                        }}
+                        initial={false}
+                        animate={
+                          dropping
+                            ? { opacity: 0, x: t!.x, y: t!.y, rotate: t!.rotate }
+                            : { opacity: 1, x: 0, y: 0, rotate: 0 }
+                        }
+                        transition={
+                          dropping
+                            ? {
+                                duration: t!.duration,
+                                delay: t!.delay,
+                                ease: [0.55, 0.055, 0.675, 0.19],
+                              }
+                            : { duration: 0 }
+                        }
+                        onAnimationComplete={() => {
+                          if (!dropping || i !== lastIndex) return;
+                          window.setTimeout(() => {
+                            returnToCamera();
+                          }, 280);
+                        }}
+                      />
+                    );
+                  })}
+                  {!fallStarted ? (
+                    <PuzzleShotGridSvgBeveled className="pointer-events-none absolute inset-0 block h-full w-full" />
+                  ) : null}
                 </div>
               </div>
             </div>
