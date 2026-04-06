@@ -23,6 +23,26 @@ const SHAKE_COOLDOWN_MS = 450;
 
 type PieceFallTarget = { x: number; y: number; rotate: number; duration: number; delay: number };
 
+type PiecePlayTransform = { x: number; y: number; r: number };
+
+type PuzzleShotTouchDragRef = { i: number; sx: number; sy: number; ox: number; oy: number; tid: number };
+type PuzzleShotTouchRotateRef = { i: number; ang0: number; r0: number };
+
+function initialPiecePlayTransforms(): PiecePlayTransform[] {
+  return puzzleShotPieceIndexList().map(() => ({ x: 0, y: 0, r: 0 }));
+}
+
+function buildScatterTransforms(): PiecePlayTransform[] {
+  if (typeof window === "undefined") return initialPiecePlayTransforms();
+  const vh = window.innerHeight;
+  const vw = window.innerWidth;
+  return puzzleShotPieceIndexList().map(() => ({
+    x: (Math.random() - 0.5) * Math.min(220, vw * 0.44),
+    y: (Math.random() - 0.22) * Math.min(260, vh * 0.4),
+    r: (Math.random() - 0.5) * 320,
+  }));
+}
+
 function requestDeviceMotionPermission(): Promise<boolean> {
   const DM = DeviceMotionEvent as typeof DeviceMotionEvent & {
     requestPermission?: () => Promise<string>;
@@ -453,6 +473,23 @@ export function PuzzleShotModal({
     cellW: 120,
     cellH: 120,
   });
+  const [scatterMode, setScatterMode] = useState(false);
+  const [piecePlayTransform, setPiecePlayTransform] = useState<PiecePlayTransform[]>(initialPiecePlayTransforms);
+  const [activeDragPiece, setActiveDragPiece] = useState<number | null>(null);
+  const previewScaleRef = useRef(1);
+  const pieceTransformRef = useRef<PiecePlayTransform[]>(piecePlayTransform);
+  pieceTransformRef.current = piecePlayTransform;
+
+  const touchDragRef = useRef<PuzzleShotTouchDragRef | null>(null);
+  const touchRotateRef = useRef<PuzzleShotTouchRotateRef | null>(null);
+  const mouseDragRef = useRef<{
+    i: number;
+    sx: number;
+    sy: number;
+    ox: number;
+    oy: number;
+    pid: number;
+  } | null>(null);
 
   const fallStartedRef = useRef(false);
   const lastAccelRef = useRef<{ x: number; y: number; z: number } | null>(null);
@@ -546,6 +583,17 @@ export function PuzzleShotModal({
   }, [fallStarted]);
 
   useEffect(() => {
+    setPiecePlayTransform(initialPiecePlayTransforms());
+    setScatterMode(false);
+  }, [burstKey]);
+
+  const startScatter = useCallback(() => {
+    if (fallStartedRef.current) return;
+    setPiecePlayTransform(buildScatterTransforms());
+    setScatterMode(true);
+  }, []);
+
+  useEffect(() => {
     if (!open || phase !== "playback" || fallStarted) return;
     lastAccelRef.current = null;
 
@@ -566,12 +614,12 @@ export function PuzzleShotModal({
       if (delta < SHAKE_DELTA_THRESHOLD) return;
       if (now - lastShakeAtRef.current < SHAKE_COOLDOWN_MS) return;
       lastShakeAtRef.current = now;
-      startFall();
+      startScatter();
     };
 
     window.addEventListener("devicemotion", onMotion);
     return () => window.removeEventListener("devicemotion", onMotion);
-  }, [open, phase, fallStarted, burstKey, startFall]);
+  }, [open, phase, fallStarted, burstKey, startScatter]);
 
   useEffect(() => {
     if (!open) {
@@ -666,6 +714,9 @@ export function PuzzleShotModal({
     setFallStarted(false);
     fallStartedRef.current = false;
     setFallTargets([]);
+    setScatterMode(false);
+    setPiecePlayTransform(initialPiecePlayTransforms());
+    setActiveDragPiece(null);
   }, []);
 
   const handleCapture = useCallback(() => {
@@ -707,6 +758,137 @@ export function PuzzleShotModal({
     onClose();
   }, [onClose, stopStream]);
 
+  const onPieceMousePointerDown = useCallback(
+    (e: React.PointerEvent, i: number) => {
+      if (fallStarted || !scatterMode) return;
+      if (e.pointerType === "touch") return;
+      e.preventDefault();
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      const pt = pieceTransformRef.current[i];
+      mouseDragRef.current = {
+        i,
+        sx: e.clientX,
+        sy: e.clientY,
+        ox: pt.x,
+        oy: pt.y,
+        pid: e.pointerId,
+      };
+      setActiveDragPiece(i);
+    },
+    [fallStarted, scatterMode]
+  );
+
+  const onPieceMousePointerMove = useCallback((e: React.PointerEvent, i: number) => {
+    const d = mouseDragRef.current;
+    if (!d || d.i !== i || d.pid !== e.pointerId) return;
+    const s = previewScaleRef.current;
+    if (s < 1e-6) return;
+    const dx = (e.clientX - d.sx) / s;
+    const dy = (e.clientY - d.sy) / s;
+    setPiecePlayTransform((prev) => {
+      const n = [...prev];
+      n[i] = { ...n[i], x: d.ox + dx, y: d.oy + dy };
+      return n;
+    });
+  }, []);
+
+  const onPieceMousePointerUp = useCallback((e: React.PointerEvent, i: number) => {
+    const d = mouseDragRef.current;
+    if (!d || d.i !== i || d.pid !== e.pointerId) return;
+    mouseDragRef.current = null;
+    setActiveDragPiece((cur) => (cur === i ? null : cur));
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const onPieceLostPointerCapture = useCallback((e: React.PointerEvent, i: number) => {
+    const d = mouseDragRef.current;
+    if (d?.i === i && d.pid === e.pointerId) {
+      mouseDragRef.current = null;
+      setActiveDragPiece((cur) => (cur === i ? null : cur));
+    }
+  }, []);
+
+  const onPieceTouchStart = useCallback(
+    (e: React.TouchEvent, i: number) => {
+      if (fallStarted || !scatterMode) return;
+      if (e.touches.length === 2) {
+        e.preventDefault();
+        touchDragRef.current = null;
+        const a = e.touches[0];
+        const b = e.touches[1];
+        const ang = (Math.atan2(b.clientY - a.clientY, b.clientX - a.clientX) * 180) / Math.PI;
+        touchRotateRef.current = { i, ang0: ang, r0: pieceTransformRef.current[i].r };
+        setActiveDragPiece(i);
+        return;
+      }
+      if (e.touches.length === 1) {
+        const t = e.touches[0];
+        touchDragRef.current = {
+          i,
+          sx: t.clientX,
+          sy: t.clientY,
+          ox: pieceTransformRef.current[i].x,
+          oy: pieceTransformRef.current[i].y,
+          tid: t.identifier,
+        };
+        setActiveDragPiece(i);
+      }
+    },
+    [fallStarted, scatterMode]
+  );
+
+  const onPieceTouchMove = useCallback(
+    (e: React.TouchEvent, i: number) => {
+      if (fallStarted) return;
+      const rot = touchRotateRef.current;
+      if (rot && rot.i === i && e.touches.length >= 2) {
+        e.preventDefault();
+        const t0 = e.touches[0];
+        const t1 = e.touches[1];
+        const ang = (Math.atan2(t1.clientY - t0.clientY, t1.clientX - t0.clientX) * 180) / Math.PI;
+        let dAng = ang - rot.ang0;
+        if (dAng > 180) dAng -= 360;
+        if (dAng < -180) dAng += 360;
+        setPiecePlayTransform((prev) => {
+          const n = [...prev];
+          n[i] = { ...n[i], r: rot.r0 + dAng };
+          return n;
+        });
+        return;
+      }
+      const d = touchDragRef.current;
+      if (!d || d.i !== i || e.touches.length !== 1) return;
+      const t = e.touches[0];
+      if (t.identifier !== d.tid) return;
+      e.preventDefault();
+      const s = previewScaleRef.current;
+      if (s < 1e-6) return;
+      const dx = (t.clientX - d.sx) / s;
+      const dy = (t.clientY - d.sy) / s;
+      setPiecePlayTransform((prev) => {
+        const n = [...prev];
+        n[i] = { ...n[i], x: d.ox + dx, y: d.oy + dy };
+        return n;
+      });
+    },
+    [fallStarted]
+  );
+
+  const onPieceTouchEnd = useCallback((e: React.TouchEvent, i: number) => {
+    if (touchRotateRef.current?.i === i && e.touches.length < 2) {
+      touchRotateRef.current = null;
+    }
+    const d = touchDragRef.current;
+    if (d?.i === i && e.touches.length === 0) {
+      touchDragRef.current = null;
+      setActiveDragPiece((cur) => (cur === i ? null : cur));
+    }
+  }, []);
+
   const pieces = puzzleShotPieceIndexList();
   const lastIndex = pieces.length - 1;
 
@@ -724,6 +906,7 @@ export function PuzzleShotModal({
   /** scale()은 레이아웃 박스를 안 줄여서 flex·둥근 클립과 그려진 내용이 어긋남 → 바깥은 스케일된 실제 크기 */
   const previewLayoutW = layoutBoardW * previewScale;
   const previewLayoutH = layoutBoardH * previewScale;
+  previewScaleRef.current = previewScale;
 
   return (
     <div
@@ -807,7 +990,7 @@ export function PuzzleShotModal({
                 className="absolute inset-0 flex items-center justify-center"
                 style={{
                   borderRadius: clipRadiusPx,
-                  overflow: fallStarted ? "visible" : "hidden",
+                  overflow: fallStarted || scatterMode ? "visible" : "hidden",
                 }}
               >
                 <div
@@ -830,6 +1013,7 @@ export function PuzzleShotModal({
                     const cy = ((row + 0.5) * PS_PIECE_H) / PS_BOARD_H;
                     const t = fallTargets[i];
                     const dropping = Boolean(fallStarted && t);
+                    const pt = piecePlayTransform[i] ?? { x: 0, y: 0, r: 0 };
                     const commonStyle = {
                       transformOrigin: `${cx * 100}% ${cy * 100}%`,
                     } as const;
@@ -840,7 +1024,7 @@ export function PuzzleShotModal({
                         alt=""
                         width={cellW}
                         height={cellH}
-                        className="absolute select-none block max-w-none will-change-transform"
+                        className="absolute touch-none select-none block max-w-none will-change-transform"
                         draggable={false}
                         style={{
                           ...commonStyle,
@@ -848,22 +1032,37 @@ export function PuzzleShotModal({
                           top: row * pieceHpx - pad,
                           width: cellW,
                           height: cellH,
+                          zIndex: activeDragPiece === i ? 50 : 10 + i,
+                          cursor: scatterMode && !fallStarted ? "grab" : undefined,
                         }}
                         initial={false}
                         animate={
-                          dropping
-                            ? { opacity: 0, x: t!.x, y: t!.y, rotate: t!.rotate }
-                            : { opacity: 1, x: 0, y: 0, rotate: 0 }
+                          dropping && t
+                            ? {
+                                opacity: 0,
+                                x: pt.x + t.x,
+                                y: pt.y + t.y,
+                                rotate: pt.r + t.rotate,
+                              }
+                            : { opacity: 1, x: pt.x, y: pt.y, rotate: pt.r }
                         }
                         transition={
-                          dropping
+                          dropping && t
                             ? {
-                                duration: t!.duration,
-                                delay: t!.delay,
+                                duration: t.duration,
+                                delay: t.delay,
                                 ease: [0.55, 0.055, 0.675, 0.19],
                               }
                             : { duration: 0 }
                         }
+                        onPointerDown={(e) => onPieceMousePointerDown(e, i)}
+                        onPointerMove={(e) => onPieceMousePointerMove(e, i)}
+                        onPointerUp={(e) => onPieceMousePointerUp(e, i)}
+                        onPointerCancel={(e) => onPieceMousePointerUp(e, i)}
+                        onLostPointerCapture={(e) => onPieceLostPointerCapture(e, i)}
+                        onTouchStart={(e) => onPieceTouchStart(e, i)}
+                        onTouchMove={(e) => onPieceTouchMove(e, i)}
+                        onTouchEnd={(e) => onPieceTouchEnd(e, i)}
                         onAnimationComplete={() => {
                           if (!dropping || i !== lastIndex) return;
                           window.setTimeout(() => {
@@ -873,7 +1072,7 @@ export function PuzzleShotModal({
                       />
                     );
                   })}
-                  {!fallStarted ? (
+                  {!fallStarted && !scatterMode ? (
                     <PuzzleShotGridSvgBeveled className="pointer-events-none absolute inset-0 block h-full w-full" />
                   ) : null}
                   </div>
@@ -912,19 +1111,29 @@ export function PuzzleShotModal({
             <>
               <p className="text-center text-xs text-white/60 max-w-sm">
                 {isKo
-                  ? "폰을 흔들면 조각이 떨어져요. (PC·센서 없음: 아래 버튼)"
-                  : "Shake to drop pieces, or use the button on desktop."}
+                  ? "폰을 흔들면 조각이 흩어집니다. 한 손가락으로 끌어 이동, 두 손가락으로 회전하세요. 저장은 떨어지는 연출만 합니다(파일 저장 없음)."
+                  : "Shake to scatter. Drag with one finger, rotate with two. Save plays the drop animation only (no file saved)."}
               </p>
               <div className="flex flex-wrap justify-center gap-2">
                 <button
                   type="button"
                   onClick={() => {
                     void requestDeviceMotionPermission();
-                    startFall();
+                    startScatter();
                   }}
                   className="rounded-full bg-amber-500/90 text-black px-5 py-2.5 text-sm font-semibold hover:bg-amber-400 active:scale-[0.98] transition-transform"
                 >
-                  {isKo ? "조각 떨어뜨리기" : "Drop pieces"}
+                  {isKo ? "흩어보기" : "Scatter"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void requestDeviceMotionPermission();
+                    startFall();
+                  }}
+                  className="rounded-full bg-white text-black px-5 py-2.5 text-sm font-semibold hover:bg-slate-100 active:scale-[0.98] transition-transform"
+                >
+                  {isKo ? "저장" : "Save"}
                 </button>
                 <button
                   type="button"
