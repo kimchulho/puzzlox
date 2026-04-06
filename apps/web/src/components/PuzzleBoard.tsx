@@ -41,6 +41,11 @@ const NIGHTMARE_FLOAT_ROTATE_BTN_PX = 48;
 const NIGHTMARE_FLOAT_ROTATE_GAP_PX = 4;
 /** 가로폭이 768px을 넘는 폰(가로 모드)도 `max-width:767` 미디어쿼리에서 빠지므로, 짧은 뷰포트 높이로 플로팅 회전 HUD 사용 */
 const NIGHTMARE_LANDSCAPE_PHONE_MAX_HEIGHT_PX = 520;
+/** 공통 퍼즐 뒷면 텍스처(악몽 모드 뒤집기 등). 보드 전체에 맞게 타일링. */
+const PUZZLE_BACK_FACE_IMAGE_URL =
+  "https://dedkjqejkjhqkauemmyq.supabase.co/storage/v1/object/public/puzzle_images/public/puzzle_back.jpg";
+/** 조각 뒷면에 입힐 때 기본 맞춤(contain) 스케일 대비 확대 배율 */
+const PUZZLE_BACK_FACE_TEXTURE_ZOOM = 2;
 const TOSS_WIDE_MODE_STORAGE_KEY = 'puzzle_toss_wide_mode';
 const OWNER_OVERLAY_OPACITY_STORAGE_KEY = "puzzle_owner_overlay_opacity_pct";
 const readStoredBool = (key: string, fallback: boolean) => {
@@ -201,6 +206,8 @@ export default function PuzzleBoard({
   const socketCursorMoveRef = useRef<((payload: CursorMovePayload) => void) | null>(null);
   const mainTextureRef = useRef<PIXI.Texture | null>(null);
   const objectUrlRef = useRef<string | null>(null);
+  const puzzleBackTextureRef = useRef<PIXI.Texture | null>(null);
+  const puzzleBackObjectUrlRef = useRef<string | null>(null);
   const gatherBordersRef = useRef<(() => void) | null>(null);
   const gatherByColorRef = useRef<((quick?: boolean) => void) | null>(null);
   const createMosaicFromImageRef = useRef<((imageUrl: string, quick?: boolean, gapMultiplier?: number) => Promise<void>) | null>(null);
@@ -2110,6 +2117,24 @@ export default function PuzzleBoard({
         const boardWidth = pieceWidth * GRID_COLS;
         const boardHeight = boardWidth / aspectRatio;
         const pieceHeight = boardHeight / GRID_ROWS;
+
+        puzzleBackTextureRef.current?.destroy(true);
+        puzzleBackTextureRef.current = null;
+        if (puzzleBackObjectUrlRef.current) {
+          try {
+            URL.revokeObjectURL(puzzleBackObjectUrlRef.current);
+          } catch {
+            /* noop */
+          }
+          puzzleBackObjectUrlRef.current = null;
+        }
+        try {
+          const br = await tryLoadImage(PUZZLE_BACK_FACE_IMAGE_URL);
+          puzzleBackTextureRef.current = PIXI.Texture.from(br.img);
+          puzzleBackObjectUrlRef.current = br.objectUrl;
+        } catch (e) {
+          console.warn("[PuzzleBoard] puzzle back face image failed, using solid back", e);
+        }
         
         const tabDepth = Math.min(pieceWidth, pieceHeight) * 0.2;
         const boardStartX = 0;
@@ -4900,15 +4925,42 @@ export default function PuzzleBoard({
             return overlay;
           };
 
-          /** 악몽 뒷면: 앞면과 동일 윤곽, 셀 중심 기준 좌우 반전(첫 뒤집기가 가로 카드 플립과 맞물리도록) */
-          const createBackFaceOverlay = (backStrokeW: number) => {
+          /**
+           * 악몽 뒷면: 조각 실루엣마다 뒷면 이미지 **전체**를 한 번씩 입힘(보드 전체 자르기 없음).
+           * `textureSpace: local` + pieceVisual.rotation 으로 조각 회전과 같이 돌아감.
+           * 셀 중심 기준 좌우 반전은 카드 플립 연출용(backWrap.scale.x = -1).
+           */
+          const createBackFaceOverlay = (
+            backStrokeW: number,
+            shapeMinX: number,
+            shapeMinY: number,
+            shapeMaxX: number,
+            shapeMaxY: number
+          ) => {
             const backWrap = new PIXI.Container();
             backWrap.label = "backFaceOverlay";
             backWrap.eventMode = "none";
             backWrap.visible = false;
             const g = new PIXI.Graphics();
             applyPieceShape(g);
-            g.fill({ color: 0x475569, alpha: 1 });
+            const backTex = puzzleBackTextureRef.current;
+            const tw = backTex?.width ?? 0;
+            const th = backTex?.height ?? 0;
+            const boxW = shapeMaxX - shapeMinX;
+            const boxH = shapeMaxY - shapeMinY;
+            if (backTex && tw > 0 && th > 0 && boxW > 0 && boxH > 0) {
+              const s = Math.min(boxW / tw, boxH / th) * PUZZLE_BACK_FACE_TEXTURE_ZOOM;
+              const drawW = tw * s;
+              const drawH = th * s;
+              const ox = shapeMinX + (boxW - drawW) / 2;
+              const oy = shapeMinY + (boxH - drawH) / 2;
+              const bm = new PIXI.Matrix();
+              bm.scale(s, s);
+              bm.translate(ox, oy);
+              g.fill({ texture: backTex, matrix: bm, textureSpace: "local" });
+            } else {
+              g.fill({ color: 0x475569, alpha: 1 });
+            }
             g.stroke({ color: 0x334155, alpha: 0.95, width: backStrokeW });
             backWrap.addChild(g);
             const cx = pieceWidth / 2;
@@ -4948,7 +5000,13 @@ export default function PuzzleBoard({
             const pieceVisual = new PIXI.Container();
             pieceVisual.label = "pieceVisual";
             pieceVisual.eventMode = "none";
-            const backFaceOverlay = createBackFaceOverlay(1.4 * canvasOutlineScale);
+            const backFaceOverlay = createBackFaceOverlay(
+              1.4 * canvasOutlineScale,
+              minX,
+              minY,
+              maxX,
+              maxY
+            );
 
             pieceVisual.addChild(renderTarget);
             pieceVisual.addChild(createOwnerOverlay());
@@ -5022,7 +5080,13 @@ export default function PuzzleBoard({
             pieceVisual.label = "pieceVisual";
             pieceVisual.eventMode = "none";
 
-            const backFaceOverlay = createBackFaceOverlay(1.6 * canvasOutlineScale);
+            const backFaceOverlay = createBackFaceOverlay(
+              1.6 * canvasOutlineScale,
+              minX,
+              minY,
+              maxX,
+              maxY
+            );
 
             pieceVisual.addChild(pieceSprite);
             pieceVisual.addChild(createOwnerOverlay());
@@ -6339,9 +6403,13 @@ export default function PuzzleBoard({
       isBotRunningRef.current = false;
       isColorBotRunningRef.current = false;
       const tex = mainTextureRef.current;
+      const backTex = puzzleBackTextureRef.current;
+      const backObjUrl = puzzleBackObjectUrlRef.current;
       const appInst = appInstance;
       const objUrl = objectUrlRef.current;
       mainTextureRef.current = null;
+      puzzleBackTextureRef.current = null;
+      puzzleBackObjectUrlRef.current = null;
       appInstance = null;
       objectUrlRef.current = null;
       if (snapAudioElRef.current) {
@@ -6384,6 +6452,11 @@ export default function PuzzleBoard({
             /* noop */
           }
           try {
+            backTex?.destroy(true);
+          } catch {
+            /* noop */
+          }
+          try {
             hintLayer?.destroy();
             hintLayer = null;
           } catch {
@@ -6403,6 +6476,13 @@ export default function PuzzleBoard({
           if (objUrl) {
             try {
               URL.revokeObjectURL(objUrl);
+            } catch {
+              /* noop */
+            }
+          }
+          if (backObjUrl) {
+            try {
+              URL.revokeObjectURL(backObjUrl);
             } catch {
               /* noop */
             }
