@@ -110,16 +110,22 @@ function applyRoundedOuterClipToBoard(board: HTMLCanvasElement) {
 }
 
 /**
- * 둥근 클립 안에 보이는 영역과 동일한 축정렬 직사각만 비디오에서 잘라 보드로 그립니다(모서리는 이후 캔버스에서 라운드).
- * `clipEl`: `overflow:hidden` + `border-radius` 가 적용된 뷰포트 래퍼.
+ * 퍼즐 카드(2:3 뷰포트)와 축이 맞는 직사각 영역만 비디오에서 잘라 보드로 그립니다. 모서리는 이후 캔버스에서 라운드.
+ *
+ * - `frameBoxEl`: 화면에 보이는 퍼즐 카드 박스(보통 `puzzleFrameOuterRef` — ResizeObserver와 동일 기준).
+ * - 샘플링은 이 박스의 축정렬 bounding rect 전체입니다. 라이브에서는 `border-radius`로 모서리가 가려져 보이지만,
+ *   직사각 크롭은 그 네 모서리 “코너 삼각” 픽셀까지 포함한 뒤, `applyRoundedOuterClipToBoard`에서 둥글게 잘라
+ *   코너 장면이 결과에 남을 수 있어, 틀 안만 본다고 느낀 것보다 넓게 찍힌 것처럼 느껴질 수 있습니다.
+ * - `object-cover` 비디오의 보이는 부분을 역투영해 intrinsic 좌표로 옮긴 뒤, 논리 보드 비(200:300)에 맞게
+ *   가로 또는 세로만 한 번 더 잘라 냅니다(측정된 카드 비가 2:3과 미세하게 다를 때).
  */
-function captureBoardCanvasFromFrame(video: HTMLVideoElement, clipEl: Element): HTMLCanvasElement | null {
+function captureBoardCanvasFromFrame(video: HTMLVideoElement, frameBoxEl: Element): HTMLCanvasElement | null {
   const vw = video.videoWidth;
   const vh = video.videoHeight;
   if (vw < 2 || vh < 2) return null;
 
   const vRect = video.getBoundingClientRect();
-  const fRect = clipEl.getBoundingClientRect();
+  const fRect = frameBoxEl.getBoundingClientRect();
 
   const Dw = vRect.width;
   const Dh = vRect.height;
@@ -556,9 +562,9 @@ export function PuzzleShotModal({
       requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
     }).then(() => {
       const v = videoRef.current;
-      const clip = puzzleClipRef.current;
-      if (!v || !clip) return;
-      const board = captureBoardCanvasFromFrame(v, clip);
+      const frameBox = puzzleFrameOuterRef.current ?? puzzleClipRef.current;
+      if (!v || !frameBox) return;
+      const board = captureBoardCanvasFromFrame(v, frameBox);
       if (!board) return;
       const extracted = extractPieceImages(board);
       setBoardMetrics({
