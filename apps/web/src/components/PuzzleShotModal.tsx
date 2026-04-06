@@ -598,6 +598,9 @@ export function PuzzleShotModal({
     frameLayout.w > 2 && frameLayout.h > 2
       ? Math.min(frameLayout.w / boardW, frameLayout.h / boardH)
       : 1;
+  /** scale()은 레이아웃 박스를 안 줄여서 flex·둥근 클립과 그려진 내용이 어긋남 → 바깥은 스케일된 실제 크기 */
+  const previewLayoutW = boardW * previewScale;
+  const previewLayoutH = boardH * previewScale;
 
   return (
     <div
@@ -662,14 +665,18 @@ export function PuzzleShotModal({
                 }}
               >
                 <div
-                  className="relative"
-                  style={{
-                    width: boardW,
-                    height: boardH,
-                    transform: `scale(${previewScale})`,
-                    transformOrigin: "center center",
-                  }}
+                  className="relative shrink-0"
+                  style={{ width: previewLayoutW, height: previewLayoutH }}
                 >
+                  <div
+                    className="absolute left-0 top-0"
+                    style={{
+                      width: boardW,
+                      height: boardH,
+                      transform: `scale(${previewScale})`,
+                      transformOrigin: "top left",
+                    }}
+                  >
                   {pieces.map(({ col, row }, i) => {
                     const href = pieceUrls[i];
                     if (!href) return null;
@@ -723,6 +730,7 @@ export function PuzzleShotModal({
                   {!fallStarted ? (
                     <PuzzleShotGridSvgBeveled className="pointer-events-none absolute inset-0 block h-full w-full" />
                   ) : null}
+                  </div>
                 </div>
               </div>
             </div>
