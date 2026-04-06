@@ -1,11 +1,12 @@
 ﻿import React, { useState, useEffect, useRef } from 'react';
-import { Trophy, RefreshCw, Users, Lock, Image as ImageIcon, Play, Plus, Grid, Clock, RotateCcw, Maximize, Minimize, LogOut, ShieldAlert, LogIn, ChevronDown, Languages, Filter } from 'lucide-react';
+import { Trophy, RefreshCw, Users, Lock, Image as ImageIcon, Play, Plus, Grid, Clock, RotateCcw, Maximize, Minimize, LogOut, ShieldAlert, LogIn, ChevronDown, Languages, Filter, Camera } from 'lucide-react';
 import { supabase } from '../lib/supabaseClient';
 import { motion } from 'motion/react';
 import { encodeRoomId, parseRoomNumberOrCode } from '../lib/roomCode';
 import { recordUserRoomVisit } from '../lib/recordUserRoomVisit';
 import { apiUrl } from '../lib/apiBase';
 import { ImageSelectorModal } from './ImageSelectorModal';
+import { PuzzleShotModal } from './PuzzleShotModal';
 import {
   DEFAULT_PUZZLE_DIFFICULTY,
   normalizePuzzleDifficulty,
@@ -290,6 +291,7 @@ const Lobby = ({
   const [imageSource, setImageSource] = useState<'public' | 'custom'>('public');
   const [publicImages, setPublicImages] = useState<any[]>([]);
   const [isImageModalOpen, setIsImageModalOpen] = useState(false);
+  const [puzzleShotOpen, setPuzzleShotOpen] = useState(false);
   const [showRoomFullModal, setShowRoomFullModal] = useState(false);
   const [roomFullInfo, setRoomFullInfo] = useState<{ roomCode: string; current: number; max: number } | null>(null);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(!!document.fullscreenElement);
@@ -1365,10 +1367,25 @@ const Lobby = ({
                   ? isKo
                     ? "광고 시청 후 방 만들기"
                     : "Create room after ad"
-                  : isKo
+                    : isKo
                     ? "방 만들기"
                     : "Create room"}
           </button>
+
+          {user?.role === "admin" ? (
+            <button
+              type="button"
+              onClick={() => setPuzzleShotOpen(true)}
+              className={`mt-3 w-full font-medium py-3 px-6 rounded-xl flex items-center justify-center gap-2 transition-colors ${
+                tossSkin
+                  ? "bg-slate-800 text-white hover:bg-slate-700 border border-[#D9E8FF]"
+                  : "bg-slate-800/80 hover:bg-slate-700 text-slate-200 border border-slate-700"
+              }`}
+            >
+              <Camera className="w-5 h-5" />
+              {isKo ? "퍼즐샷" : "Puzzle shot"}
+            </button>
+          ) : null}
 
           <div className="mt-4 text-left space-y-2">
             <label
@@ -1940,6 +1957,8 @@ const Lobby = ({
         onSelect={setImageUrl}
         tossStyling={!!tossUi}
       />
+
+      <PuzzleShotModal open={puzzleShotOpen} onClose={() => setPuzzleShotOpen(false)} isKo={isKo} />
 
       {showRoomFullModal && roomFullInfo && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">

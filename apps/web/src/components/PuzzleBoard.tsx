@@ -41,7 +41,7 @@ const NIGHTMARE_FLOAT_ROTATE_BTN_PX = 48;
 const NIGHTMARE_FLOAT_ROTATE_GAP_PX = 4;
 /** 가로폭이 768px을 넘는 폰(가로 모드)도 `max-width:767` 미디어쿼리에서 빠지므로, 짧은 뷰포트 높이로 플로팅 회전 HUD 사용 */
 const NIGHTMARE_LANDSCAPE_PHONE_MAX_HEIGHT_PX = 520;
-/** 공통 퍼즐 뒷면 텍스처(악몽 모드 뒤집기 등). 보드 전체에 맞게 타일링. */
+/** 공통 퍼즐 뒷면 텍스처(악몽 모드 뒤집기 등). */
 const PUZZLE_BACK_FACE_IMAGE_URL =
   "https://dedkjqejkjhqkauemmyq.supabase.co/storage/v1/object/public/puzzle_images/public/puzzle_back.jpg";
 /** 조각 뒷면에 입힐 때 기본 맞춤(contain) 스케일 대비 확대 배율 */
@@ -918,6 +918,8 @@ export default function PuzzleBoard({
     /** 악몽 플로팅 회전 HUD rAF (언마운트 시 취소) */
     let nightmareFloatingHudRaf: number | null = null;
     let appInstance: PIXI.Application | null = null;
+    /** 악몽 PC: 우클릭 메뉴 막기용 (언마운트 시 제거) */
+    let nightmareCanvasContextMenuBlock: ((ev: Event) => void) | null = null;
     let hintLayer: PuzzleHintLayer | null = null;
     let deviceMotionHandler: ((event: DeviceMotionEvent) => void) | null = null;
     let easterTicker: (() => void) | null = null;
@@ -1901,6 +1903,12 @@ export default function PuzzleBoard({
         canvas.addEventListener('touchmove', onTouchMove, { passive: false });
         canvas.addEventListener('touchend', updateTouches, { passive: false });
         canvas.addEventListener('touchcancel', updateTouches, { passive: false });
+        if (isNightmare) {
+          nightmareCanvasContextMenuBlock = (ev: Event) => {
+            ev.preventDefault();
+          };
+          canvas.addEventListener("contextmenu", nightmareCanvasContextMenuBlock);
+        }
 
         // 2. 이미지 로드 및 조각 생성
         let objectUrl = '';
@@ -3642,6 +3650,72 @@ export default function PuzzleBoard({
         };
         rotateFlipSelectionRef.current = rotateFlipSelectedCluster;
 
+        /** 악몽·PC: 우클릭으로 선택 조각 클러스터 회전/뒤집기(도구 버튼과 동일) */
+        const nightmarePcRightClickRotate = (pieceIndex: number, e: PIXI.FederatedPointerEvent): boolean => {
+          if (!isNightmare || e.pointerType !== "mouse" || e.button !== 2) return false;
+          e.stopPropagation();
+          try {
+            e.nativeEvent?.preventDefault?.();
+          } catch {
+            /* noop */
+          }
+          if (activeTouches > 1 || isDoubleTapZooming) return true;
+
+          const c = getConnectedCluster(pieceIndex);
+          if (isClusterHeldRemotely(c)) return true;
+          const clickedPiece = pieces.current.get(pieceIndex);
+          if (!clickedPiece || clickedPiece.eventMode === "none") return true;
+
+          if (isDragging) {
+            if (dragCluster.size > 0) {
+              sendUnlockBatch(Array.from(dragCluster));
+            }
+            dragCluster = new Set();
+            isDragging = false;
+            isTouchDraggingPiece = false;
+            currentShiftY = 0;
+          }
+
+          if (isDraggingSelected) {
+            isDraggingSelected = false;
+            selectedMoved = false;
+          }
+
+          const sameSelection =
+            Boolean(selectedCluster) &&
+            selectedCluster!.size === c.size &&
+            [...selectedCluster!].every((id) => c.has(id));
+
+          if (selectedCluster && selectedCluster.size > 0 && !sameSelection) {
+            sendUnlockBatch(Array.from(selectedCluster));
+            selectedCluster.forEach((id) => {
+              const p = pieces.current.get(id);
+              if (!p) return;
+              const lockIcon = p.getChildByLabel("lockIcon");
+              if (lockIcon) lockIcon.visible = false;
+            });
+            selectedCluster = null;
+          }
+
+          if (!sameSelection) {
+            selectedCluster = new Set(c);
+            const localPos = e.getLocalPosition(world);
+            topZIndex++;
+            selectedCluster.forEach((id) => {
+              const p = pieces.current.get(id)!;
+              const lockIcon = p.getChildByLabel("lockIcon");
+              if (lockIcon) lockIcon.visible = true;
+              p.zIndex = topZIndex;
+              selectedOffsets.set(id, { x: localPos.x - p.x, y: localPos.y - p.y });
+              targetPositions.delete(id);
+            });
+            sendLockBatch(Array.from(selectedCluster));
+          }
+
+          rotateFlipSelectedCluster();
+          return true;
+        };
+
         const gatherBorders = async () => {
           if (isBotRunningRef.current) {
             isBotRunningRef.current = false;
@@ -4885,6 +4959,18 @@ export default function PuzzleBoard({
         }
 
         let initialPlacedCount = 0;
+        /** 악몽: 겹쳐 쌓일 때마다 다른 조각이 위에 오도록 z 순서만 무작위 순열 */
+        const nightmareZRanks: number[] | null = isNightmare
+          ? (() => {
+              const r = Array.from({ length: PIECE_COUNT }, (_, j) => j);
+              for (let j = r.length - 1; j > 0; j--) {
+                const k = Math.floor(Math.random() * (j + 1));
+                [r[j], r[k]] = [r[k], r[j]];
+              }
+              return r;
+            })()
+          : null;
+
         for (let i = 0; i < PIECE_COUNT; i++) {
           if (FAST_PIECE_INIT) {
             if (i > 0 && i % 30 === 0) {
@@ -4961,7 +5047,7 @@ export default function PuzzleBoard({
             } else {
               g.fill({ color: 0x475569, alpha: 1 });
             }
-            g.stroke({ color: 0x334155, alpha: 0.95, width: backStrokeW });
+            g.stroke({ color: 0x000000, alpha: 0.3, width: backStrokeW });
             backWrap.addChild(g);
             const cx = pieceWidth / 2;
             const cy = pieceHeight / 2;
@@ -5157,8 +5243,8 @@ export default function PuzzleBoard({
           } else {
             pieceContainer.eventMode = 'static';
             pieceContainer.cursor = 'pointer';
-            pieceContainer.zIndex = 1;
-            
+            pieceContainer.zIndex = nightmareZRanks ? 1 + nightmareZRanks[i] : 1;
+
             if (useFallingPieceIntro) {
               // Set initial falling state
               pieceContainer.alpha = 0;
@@ -5186,7 +5272,8 @@ export default function PuzzleBoard({
           // 드래그 로직
           pieceContainer.on('pointerdown', (e: PIXI.FederatedPointerEvent) => {
             if (activeTouches > 1 || isDoubleTapZooming) return; // 핀치 줌/더블탭 줌 중에는 드래그 시작 방지
-            
+            if (nightmarePcRightClickRotate(i, e)) return;
+
             if (selectedCluster) {
               if (e.pointerType === 'mouse') {
                 const snapped = snapCluster(selectedCluster);
@@ -5253,6 +5340,9 @@ export default function PuzzleBoard({
           world.addChild(pieceContainer);
           pieces.current.set(i, pieceContainer);
         }
+
+        /** 초기 조각 z가 악몽에서 1..PIECE_COUNT 인데 topZIndex가 1이면 첫 클릭 시 z=2로 대부분 아래에 깔림 */
+        topZIndex = Math.max(topZIndex, PIECE_COUNT);
 
         bumpProgress(99);
 
@@ -6407,6 +6497,17 @@ export default function PuzzleBoard({
       const backObjUrl = puzzleBackObjectUrlRef.current;
       const appInst = appInstance;
       const objUrl = objectUrlRef.current;
+      if (nightmareCanvasContextMenuBlock && appInst?.canvas) {
+        try {
+          (appInst.canvas as HTMLCanvasElement).removeEventListener(
+            "contextmenu",
+            nightmareCanvasContextMenuBlock
+          );
+        } catch {
+          /* noop */
+        }
+        nightmareCanvasContextMenuBlock = null;
+      }
       mainTextureRef.current = null;
       puzzleBackTextureRef.current = null;
       puzzleBackObjectUrlRef.current = null;
