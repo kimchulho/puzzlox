@@ -25,8 +25,198 @@ type PieceFallTarget = { x: number; y: number; rotate: number; duration: number;
 
 type PiecePlayTransform = { x: number; y: number; r: number };
 
-type PuzzleShotTouchDragRef = { i: number; sx: number; sy: number; ox: number; oy: number; tid: number };
-type PuzzleShotTouchRotateRef = { i: number; ang0: number; r0: number };
+type PuzzleShotTouchDragRef = {
+  i: number;
+  sx: number;
+  sy: number;
+  ox: number;
+  oy: number;
+  tid: number;
+  mode: "solo" | "group";
+  groupAnchor: number;
+};
+type PuzzleShotTouchRotateRef = {
+  i: number;
+  ang0: number;
+  r0: number;
+  cx0: number;
+  cy0: number;
+  px0: number;
+  py0: number;
+  mode: "solo" | "group";
+  groupAnchor: number;
+};
+
+type PieceMergeGroup = {
+  anchor: number;
+  members: number[];
+  x: number;
+  y: number;
+  r: number;
+};
+
+const PUZZLE_SHOT_NEIGHBOR_PAIRS: readonly [number, number][] = [
+  [0, 1],
+  [2, 3],
+  [4, 5],
+  [0, 2],
+  [1, 3],
+  [2, 4],
+  [3, 5],
+];
+
+const SNAP_CENTER_ERR_PX = 22;
+const SNAP_ROT_DEG = 16;
+
+function unwrapDeg(d: number) {
+  let x = d;
+  while (x > 180) x -= 360;
+  while (x < -180) x += 360;
+  return x;
+}
+
+function findMergeGroupContaining(groups: PieceMergeGroup[], i: number): PieceMergeGroup | undefined {
+  return groups.find((g) => g.members.includes(i));
+}
+
+function listPlaybackFallEntities(
+  groups: PieceMergeGroup[],
+  nPiece: number
+): Array<{ type: "group"; g: PieceMergeGroup } | { type: "solo"; i: number }> {
+  const used = new Set<number>();
+  const out: Array<{ type: "group"; g: PieceMergeGroup } | { type: "solo"; i: number }> = [];
+  for (const g of groups) {
+    out.push({ type: "group", g });
+    for (const m of g.members) used.add(m);
+  }
+  for (let i = 0; i < nPiece; i++) {
+    if (!used.has(i)) out.push({ type: "solo", i });
+  }
+  return out;
+}
+
+function worldCenterOfPiece(
+  i: number,
+  transforms: PiecePlayTransform[],
+  groups: PieceMergeGroup[],
+  homeLeft: number[],
+  homeTop: number[],
+  cellW: number,
+  cellH: number
+): { cx: number; cy: number; r: number } {
+  const gr = findMergeGroupContaining(groups, i);
+  if (!gr) {
+    const t = transforms[i] ?? { x: 0, y: 0, r: 0 };
+    return {
+      cx: homeLeft[i] + cellW / 2 + t.x,
+      cy: homeTop[i] + cellH / 2 + t.y,
+      r: t.r,
+    };
+  }
+  const a = gr.anchor;
+  const acx = homeLeft[a] + cellW / 2;
+  const acy = homeTop[a] + cellH / 2;
+  const icx = homeLeft[i] + cellW / 2;
+  const icy = homeTop[i] + cellH / 2;
+  const vx = icx - acx;
+  const vy = icy - acy;
+  const rad = (gr.r * Math.PI) / 180;
+  const c = Math.cos(rad);
+  const s = Math.sin(rad);
+  const rx = vx * c - vy * s;
+  const ry = vx * s + vy * c;
+  return {
+    cx: acx + gr.x + rx,
+    cy: acy + gr.y + ry,
+    r: gr.r,
+  };
+}
+
+function restCenter(i: number, homeLeft: number[], homeTop: number[], cellW: number, cellH: number) {
+  return { cx: homeLeft[i] + cellW / 2, cy: homeTop[i] + cellH / 2 };
+}
+
+function trySnapMergeOnePair(
+  transforms: PiecePlayTransform[],
+  groups: PieceMergeGroup[],
+  homeLeft: number[],
+  homeTop: number[],
+  cellW: number,
+  cellH: number
+): { transforms: PiecePlayTransform[]; groups: PieceMergeGroup[] } | null {
+  const getR = (pi: number) => {
+    const g = findMergeGroupContaining(groups, pi);
+    return g ? g.r : transforms[pi].r;
+  };
+
+  for (const [ia, ib] of PUZZLE_SHOT_NEIGHBOR_PAIRS) {
+    const ga = findMergeGroupContaining(groups, ia);
+    const gb = findMergeGroupContaining(groups, ib);
+    if (ga && gb && ga === gb) continue;
+
+    const Wa = worldCenterOfPiece(ia, transforms, groups, homeLeft, homeTop, cellW, cellH);
+    const Wb = worldCenterOfPiece(ib, transforms, groups, homeLeft, homeTop, cellW, cellH);
+    const Ca = restCenter(ia, homeLeft, homeTop, cellW, cellH);
+    const Cb = restCenter(ib, homeLeft, homeTop, cellW, cellH);
+    const dWcx = Wa.cx - Wb.cx;
+    const dWcy = Wa.cy - Wb.cy;
+    const dCcx = Ca.cx - Cb.cx;
+    const dCcy = Ca.cy - Cb.cy;
+    const err = Math.hypot(dWcx - dCcx, dWcy - dCcy);
+    const ra = getR(ia);
+    const rb = getR(ib);
+    if (err > SNAP_CENTER_ERR_PX) continue;
+    if (Math.abs(unwrapDeg(ra - rb)) > SNAP_ROT_DEG) continue;
+
+    const setA = ga ? [...ga.members] : [ia];
+    const setB = gb ? [...gb.members] : [ib];
+    const members = [...new Set([...setA, ...setB])].sort((x, y) => x - y);
+    const anchor = members[0];
+    const rNew = unwrapDeg((ra + rb) / 2);
+
+    let newGroups = groups.filter((g) => g !== ga && g !== gb);
+
+    const WaAnchor = worldCenterOfPiece(anchor, transforms, groups, homeLeft, homeTop, cellW, cellH);
+    const nx = WaAnchor.cx - (homeLeft[anchor] + cellW / 2);
+    const ny = WaAnchor.cy - (homeTop[anchor] + cellH / 2);
+
+    const newGroup: PieceMergeGroup = { anchor, members, x: nx, y: ny, r: rNew };
+    newGroups = [...newGroups, newGroup];
+
+    const newTransforms = transforms.map((t, idx) =>
+      members.includes(idx) ? { x: 0, y: 0, r: 0 } : { ...t }
+    );
+
+    return { transforms: newTransforms, groups: newGroups };
+  }
+  return null;
+}
+
+function applySnapsUntilStable(
+  transforms: PiecePlayTransform[],
+  groups: PieceMergeGroup[],
+  homeLeft: number[],
+  homeTop: number[],
+  cellW: number,
+  cellH: number
+): { transforms: PiecePlayTransform[]; groups: PieceMergeGroup[]; changed: boolean } {
+  let t = transforms;
+  let g = groups;
+  let changed = false;
+  for (let k = 0; k < 16; k++) {
+    const res = trySnapMergeOnePair(t, g, homeLeft, homeTop, cellW, cellH);
+    if (!res) break;
+    t = res.transforms;
+    g = res.groups;
+    changed = true;
+  }
+  return { transforms: t, groups: g, changed };
+}
+
+function entityZKeyForPiece(groups: PieceMergeGroup[], i: number): string {
+  const gr = findMergeGroupContaining(groups, i);
+  return gr ? `g${gr.anchor}` : `p${i}`;
+}
 
 function initialPiecePlayTransforms(): PiecePlayTransform[] {
   return puzzleShotPieceIndexList().map(() => ({ x: 0, y: 0, r: 0 }));
@@ -475,10 +665,16 @@ export function PuzzleShotModal({
   });
   const [scatterMode, setScatterMode] = useState(false);
   const [piecePlayTransform, setPiecePlayTransform] = useState<PiecePlayTransform[]>(initialPiecePlayTransforms);
-  const [activeDragPiece, setActiveDragPiece] = useState<number | null>(null);
+  const [mergeGroups, setMergeGroups] = useState<PieceMergeGroup[]>([]);
+  const [entityZMap, setEntityZMap] = useState<Record<string, number>>({});
   const previewScaleRef = useRef(1);
   const pieceTransformRef = useRef<PiecePlayTransform[]>(piecePlayTransform);
   pieceTransformRef.current = piecePlayTransform;
+  const mergeGroupsRef = useRef<PieceMergeGroup[]>(mergeGroups);
+  mergeGroupsRef.current = mergeGroups;
+  const boardMetricsRef = useRef(boardMetrics);
+  boardMetricsRef.current = boardMetrics;
+  const zSeqRef = useRef(0);
 
   const touchDragRef = useRef<PuzzleShotTouchDragRef | null>(null);
   const touchRotateRef = useRef<PuzzleShotTouchRotateRef | null>(null);
@@ -489,6 +685,8 @@ export function PuzzleShotModal({
     ox: number;
     oy: number;
     pid: number;
+    mode: "solo" | "group";
+    groupAnchor: number;
   } | null>(null);
 
   const fallStartedRef = useRef(false);
@@ -558,25 +756,48 @@ export function PuzzleShotModal({
     };
   }, [open, phase, camError, facingUser]);
 
-  const buildFallTargets = useCallback((): PieceFallTarget[] => {
-    const vh = typeof window !== "undefined" ? window.innerHeight : 700;
-    const vw = typeof window !== "undefined" ? window.innerWidth : 400;
-    return puzzleShotPieceIndexList().map((_, i) => ({
-      x: (Math.random() - 0.5) * Math.min(160, vw * 0.35),
-      y: vh * 0.55 + Math.random() * vh * 0.28,
-      rotate: (Math.random() - 0.5) * 260,
-      duration: 1.0 + (i % 3) * 0.09 + Math.random() * 0.12,
-      delay: i * 0.04 + Math.random() * 0.07,
-    }));
+  const trySnapAfterGesture = useCallback(() => {
+    const { pieceWpx, pieceHpx, pad, cellW, cellH } = boardMetricsRef.current;
+    const plist = puzzleShotPieceIndexList();
+    const homeLeft = plist.map(({ col }) => col * pieceWpx - pad);
+    const homeTop = plist.map(({ row }) => row * pieceHpx - pad);
+    const out = applySnapsUntilStable(
+      pieceTransformRef.current,
+      mergeGroupsRef.current,
+      homeLeft,
+      homeTop,
+      cellW,
+      cellH
+    );
+    if (out.changed) {
+      setPiecePlayTransform(out.transforms);
+      setMergeGroups(out.groups);
+    }
+  }, []);
+
+  const bumpEntityZForPiece = useCallback((pieceIndex: number) => {
+    const key = entityZKeyForPiece(mergeGroupsRef.current, pieceIndex);
+    zSeqRef.current += 1;
+    setEntityZMap((m) => ({ ...m, [key]: zSeqRef.current }));
   }, []);
 
   const startFall = useCallback(() => {
     if (fallStartedRef.current) return;
     fallStartedRef.current = true;
-    const targets = buildFallTargets();
+    const vh = typeof window !== "undefined" ? window.innerHeight : 700;
+    const vw = typeof window !== "undefined" ? window.innerWidth : 400;
+    const nPiece = puzzleShotPieceIndexList().length;
+    const entities = listPlaybackFallEntities(mergeGroupsRef.current, nPiece);
+    const targets = entities.map((_, idx) => ({
+      x: (Math.random() - 0.5) * Math.min(160, vw * 0.35),
+      y: vh * 0.55 + Math.random() * vh * 0.28,
+      rotate: (Math.random() - 0.5) * 260,
+      duration: 1.0 + (idx % 3) * 0.09 + Math.random() * 0.12,
+      delay: idx * 0.04 + Math.random() * 0.07,
+    }));
     setFallTargets(targets);
     setFallStarted(true);
-  }, [buildFallTargets]);
+  }, []);
 
   useEffect(() => {
     fallStartedRef.current = fallStarted;
@@ -585,11 +806,14 @@ export function PuzzleShotModal({
   useEffect(() => {
     setPiecePlayTransform(initialPiecePlayTransforms());
     setScatterMode(false);
+    setMergeGroups([]);
+    setEntityZMap({});
   }, [burstKey]);
 
   const startScatter = useCallback(() => {
     if (fallStartedRef.current) return;
     setPiecePlayTransform(buildScatterTransforms());
+    setMergeGroups([]);
     setScatterMode(true);
   }, []);
 
@@ -716,7 +940,8 @@ export function PuzzleShotModal({
     setFallTargets([]);
     setScatterMode(false);
     setPiecePlayTransform(initialPiecePlayTransforms());
-    setActiveDragPiece(null);
+    setMergeGroups([]);
+    setEntityZMap({});
   }, []);
 
   const handleCapture = useCallback(() => {
@@ -764,18 +989,34 @@ export function PuzzleShotModal({
       if (e.pointerType === "touch") return;
       e.preventDefault();
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-      const pt = pieceTransformRef.current[i];
-      mouseDragRef.current = {
-        i,
-        sx: e.clientX,
-        sy: e.clientY,
-        ox: pt.x,
-        oy: pt.y,
-        pid: e.pointerId,
-      };
-      setActiveDragPiece(i);
+      bumpEntityZForPiece(i);
+      const gr = findMergeGroupContaining(mergeGroupsRef.current, i);
+      if (gr) {
+        mouseDragRef.current = {
+          i,
+          sx: e.clientX,
+          sy: e.clientY,
+          ox: gr.x,
+          oy: gr.y,
+          pid: e.pointerId,
+          mode: "group",
+          groupAnchor: gr.anchor,
+        };
+      } else {
+        const pt = pieceTransformRef.current[i];
+        mouseDragRef.current = {
+          i,
+          sx: e.clientX,
+          sy: e.clientY,
+          ox: pt.x,
+          oy: pt.y,
+          pid: e.pointerId,
+          mode: "solo",
+          groupAnchor: i,
+        };
+      }
     },
-    [fallStarted, scatterMode]
+    [fallStarted, scatterMode, bumpEntityZForPiece]
   );
 
   const onPieceMousePointerMove = useCallback((e: React.PointerEvent, i: number) => {
@@ -785,32 +1026,45 @@ export function PuzzleShotModal({
     if (s < 1e-6) return;
     const dx = (e.clientX - d.sx) / s;
     const dy = (e.clientY - d.sy) / s;
-    setPiecePlayTransform((prev) => {
-      const n = [...prev];
-      n[i] = { ...n[i], x: d.ox + dx, y: d.oy + dy };
-      return n;
-    });
-  }, []);
-
-  const onPieceMousePointerUp = useCallback((e: React.PointerEvent, i: number) => {
-    const d = mouseDragRef.current;
-    if (!d || d.i !== i || d.pid !== e.pointerId) return;
-    mouseDragRef.current = null;
-    setActiveDragPiece((cur) => (cur === i ? null : cur));
-    try {
-      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-    } catch {
-      /* ignore */
+    if (d.mode === "group") {
+      const a = d.groupAnchor;
+      setMergeGroups((gs) =>
+        gs.map((g) => (g.anchor === a ? { ...g, x: d.ox + dx, y: d.oy + dy } : g))
+      );
+    } else {
+      setPiecePlayTransform((prev) => {
+        const n = [...prev];
+        n[i] = { ...n[i], x: d.ox + dx, y: d.oy + dy };
+        return n;
+      });
     }
   }, []);
 
-  const onPieceLostPointerCapture = useCallback((e: React.PointerEvent, i: number) => {
-    const d = mouseDragRef.current;
-    if (d?.i === i && d.pid === e.pointerId) {
+  const onPieceMousePointerUp = useCallback(
+    (e: React.PointerEvent, i: number) => {
+      const d = mouseDragRef.current;
+      if (!d || d.i !== i || d.pid !== e.pointerId) return;
       mouseDragRef.current = null;
-      setActiveDragPiece((cur) => (cur === i ? null : cur));
-    }
-  }, []);
+      trySnapAfterGesture();
+      try {
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+    },
+    [trySnapAfterGesture]
+  );
+
+  const onPieceLostPointerCapture = useCallback(
+    (e: React.PointerEvent, i: number) => {
+      const d = mouseDragRef.current;
+      if (d?.i === i && d.pid === e.pointerId) {
+        mouseDragRef.current = null;
+        trySnapAfterGesture();
+      }
+    },
+    [trySnapAfterGesture]
+  );
 
   const onPieceTouchStart = useCallback(
     (e: React.TouchEvent, i: number) => {
@@ -818,27 +1072,72 @@ export function PuzzleShotModal({
       if (e.touches.length === 2) {
         e.preventDefault();
         touchDragRef.current = null;
+        bumpEntityZForPiece(i);
         const a = e.touches[0];
         const b = e.touches[1];
         const ang = (Math.atan2(b.clientY - a.clientY, b.clientX - a.clientX) * 180) / Math.PI;
-        touchRotateRef.current = { i, ang0: ang, r0: pieceTransformRef.current[i].r };
-        setActiveDragPiece(i);
+        const cx0 = (a.clientX + b.clientX) / 2;
+        const cy0 = (a.clientY + b.clientY) / 2;
+        const gr = findMergeGroupContaining(mergeGroupsRef.current, i);
+        if (gr) {
+          touchRotateRef.current = {
+            i,
+            ang0: ang,
+            r0: gr.r,
+            cx0,
+            cy0,
+            px0: gr.x,
+            py0: gr.y,
+            mode: "group",
+            groupAnchor: gr.anchor,
+          };
+        } else {
+          const pt = pieceTransformRef.current[i];
+          touchRotateRef.current = {
+            i,
+            ang0: ang,
+            r0: pt.r,
+            cx0,
+            cy0,
+            px0: pt.x,
+            py0: pt.y,
+            mode: "solo",
+            groupAnchor: i,
+          };
+        }
         return;
       }
       if (e.touches.length === 1) {
+        bumpEntityZForPiece(i);
         const t = e.touches[0];
-        touchDragRef.current = {
-          i,
-          sx: t.clientX,
-          sy: t.clientY,
-          ox: pieceTransformRef.current[i].x,
-          oy: pieceTransformRef.current[i].y,
-          tid: t.identifier,
-        };
-        setActiveDragPiece(i);
+        const gr = findMergeGroupContaining(mergeGroupsRef.current, i);
+        if (gr) {
+          touchDragRef.current = {
+            i,
+            sx: t.clientX,
+            sy: t.clientY,
+            ox: gr.x,
+            oy: gr.y,
+            tid: t.identifier,
+            mode: "group",
+            groupAnchor: gr.anchor,
+          };
+        } else {
+          const pt = pieceTransformRef.current[i];
+          touchDragRef.current = {
+            i,
+            sx: t.clientX,
+            sy: t.clientY,
+            ox: pt.x,
+            oy: pt.y,
+            tid: t.identifier,
+            mode: "solo",
+            groupAnchor: i,
+          };
+        }
       }
     },
-    [fallStarted, scatterMode]
+    [fallStarted, scatterMode, bumpEntityZForPiece]
   );
 
   const onPieceTouchMove = useCallback(
@@ -853,11 +1152,27 @@ export function PuzzleShotModal({
         let dAng = ang - rot.ang0;
         if (dAng > 180) dAng -= 360;
         if (dAng < -180) dAng += 360;
-        setPiecePlayTransform((prev) => {
-          const n = [...prev];
-          n[i] = { ...n[i], r: rot.r0 + dAng };
-          return n;
-        });
+        const cxN = (t0.clientX + t1.clientX) / 2;
+        const cyN = (t0.clientY + t1.clientY) / 2;
+        const s = previewScaleRef.current;
+        if (s < 1e-6) return;
+        const dx = (cxN - rot.cx0) / s;
+        const dy = (cyN - rot.cy0) / s;
+        const nx = rot.px0 + dx;
+        const ny = rot.py0 + dy;
+        const nr = rot.r0 + dAng;
+        if (rot.mode === "group") {
+          const a = rot.groupAnchor;
+          setMergeGroups((gs) =>
+            gs.map((g) => (g.anchor === a ? { ...g, x: nx, y: ny, r: nr } : g))
+          );
+        } else {
+          setPiecePlayTransform((prev) => {
+            const n = [...prev];
+            n[i] = { ...n[i], x: nx, y: ny, r: nr };
+            return n;
+          });
+        }
         return;
       }
       const d = touchDragRef.current;
@@ -869,28 +1184,54 @@ export function PuzzleShotModal({
       if (s < 1e-6) return;
       const dx = (t.clientX - d.sx) / s;
       const dy = (t.clientY - d.sy) / s;
-      setPiecePlayTransform((prev) => {
-        const n = [...prev];
-        n[i] = { ...n[i], x: d.ox + dx, y: d.oy + dy };
-        return n;
-      });
+      if (d.mode === "group") {
+        const a = d.groupAnchor;
+        setMergeGroups((gs) =>
+          gs.map((g) => (g.anchor === a ? { ...g, x: d.ox + dx, y: d.oy + dy } : g))
+        );
+      } else {
+        setPiecePlayTransform((prev) => {
+          const n = [...prev];
+          n[i] = { ...n[i], x: d.ox + dx, y: d.oy + dy };
+          return n;
+        });
+      }
     },
     [fallStarted]
   );
 
-  const onPieceTouchEnd = useCallback((e: React.TouchEvent, i: number) => {
-    if (touchRotateRef.current?.i === i && e.touches.length < 2) {
-      touchRotateRef.current = null;
-    }
-    const d = touchDragRef.current;
-    if (d?.i === i && e.touches.length === 0) {
-      touchDragRef.current = null;
-      setActiveDragPiece((cur) => (cur === i ? null : cur));
-    }
-  }, []);
+  const onPieceTouchEnd = useCallback(
+    (e: React.TouchEvent, i: number) => {
+      let didEndRotate = false;
+      if (touchRotateRef.current?.i === i && e.touches.length < 2) {
+        touchRotateRef.current = null;
+        didEndRotate = true;
+      }
+      const d = touchDragRef.current;
+      if (d?.i === i && e.touches.length === 0) {
+        touchDragRef.current = null;
+        trySnapAfterGesture();
+      } else if (didEndRotate) {
+        trySnapAfterGesture();
+      }
+    },
+    [trySnapAfterGesture]
+  );
 
   const pieces = puzzleShotPieceIndexList();
-  const lastIndex = pieces.length - 1;
+  const nPieces = pieces.length;
+  const playbackHomeLeft = pieces.map(({ col }) => col * boardMetrics.pieceWpx - boardMetrics.pad);
+  const playbackHomeTop = pieces.map(({ row }) => row * boardMetrics.pieceHpx - boardMetrics.pad);
+  const groupedForPlayback = useMemo(() => {
+    const s = new Set<number>();
+    for (const gr of mergeGroups) for (const m of gr.members) s.add(m);
+    return s;
+  }, [mergeGroups]);
+  const fallEntityList = useMemo(
+    () => listPlaybackFallEntities(mergeGroups, nPieces),
+    [mergeGroups, nPieces]
+  );
+  const lastFallEntityIdx = fallEntityList.length - 1;
 
   if (!open) return null;
 
@@ -1006,72 +1347,239 @@ export function PuzzleShotModal({
                       transformOrigin: "top left",
                     }}
                   >
-                  {pieces.map(({ col, row }, i) => {
-                    const href = pieceUrls[i];
-                    if (!href) return null;
-                    const cx = ((col + 0.5) * PS_PIECE_W) / PS_BOARD_W;
-                    const cy = ((row + 0.5) * PS_PIECE_H) / PS_BOARD_H;
-                    const t = fallTargets[i];
-                    const dropping = Boolean(fallStarted && t);
-                    const pt = piecePlayTransform[i] ?? { x: 0, y: 0, r: 0 };
-                    const commonStyle = {
-                      transformOrigin: `${cx * 100}% ${cy * 100}%`,
-                    } as const;
-                    return (
-                      <motion.img
-                        key={`${burstKey}-${i}`}
-                        src={href}
-                        alt=""
-                        width={cellW}
-                        height={cellH}
-                        className="absolute touch-none select-none block max-w-none will-change-transform"
-                        draggable={false}
-                        style={{
-                          ...commonStyle,
-                          left: col * pieceWpx - pad,
-                          top: row * pieceHpx - pad,
-                          width: cellW,
-                          height: cellH,
-                          zIndex: activeDragPiece === i ? 50 : 10 + i,
-                          cursor: scatterMode && !fallStarted ? "grab" : undefined,
-                        }}
-                        initial={false}
-                        animate={
-                          dropping && t
-                            ? {
-                                opacity: 0,
-                                x: pt.x + t.x,
-                                y: pt.y + t.y,
-                                rotate: pt.r + t.rotate,
+                  {fallStarted
+                    ? fallEntityList.map((ent, fi) => {
+                        const t = fallTargets[fi];
+                        if (ent.type === "solo") {
+                          const i = ent.i;
+                          const { col, row } = pieces[i];
+                          const href = pieceUrls[i];
+                          if (!href) return null;
+                          const cx = ((col + 0.5) * PS_PIECE_W) / PS_BOARD_W;
+                          const cy = ((row + 0.5) * PS_PIECE_H) / PS_BOARD_H;
+                          const dropping = Boolean(t);
+                          const pt = piecePlayTransform[i] ?? { x: 0, y: 0, r: 0 };
+                          const zk = `p${i}`;
+                          return (
+                            <motion.img
+                              key={`${burstKey}-fall-s-${i}`}
+                              src={href}
+                              alt=""
+                              width={cellW}
+                              height={cellH}
+                              className="absolute touch-none select-none block max-w-none will-change-transform"
+                              draggable={false}
+                              style={{
+                                transformOrigin: `${cx * 100}% ${cy * 100}%`,
+                                left: playbackHomeLeft[i],
+                                top: playbackHomeTop[i],
+                                width: cellW,
+                                height: cellH,
+                                zIndex: 12 + (entityZMap[zk] ?? 0),
+                                pointerEvents: "none",
+                              }}
+                              initial={false}
+                              animate={
+                                dropping && t
+                                  ? {
+                                      opacity: 0,
+                                      x: pt.x + t.x,
+                                      y: pt.y + t.y,
+                                      rotate: pt.r + t.rotate,
+                                    }
+                                  : { opacity: 1, x: pt.x, y: pt.y, rotate: pt.r }
                               }
-                            : { opacity: 1, x: pt.x, y: pt.y, rotate: pt.r }
-                        }
-                        transition={
-                          dropping && t
-                            ? {
-                                duration: t.duration,
-                                delay: t.delay,
-                                ease: [0.55, 0.055, 0.675, 0.19],
+                              transition={
+                                dropping && t
+                                  ? {
+                                      duration: t.duration,
+                                      delay: t.delay,
+                                      ease: [0.55, 0.055, 0.675, 0.19],
+                                    }
+                                  : { duration: 0 }
                               }
-                            : { duration: 0 }
+                              onAnimationComplete={() => {
+                                if (!dropping || fi !== lastFallEntityIdx) return;
+                                window.setTimeout(() => {
+                                  returnToCamera();
+                                }, 280);
+                              }}
+                            />
+                          );
                         }
-                        onPointerDown={(e) => onPieceMousePointerDown(e, i)}
-                        onPointerMove={(e) => onPieceMousePointerMove(e, i)}
-                        onPointerUp={(e) => onPieceMousePointerUp(e, i)}
-                        onPointerCancel={(e) => onPieceMousePointerUp(e, i)}
-                        onLostPointerCapture={(e) => onPieceLostPointerCapture(e, i)}
-                        onTouchStart={(e) => onPieceTouchStart(e, i)}
-                        onTouchMove={(e) => onPieceTouchMove(e, i)}
-                        onTouchEnd={(e) => onPieceTouchEnd(e, i)}
-                        onAnimationComplete={() => {
-                          if (!dropping || i !== lastIndex) return;
-                          window.setTimeout(() => {
-                            returnToCamera();
-                          }, 280);
-                        }}
-                      />
-                    );
-                  })}
+                        const g = ent.g;
+                        const dropping = Boolean(t);
+                        const zk = `g${g.anchor}`;
+                        return (
+                          <motion.div
+                            key={`${burstKey}-fall-g-${g.anchor}`}
+                            className="absolute touch-none select-none will-change-transform"
+                            style={{
+                              left: playbackHomeLeft[g.anchor],
+                              top: playbackHomeTop[g.anchor],
+                              transformOrigin: `${cellW / 2}px ${cellH / 2}px`,
+                              zIndex: 12 + (entityZMap[zk] ?? 0),
+                              overflow: "visible",
+                              pointerEvents: "none",
+                            }}
+                            initial={false}
+                            animate={
+                              dropping && t
+                                ? {
+                                    opacity: 0,
+                                    x: g.x + t.x,
+                                    y: g.y + t.y,
+                                    rotate: g.r + t.rotate,
+                                  }
+                                : { opacity: 1, x: g.x, y: g.y, rotate: g.r }
+                            }
+                            transition={
+                              dropping && t
+                                ? {
+                                    duration: t.duration,
+                                    delay: t.delay,
+                                    ease: [0.55, 0.055, 0.675, 0.19],
+                                  }
+                                : { duration: 0 }
+                            }
+                            onAnimationComplete={() => {
+                              if (!dropping || fi !== lastFallEntityIdx) return;
+                              window.setTimeout(() => {
+                                returnToCamera();
+                              }, 280);
+                            }}
+                          >
+                            {g.members.map((m) => {
+                              const { col, row } = pieces[m];
+                              const href = pieceUrls[m];
+                              if (!href) return null;
+                              const cx = ((col + 0.5) * PS_PIECE_W) / PS_BOARD_W;
+                              const cy = ((row + 0.5) * PS_PIECE_H) / PS_BOARD_H;
+                              return (
+                                <img
+                                  key={`${burstKey}-fall-g${g.anchor}-m${m}`}
+                                  src={href}
+                                  alt=""
+                                  width={cellW}
+                                  height={cellH}
+                                  className="absolute block max-w-none select-none pointer-events-none"
+                                  draggable={false}
+                                  style={{
+                                    transformOrigin: `${cx * 100}% ${cy * 100}%`,
+                                    left: playbackHomeLeft[m] - playbackHomeLeft[g.anchor],
+                                    top: playbackHomeTop[m] - playbackHomeTop[g.anchor],
+                                    width: cellW,
+                                    height: cellH,
+                                  }}
+                                />
+                              );
+                            })}
+                          </motion.div>
+                        );
+                      })
+                    : (
+                      <>
+                        {mergeGroups.map((g) => {
+                          const zk = `g${g.anchor}`;
+                          return (
+                            <motion.div
+                              key={`${burstKey}-grp-${g.anchor}`}
+                              className="absolute touch-none select-none will-change-transform"
+                              style={{
+                                left: playbackHomeLeft[g.anchor],
+                                top: playbackHomeTop[g.anchor],
+                                transformOrigin: `${cellW / 2}px ${cellH / 2}px`,
+                                zIndex: 12 + (entityZMap[zk] ?? 0),
+                                overflow: "visible",
+                                pointerEvents: "none",
+                              }}
+                              initial={false}
+                              animate={{ x: g.x, y: g.y, rotate: g.r }}
+                              transition={{ duration: 0 }}
+                            >
+                              {g.members.map((m) => {
+                                const { col, row } = pieces[m];
+                                const href = pieceUrls[m];
+                                if (!href) return null;
+                                const cx = ((col + 0.5) * PS_PIECE_W) / PS_BOARD_W;
+                                const cy = ((row + 0.5) * PS_PIECE_H) / PS_BOARD_H;
+                                return (
+                                  <motion.img
+                                    key={`${burstKey}-gm-${g.anchor}-${m}`}
+                                    src={href}
+                                    alt=""
+                                    width={cellW}
+                                    height={cellH}
+                                    className="absolute touch-none select-none block max-w-none will-change-transform"
+                                    draggable={false}
+                                    style={{
+                                      transformOrigin: `${cx * 100}% ${cy * 100}%`,
+                                      left: playbackHomeLeft[m] - playbackHomeLeft[g.anchor],
+                                      top: playbackHomeTop[m] - playbackHomeTop[g.anchor],
+                                      width: cellW,
+                                      height: cellH,
+                                      pointerEvents: scatterMode ? "auto" : "none",
+                                      cursor: scatterMode ? "grab" : undefined,
+                                    }}
+                                    initial={false}
+                                    animate={{ opacity: 1 }}
+                                    transition={{ duration: 0 }}
+                                    onPointerDown={(e) => onPieceMousePointerDown(e, m)}
+                                    onPointerMove={(e) => onPieceMousePointerMove(e, m)}
+                                    onPointerUp={(e) => onPieceMousePointerUp(e, m)}
+                                    onPointerCancel={(e) => onPieceMousePointerUp(e, m)}
+                                    onLostPointerCapture={(e) => onPieceLostPointerCapture(e, m)}
+                                    onTouchStart={(e) => onPieceTouchStart(e, m)}
+                                    onTouchMove={(e) => onPieceTouchMove(e, m)}
+                                    onTouchEnd={(e) => onPieceTouchEnd(e, m)}
+                                  />
+                                );
+                              })}
+                            </motion.div>
+                          );
+                        })}
+                        {pieces.map(({ col, row }, i) => {
+                          if (groupedForPlayback.has(i)) return null;
+                          const href = pieceUrls[i];
+                          if (!href) return null;
+                          const cx = ((col + 0.5) * PS_PIECE_W) / PS_BOARD_W;
+                          const cy = ((row + 0.5) * PS_PIECE_H) / PS_BOARD_H;
+                          const pt = piecePlayTransform[i] ?? { x: 0, y: 0, r: 0 };
+                          const zk = `p${i}`;
+                          return (
+                            <motion.img
+                              key={`${burstKey}-solo-${i}`}
+                              src={href}
+                              alt=""
+                              width={cellW}
+                              height={cellH}
+                              className="absolute touch-none select-none block max-w-none will-change-transform"
+                              draggable={false}
+                              style={{
+                                transformOrigin: `${cx * 100}% ${cy * 100}%`,
+                                left: playbackHomeLeft[i],
+                                top: playbackHomeTop[i],
+                                width: cellW,
+                                height: cellH,
+                                zIndex: 12 + (entityZMap[zk] ?? 0),
+                                cursor: scatterMode ? "grab" : undefined,
+                              }}
+                              initial={false}
+                              animate={{ opacity: 1, x: pt.x, y: pt.y, rotate: pt.r }}
+                              transition={{ duration: 0 }}
+                              onPointerDown={(e) => onPieceMousePointerDown(e, i)}
+                              onPointerMove={(e) => onPieceMousePointerMove(e, i)}
+                              onPointerUp={(e) => onPieceMousePointerUp(e, i)}
+                              onPointerCancel={(e) => onPieceMousePointerUp(e, i)}
+                              onLostPointerCapture={(e) => onPieceLostPointerCapture(e, i)}
+                              onTouchStart={(e) => onPieceTouchStart(e, i)}
+                              onTouchMove={(e) => onPieceTouchMove(e, i)}
+                              onTouchEnd={(e) => onPieceTouchEnd(e, i)}
+                            />
+                          );
+                        })}
+                      </>
+                    )}
                   {!fallStarted && !scatterMode ? (
                     <PuzzleShotGridSvgBeveled className="pointer-events-none absolute inset-0 block h-full w-full" />
                   ) : null}
@@ -1111,8 +1619,8 @@ export function PuzzleShotModal({
             <>
               <p className="text-center text-xs text-white/60 max-w-sm">
                 {isKo
-                  ? "폰을 흔들면 조각이 흩어집니다. 한 손가락으로 끌어 이동, 두 손가락으로 회전하세요. 저장은 떨어지는 연출만 합니다(파일 저장 없음)."
-                  : "Shake to scatter. Drag with one finger, rotate with two. Save plays the drop animation only (no file saved)."}
+                  ? "폰을 흔들면 조각이 흩어집니다. 한 손가락으로 이동, 두 손가락으로 회전·이동(중심 기준)이 가능합니다. 맞닿는 조각은 위치·각도가 가까우면 붙습니다. 저장은 떨어지는 연출만 합니다(파일 저장 없음)."
+                  : "Shake to scatter. One finger drags; two fingers rotate around the piece center and pan. Neighbors snap together when position and angle align. Save plays the drop animation only (no file saved)."}
               </p>
               <div className="flex flex-wrap justify-center gap-2">
                 <button
