@@ -109,8 +109,17 @@ function applyRoundedOuterClipToBoard(board: HTMLCanvasElement) {
   ctx.restore();
 }
 
+type VideoBoardParams = {
+  u0: number;
+  v0: number;
+  uw: number;
+  uh: number;
+  W: number;
+  H: number;
+};
+
 /**
- * 퍼즐 카드(2:3 뷰포트)와 축이 맞는 직사각 영역만 비디오에서 잘라 보드로 그립니다. 모서리는 이후 캔버스에서 라운드.
+ * 퍼즐 카드(2:3 뷰포트)와 축이 맞는 비디오 intrinsic 크롭 + 출력 캔버스 크기. (촬영·라이브 합성 공통)
  *
  * - `frameBoxEl`: 화면에 보이는 퍼즐 카드 박스(보통 `puzzleFrameOuterRef` — ResizeObserver와 동일 기준).
  * - 샘플링은 이 박스의 축정렬 bounding rect 전체입니다. 라이브에서는 `border-radius`로 모서리가 가려져 보이지만,
@@ -119,7 +128,7 @@ function applyRoundedOuterClipToBoard(board: HTMLCanvasElement) {
  * - `object-cover` 비디오의 보이는 부분을 역투영해 intrinsic 좌표로 옮긴 뒤, 논리 보드 비(200:300)에 맞게
  *   가로 또는 세로만 한 번 더 잘라 냅니다(측정된 카드 비가 2:3과 미세하게 다를 때).
  */
-function captureBoardCanvasFromFrame(video: HTMLVideoElement, frameBoxEl: Element): HTMLCanvasElement | null {
+function getVideoBoardDrawParams(video: HTMLVideoElement, frameBoxEl: Element): VideoBoardParams | null {
   const vw = video.videoWidth;
   const vh = video.videoHeight;
   if (vw < 2 || vh < 2) return null;
@@ -192,14 +201,83 @@ function captureBoardCanvasFromFrame(video: HTMLVideoElement, frameBoxEl: Elemen
   if (W < PS_COLS) W = PS_COLS;
   const H = Math.round((W * PS_BOARD_H) / PS_BOARD_W);
 
-  const canvas = document.createElement("canvas");
-  canvas.width = W;
-  canvas.height = H;
+  return { u0, v0, uw, uh, W, H };
+}
+
+function drawBoardOntoCanvas(video: HTMLVideoElement, params: VideoBoardParams, canvas: HTMLCanvasElement) {
+  if (canvas.width !== params.W || canvas.height !== params.H) {
+    canvas.width = params.W;
+    canvas.height = params.H;
+  }
   const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
-  ctx.drawImage(video, u0, v0, uw, uh, 0, 0, W, H);
+  if (!ctx) return;
+  ctx.drawImage(video, params.u0, params.v0, params.uw, params.uh, 0, 0, params.W, params.H);
   applyRoundedOuterClipToBoard(canvas);
+}
+
+/**
+ * 퍼즐 카드(2:3 뷰포트)와 축이 맞는 직사각 영역만 비디오에서 잘라 보드로 그립니다. 모서리는 이후 캔버스에서 라운드.
+ */
+function captureBoardCanvasFromFrame(video: HTMLVideoElement, frameBoxEl: Element): HTMLCanvasElement | null {
+  const p = getVideoBoardDrawParams(video, frameBoxEl);
+  if (!p) return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = p.W;
+  canvas.height = p.H;
+  drawBoardOntoCanvas(video, p, canvas);
   return canvas;
+}
+
+/** `extractPieceImages`와 동일한 클립·베벨로 조각을 합성(배경 검정 = 미리보기와 동일). */
+function compositeBeveledPuzzleFromBoard(
+  board: HTMLCanvasElement,
+  dest: HTMLCanvasElement,
+  scratch: HTMLCanvasElement
+) {
+  const W = board.width;
+  const H = board.height;
+  if (dest.width !== W || dest.height !== H) {
+    dest.width = W;
+    dest.height = H;
+  }
+  const dctx = dest.getContext("2d");
+  if (!dctx) return;
+  dctx.fillStyle = "#000000";
+  dctx.fillRect(0, 0, W, H);
+
+  const sx = W / PS_BOARD_W;
+  const sy = H / PS_BOARD_H;
+  const tabDepth = Math.min(PS_PIECE_W, PS_PIECE_H) * 0.2 * Math.min(sx, sy);
+  const pad = Math.ceil(tabDepth * 1.25);
+  const pieceWpx = W / PS_COLS;
+  const pieceHpx = H / PS_ROWS;
+  const cw = pieceWpx + 2 * pad;
+  const ch = pieceHpx + 2 * pad;
+  const scaleRef = Math.min(sx, sy);
+
+  if (scratch.width !== cw || scratch.height !== ch) {
+    scratch.width = cw;
+    scratch.height = ch;
+  }
+
+  const sctx = scratch.getContext("2d");
+  if (!sctx) return;
+
+  for (const { col, row } of puzzleShotPieceIndexList()) {
+    const ox = col * PS_PIECE_W * sx;
+    const oy = row * PS_PIECE_H * sy;
+    const minX = Math.floor(ox - pad);
+    const minY = Math.floor(oy - pad);
+    sctx.clearRect(0, 0, cw, ch);
+    const path = buildPiecePath2D(col, row, sx, sy);
+    sctx.save();
+    sctx.translate(-minX, -minY);
+    sctx.clip(path);
+    sctx.drawImage(board, 0, 0);
+    sctx.restore();
+    applyPuzzlePieceBevel(sctx, path, minX, minY, scaleRef);
+    dctx.drawImage(scratch, col * pieceWpx - pad, row * pieceHpx - pad);
+  }
 }
 
 type PuzzleShotExtractResult = {
@@ -267,6 +345,24 @@ function extractPieceImages(board: HTMLCanvasElement): PuzzleShotExtractResult {
     pad,
     pieceWpx,
     pieceHpx,
+  };
+}
+
+function puzzleShotBoardLayoutFromSize(W: number, H: number) {
+  const sx = W / PS_BOARD_W;
+  const sy = H / PS_BOARD_H;
+  const tabDepth = Math.min(PS_PIECE_W, PS_PIECE_H) * 0.2 * Math.min(sx, sy);
+  const pad = Math.ceil(tabDepth * 1.25);
+  const pieceWpx = W / PS_COLS;
+  const pieceHpx = H / PS_ROWS;
+  return {
+    boardW: W,
+    boardH: H,
+    pad,
+    pieceWpx,
+    pieceHpx,
+    cellW: pieceWpx + 2 * pad,
+    cellH: pieceHpx + 2 * pad,
   };
 }
 
@@ -361,6 +457,12 @@ export function PuzzleShotModal({
   const fallStartedRef = useRef(false);
   const lastAccelRef = useRef<{ x: number; y: number; z: number } | null>(null);
   const lastShakeAtRef = useRef(0);
+  const liveCameraBoardBufRef = useRef<HTMLCanvasElement | null>(null);
+  const liveCameraScratchRef = useRef<HTMLCanvasElement | null>(null);
+  const liveCameraCompositeRef = useRef<HTMLCanvasElement | null>(null);
+  const [cameraLiveMetrics, setCameraLiveMetrics] = useState<ReturnType<typeof puzzleShotBoardLayoutFromSize> | null>(
+    null
+  );
 
   const stopStream = useCallback(() => {
     const s = streamRef.current;
@@ -371,6 +473,53 @@ export function PuzzleShotModal({
       streamRef.current = null;
     }
   }, []);
+
+  useEffect(() => {
+    if (!liveCameraBoardBufRef.current) liveCameraBoardBufRef.current = document.createElement("canvas");
+    if (!liveCameraScratchRef.current) liveCameraScratchRef.current = document.createElement("canvas");
+  }, []);
+
+  useEffect(() => {
+    if (!open) setCameraLiveMetrics(null);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || phase !== "camera" || camError) return;
+    let cancelled = false;
+    let raf = 0;
+    let lastT = 0;
+
+    const loop = (now: number) => {
+      if (cancelled) return;
+      raf = requestAnimationFrame(loop);
+      if (now - lastT < 33) return;
+      lastT = now;
+
+      const v = videoRef.current;
+      const frameEl = puzzleFrameOuterRef.current ?? puzzleClipRef.current;
+      const board = liveCameraBoardBufRef.current;
+      const dest = liveCameraCompositeRef.current;
+      const scratch = liveCameraScratchRef.current;
+      if (!v || !frameEl || !board || !dest || !scratch) return;
+
+      const p = getVideoBoardDrawParams(v, frameEl);
+      if (!p) return;
+
+      drawBoardOntoCanvas(v, p, board);
+      compositeBeveledPuzzleFromBoard(board, dest, scratch);
+
+      setCameraLiveMetrics((prev) => {
+        if (prev?.boardW === p.W && prev?.boardH === p.H) return prev;
+        return puzzleShotBoardLayoutFromSize(p.W, p.H);
+      });
+    };
+
+    raf = requestAnimationFrame(loop);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+    };
+  }, [open, phase, camError, facingUser]);
 
   const buildFallTargets = useCallback((): PieceFallTarget[] => {
     const vh = typeof window !== "undefined" ? window.innerHeight : 700;
@@ -564,13 +713,17 @@ export function PuzzleShotModal({
   if (!open) return null;
 
   const { boardW, boardH, pad, pieceWpx, pieceHpx, cellW, cellH } = boardMetrics;
+  const layoutBoardW =
+    phase === "playback" && pieceUrls.length > 0 ? boardW : (cameraLiveMetrics?.boardW ?? 200);
+  const layoutBoardH =
+    phase === "playback" && pieceUrls.length > 0 ? boardH : (cameraLiveMetrics?.boardH ?? 300);
   const previewScale =
     frameLayout.w > 2 && frameLayout.h > 2
-      ? Math.min(frameLayout.w / boardW, frameLayout.h / boardH)
+      ? Math.min(frameLayout.w / layoutBoardW, frameLayout.h / layoutBoardH)
       : 1;
   /** scale()은 레이아웃 박스를 안 줄여서 flex·둥근 클립과 그려진 내용이 어긋남 → 바깥은 스케일된 실제 크기 */
-  const previewLayoutW = boardW * previewScale;
-  const previewLayoutH = boardH * previewScale;
+  const previewLayoutW = layoutBoardW * previewScale;
+  const previewLayoutH = layoutBoardH * previewScale;
 
   return (
     <div
@@ -615,7 +768,30 @@ export function PuzzleShotModal({
                     className="absolute inset-0 overflow-hidden"
                     style={{ borderRadius: clipRadiusPx }}
                   >
-                    <PuzzleShotGridSvgBeveled className="block h-full w-full" />
+                    <div className="absolute inset-0 bg-black" aria-hidden />
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <div
+                        className="relative shrink-0"
+                        style={{ width: previewLayoutW, height: previewLayoutH }}
+                      >
+                        <div
+                          className="absolute left-0 top-0"
+                          style={{
+                            width: layoutBoardW,
+                            height: layoutBoardH,
+                            transform: `scale(${previewScale})`,
+                            transformOrigin: "top left",
+                          }}
+                        >
+                          <canvas
+                            ref={liveCameraCompositeRef}
+                            className="block max-w-none select-none"
+                            style={{ width: layoutBoardW, height: layoutBoardH }}
+                          />
+                          <PuzzleShotGridSvgBeveled className="pointer-events-none absolute inset-0 block h-full w-full" />
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -641,8 +817,8 @@ export function PuzzleShotModal({
                   <div
                     className="absolute left-0 top-0"
                     style={{
-                      width: boardW,
-                      height: boardH,
+                      width: layoutBoardW,
+                      height: layoutBoardH,
                       transform: `scale(${previewScale})`,
                       transformOrigin: "top left",
                     }}
