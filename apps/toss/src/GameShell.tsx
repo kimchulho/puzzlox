@@ -13,7 +13,12 @@ import Lobby from "@web/components/Lobby";
 import PuzzleBoard from "@web/components/PuzzleBoard";
 import TermsOfService from "@web/components/TermsOfService";
 import UserDashboard from "@web/components/UserDashboard";
-import { decodeRoomId, encodeRoomId } from "@web/lib/roomCode";
+import {
+  decodeRoomId,
+  parseRoomCodeFromPathname,
+  roomCodeFromLocation,
+  roomPath,
+} from "@web/lib/roomCode";
 import { normalizePuzzleDifficulty, type PuzzleDifficulty } from "@web/lib/puzzleDifficulty";
 import { supabase } from "@web/lib/supabaseClient";
 import { clearSession } from "./lib/tossSession";
@@ -155,9 +160,10 @@ export default function GameShell({
    */
   useEffect(() => {
     if (loading || currentRoom || showAdmin) return;
-    if (pathname !== "/") return;
-    const roomQ = new URLSearchParams(window.location.search).get("room");
-    if (roomQ) return;
+    const locPath = window.location.pathname;
+    if (locPath !== "/" && locPath !== "") return;
+    if (parseRoomCodeFromPathname(locPath)) return;
+    if (new URLSearchParams(window.location.search).get("room")) return;
 
     const st = window.history.state as { tossLobbyGuard?: string } | null;
     if (st?.tossLobbyGuard === "top") return;
@@ -170,8 +176,7 @@ export default function GameShell({
   }, [loading, currentRoom, pathname, showAdmin]);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const roomParam = params.get("room");
+    const roomParam = roomCodeFromLocation();
 
     if (roomParam) {
       const isNumeric = /^\d+$/.test(roomParam);
@@ -210,18 +215,17 @@ export default function GameShell({
     }
 
     const handlePopState = () => {
+      const roomParamPop = roomCodeFromLocation();
       const path = window.location.pathname;
-      const p = new URLSearchParams(window.location.search);
-      const rp = p.get("room");
       const st = window.history.state as { layer?: string; tossLobbyGuard?: string } | null;
 
-      if (rp && st?.layer === "puzzle" && currentRoomRef.current) {
+      if (roomParamPop && st?.layer === "puzzle" && currentRoomRef.current) {
         setShowLeavePuzzleModal(true);
         window.history.pushState({ layer: "puzzle-top" }, "", window.location.href);
         return;
       }
 
-      if (!rp) {
+      if (!roomParamPop) {
         setCurrentRoom(null);
         setShowLeavePuzzleModal(false);
         if (path === "/" && st?.tossLobbyGuard === "base") {
@@ -235,8 +239,8 @@ export default function GameShell({
         return;
       }
 
-      const isNumeric = /^\d+$/.test(rp);
-      const decodedId = isNumeric ? parseInt(rp, 10) : decodeRoomId(rp);
+      const isNumeric = /^\d+$/.test(roomParamPop);
+      const decodedId = isNumeric ? parseInt(roomParamPop, 10) : decodeRoomId(roomParamPop);
       if (decodedId) {
         supabase
           .from("rooms")
@@ -266,8 +270,7 @@ export default function GameShell({
     pieceCount: number,
     difficulty: PuzzleDifficulty = "medium"
   ) => {
-    const roomCode = encodeRoomId(roomId);
-    const url = `/?room=${roomCode}`;
+    const url = roomPath(roomId);
     window.history.pushState({ layer: "puzzle" }, "", url);
     window.history.pushState({ layer: "puzzle-top" }, "", url);
     setCurrentRoom({ id: roomId, imageUrl, pieceCount, difficulty });

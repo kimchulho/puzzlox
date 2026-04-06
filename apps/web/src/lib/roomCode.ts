@@ -34,6 +34,44 @@ export function parseRoomNumberOrCode(raw: string): number | null {
   return null;
 }
 
+/** Share / deep link path, e.g. `/room/A65NE5`. */
+export function roomPath(roomId: number): string {
+  return `/room/${encodeRoomId(roomId)}`;
+}
+
+/** Reads encoded id or numeric id from pathname `/room/<code>`. */
+export function parseRoomCodeFromPathname(pathname: string): string | null {
+  const m = pathname.trim().match(/^\/room\/([^/]+)\/?$/i);
+  if (!m) return null;
+  try {
+    return decodeURIComponent(m[1]).trim();
+  } catch {
+    return m[1].trim();
+  }
+}
+
+/** Legacy `/?room=CODE` → `/room/CODE` (keeps other query params). */
+export function canonicalizeRoomUrlToPath(): void {
+  const pathCode = parseRoomCodeFromPathname(window.location.pathname);
+  const u = new URL(window.location.href);
+  const q = u.searchParams.get('room')?.trim();
+  if (!q || pathCode) return;
+  u.searchParams.delete('room');
+  const tail = u.searchParams.toString();
+  u.pathname = `/room/${encodeURIComponent(q)}`;
+  u.search = tail ? `?${tail}` : '';
+  window.history.replaceState({}, '', `${u.pathname}${u.search}${u.hash}`);
+}
+
+export function roomCodeFromLocation(): string | null {
+  canonicalizeRoomUrlToPath();
+  return (
+    parseRoomCodeFromPathname(window.location.pathname) ??
+    new URLSearchParams(window.location.search).get('room')?.trim() ??
+    null
+  );
+}
+
 export function decodeRoomId(code: string): number | null {
   if (!code || code.length !== 6) return null;
   

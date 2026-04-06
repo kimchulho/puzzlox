@@ -11,7 +11,7 @@ import Admin from './components/Admin';
 import TermsOfService from './components/TermsOfService';
 import UserDashboard from './components/UserDashboard';
 import { supabase } from './lib/supabaseClient';
-import { encodeRoomId, decodeRoomId } from './lib/roomCode';
+import { decodeRoomId, roomCodeFromLocation, roomPath } from './lib/roomCode';
 import { normalizePuzzleDifficulty, type PuzzleDifficulty } from './lib/puzzleDifficulty';
 
 function readStoredPuzzleUser(): unknown | null {
@@ -44,21 +44,38 @@ export default function App() {
   };
 
   useEffect(() => {
-    const onPop = () => setPathname(window.location.pathname);
-    window.addEventListener('popstate', onPop);
-    return () => window.removeEventListener('popstate', onPop);
-  }, []);
+    let cancelled = false;
 
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const roomParam = params.get('room');
-    
-    if (roomParam) {
+    const syncFromLocation = () => {
+      const roomParam = roomCodeFromLocation();
+      const path = window.location.pathname;
+      setPathname(path);
+
+      if (!roomParam) {
+        setCurrentRoom(null);
+        setLoading(false);
+        return;
+      }
+
       const isNumeric = /^\d+$/.test(roomParam);
       const decodedId = isNumeric ? parseInt(roomParam, 10) : decodeRoomId(roomParam);
 
-      if (decodedId) {
-        supabase.from('rooms').select('*').eq('id', decodedId).single().then(({ data, error }) => {
+      if (!decodedId) {
+        window.history.replaceState({}, '', '/');
+        setCurrentRoom(null);
+        setPathname('/');
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+      supabase
+        .from('rooms')
+        .select('*')
+        .eq('id', decodedId)
+        .single()
+        .then(({ data, error }) => {
+          if (cancelled) return;
           if (data && !error) {
             setCurrentRoom({
               id: data.id,
@@ -68,47 +85,25 @@ export default function App() {
             });
           } else {
             window.history.replaceState({}, '', '/');
+            setCurrentRoom(null);
+            setPathname('/');
           }
           setLoading(false);
         });
-      } else {
-        window.history.replaceState({}, '', '/');
-        setLoading(false);
-      }
-    } else {
-      setLoading(false);
-    }
-
-    const handlePopState = () => {
-      const params = new URLSearchParams(window.location.search);
-      const roomParam = params.get('room');
-      if (!roomParam) {
-        setCurrentRoom(null);
-      } else {
-        const isNumeric = /^\d+$/.test(roomParam);
-        const decodedId = isNumeric ? parseInt(roomParam, 10) : decodeRoomId(roomParam);
-        if (decodedId) {
-          supabase.from('rooms').select('*').eq('id', decodedId).single().then(({ data, error }) => {
-            if (data && !error) {
-              setCurrentRoom({
-                id: data.id,
-                imageUrl: data.image_url,
-                pieceCount: data.piece_count,
-                difficulty: normalizePuzzleDifficulty((data as any).difficulty),
-              });
-            }
-          });
-        }
-      }
     };
-    
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
+
+    syncFromLocation();
+    window.addEventListener('popstate', syncFromLocation);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('popstate', syncFromLocation);
+    };
   }, []);
 
   const handleJoinRoom = (roomId: number, imageUrl: string, pieceCount: number, difficulty: PuzzleDifficulty) => {
-    const roomCode = encodeRoomId(roomId);
-    window.history.pushState({}, '', `/?room=${roomCode}`);
+    const path = roomPath(roomId);
+    window.history.pushState({}, '', path);
+    setPathname(path);
     setCurrentRoom({ id: roomId, imageUrl, pieceCount, difficulty });
   };
 
