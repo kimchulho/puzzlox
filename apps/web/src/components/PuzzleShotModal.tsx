@@ -1,4 +1,12 @@
-import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import React, {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { motion } from "motion/react";
 import { Camera, SwitchCamera, X } from "lucide-react";
 import {
@@ -65,11 +73,50 @@ function applyPuzzlePieceBevel(
   ctx.restore();
 }
 
+function roundRectPath(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number
+) {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+
+/** 보드 전체 외곽을 둥글게 클립(직소 결과·탭 끝이 모서리에서 자연스럽게) */
+function applyRoundedOuterClipToBoard(board: HTMLCanvasElement) {
+  const W = board.width;
+  const H = board.height;
+  const r = Math.min(W, H) * 0.065;
+  const ctx = board.getContext("2d");
+  if (!ctx || r < 1) return;
+  const snap = document.createElement("canvas");
+  snap.width = W;
+  snap.height = H;
+  const sctx = snap.getContext("2d");
+  if (!sctx) return;
+  sctx.drawImage(board, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  ctx.save();
+  roundRectPath(ctx, 0, 0, W, H, r);
+  ctx.clip();
+  ctx.drawImage(snap, 0, 0);
+  ctx.restore();
+}
+
 /**
- * 화면에 보이는 퍼즐 프레임(내부 2:3 영역)과 동일한 구간을 비디오에서 잘라 보드로 그립니다.
- * `frameEl`은 프레임 안쪽(테두리 안 퍼즐 홀) DOM 요소.
+ * SVG 격자(또는 그와 동일한 화면 직사각)와 정확히 일치하는 구간만 비디오에서 잘라냅니다.
+ * `frameEl`: 촬영 가이드 `<svg>` (getBoundingClientRect = 실제 격자 영역).
  */
-function captureBoardCanvasFromFrame(video: HTMLVideoElement, frameEl: HTMLElement): HTMLCanvasElement | null {
+function captureBoardCanvasFromFrame(video: HTMLVideoElement, frameEl: Element): HTMLCanvasElement | null {
   const vw = video.videoWidth;
   const vh = video.videoHeight;
   if (vw < 2 || vh < 2) return null;
@@ -77,19 +124,23 @@ function captureBoardCanvasFromFrame(video: HTMLVideoElement, frameEl: HTMLEleme
   const vRect = video.getBoundingClientRect();
   const fRect = frameEl.getBoundingClientRect();
 
-  const ix = Math.max(fRect.left, vRect.left);
-  const iy = Math.max(fRect.top, vRect.top);
-  const ix2 = Math.min(fRect.right, vRect.right);
-  const iy2 = Math.min(fRect.bottom, vRect.bottom);
-  const rw = Math.max(0, ix2 - ix);
-  const rh = Math.max(0, iy2 - iy);
-  if (rw < 2 || rh < 2) return null;
-
-  const rx = ix - vRect.left;
-  const ry = iy - vRect.top;
   const Dw = vRect.width;
   const Dh = vRect.height;
   if (Dw < 2 || Dh < 2) return null;
+
+  const shrink = 0.35;
+  const fl = fRect.left + shrink;
+  const ft = fRect.top + shrink;
+  const fr = fRect.right - shrink;
+  const fb = fRect.bottom - shrink;
+
+  const rx = Math.max(0, fl - vRect.left);
+  const ry = Math.max(0, ft - vRect.top);
+  const rx2 = Math.min(Dw, fr - vRect.left);
+  const ry2 = Math.min(Dh, fb - vRect.top);
+  const rw = Math.max(0, rx2 - rx);
+  const rh = Math.max(0, ry2 - ry);
+  if (rw < 2 || rh < 2) return null;
 
   const ir = vw / vh;
   const er = Dw / Dh;
@@ -126,8 +177,14 @@ function captureBoardCanvasFromFrame(video: HTMLVideoElement, frameEl: HTMLEleme
     uh = nuh;
   }
 
+  u0 = Math.max(0, Math.min(vw - 1, u0));
+  v0 = Math.max(0, Math.min(vh - 1, v0));
+  uw = Math.min(uw, vw - u0);
+  uh = Math.min(uh, vh - v0);
+  if (uw < 2 || uh < 2) return null;
+
   const maxW = 400;
-  const W = Math.min(maxW, Math.max(160, Math.round(uw)));
+  const W = Math.min(maxW, Math.max(1, Math.round(uw)));
   const H = Math.round((W * PS_BOARD_H) / PS_BOARD_W);
 
   const canvas = document.createElement("canvas");
@@ -136,6 +193,7 @@ function captureBoardCanvasFromFrame(video: HTMLVideoElement, frameEl: HTMLEleme
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
   ctx.drawImage(video, u0, v0, uw, uh, 0, 0, W, H);
+  applyRoundedOuterClipToBoard(canvas);
   return canvas;
 }
 
@@ -207,19 +265,21 @@ function extractPieceImages(board: HTMLCanvasElement): PuzzleShotExtractResult {
   };
 }
 
-const FRAME_BORDER_CLASS =
-  "box-border border-[3px] border-black/50 bg-black/[0.12] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05)]";
-/** 1.5× (w-44→264px, sm:w-48→288px) */
-const FRAME_CAMERA_BOX_CLASS = `${FRAME_BORDER_CLASS} aspect-[2/3] w-[264px] sm:w-[288px] shrink-0`;
+/** 촬영 가이드: 테두리·배경 없음, 고정 크기만 */
+const CAMERA_FRAME_CLASS = "block w-[264px] sm:w-[288px] aspect-[2/3] shrink-0 h-auto";
 
-/** 촬영 화면 격자 — 확인 화면 베벨과 같은 구조를 SVG로 */
-function PuzzleShotGridSvgBeveled({ className }: { className?: string }) {
+/** 촬영 화면 격자 — 흰 윤곽 50% 투명도, 베벨 느낌은 낮은 대비로 */
+const PuzzleShotGridSvgBeveled = forwardRef<SVGSVGElement, { className?: string }>(function PuzzleShotGridSvgBeveled(
+  { className },
+  ref
+) {
   const reactId = useId();
   const blurId = `psf-blur-${reactId.replace(/:/g, "")}`;
   const pieces = puzzleShotPieceIndexList();
 
   return (
     <svg
+      ref={ref}
       viewBox={`0 0 ${PS_BOARD_W} ${PS_BOARD_H}`}
       className={className ?? "block h-full w-full"}
       preserveAspectRatio="xMidYMid meet"
@@ -229,24 +289,24 @@ function PuzzleShotGridSvgBeveled({ className }: { className?: string }) {
           <feGaussianBlur in="SourceGraphic" stdDeviation="0.85" />
         </filter>
       </defs>
-      {pieces.map(({ col, row }, i) => {
+      {pieces.map(({ col, row }) => {
         const d = piecePathSvgD(col, row);
         return (
-          <g key={`g-${i}`}>
+          <g key={`g-${col}-${row}`}>
             <path
               d={d}
               fill="none"
-              stroke="rgba(0,0,0,0.22)"
-              strokeWidth={1.15}
+              stroke="rgba(0,0,0,0.14)"
+              strokeWidth={1.1}
               strokeLinejoin="round"
               strokeLinecap="round"
             />
-            <g filter={`url(#${blurId})`} opacity={0.88}>
+            <g filter={`url(#${blurId})`} opacity={0.75}>
               <path
                 d={d}
                 fill="none"
-                stroke="rgba(255,255,255,0.58)"
-                strokeWidth={0.95}
+                stroke="rgba(255,255,255,0.35)"
+                strokeWidth={0.9}
                 strokeLinejoin="round"
                 strokeLinecap="round"
                 transform="translate(1.15, 1.15)"
@@ -254,8 +314,8 @@ function PuzzleShotGridSvgBeveled({ className }: { className?: string }) {
               <path
                 d={d}
                 fill="none"
-                stroke="rgba(0,0,0,0.58)"
-                strokeWidth={0.95}
+                stroke="rgba(0,0,0,0.35)"
+                strokeWidth={0.9}
                 strokeLinejoin="round"
                 strokeLinecap="round"
                 transform="translate(-1.15, -1.15)"
@@ -264,8 +324,8 @@ function PuzzleShotGridSvgBeveled({ className }: { className?: string }) {
             <path
               d={d}
               fill="none"
-              stroke="rgba(255,255,255,0.78)"
-              strokeWidth={0.65}
+              stroke="rgba(255,255,255,0.5)"
+              strokeWidth={0.7}
               strokeLinejoin="round"
               strokeLinecap="round"
               vectorEffect="nonScalingStroke"
@@ -275,7 +335,7 @@ function PuzzleShotGridSvgBeveled({ className }: { className?: string }) {
       })}
     </svg>
   );
-}
+});
 
 export function PuzzleShotModal({
   open,
@@ -287,7 +347,7 @@ export function PuzzleShotModal({
   isKo: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const puzzleHoleRef = useRef<HTMLDivElement | null>(null);
+  const puzzleGuideRef = useRef<SVGSVGElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [phase, setPhase] = useState<Phase>("camera");
   const [camError, setCamError] = useState<string | null>(null);
@@ -457,28 +517,33 @@ export function PuzzleShotModal({
   }, []);
 
   const handleCapture = useCallback(() => {
-    const v = videoRef.current;
-    const hole = puzzleHoleRef.current;
-    if (!v) return;
+    if (!videoRef.current) return;
     void requestDeviceMotionPermission();
-    const board = hole ? captureBoardCanvasFromFrame(v, hole) : null;
-    if (!board) return;
-    const extracted = extractPieceImages(board);
-    setBoardMetrics({
-      boardW: extracted.boardW,
-      boardH: extracted.boardH,
-      pad: extracted.pad,
-      pieceWpx: extracted.pieceWpx,
-      pieceHpx: extracted.pieceHpx,
-      cellW: extracted.cellW,
-      cellH: extracted.cellH,
+    void new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    }).then(() => {
+      const v = videoRef.current;
+      const guide = puzzleGuideRef.current;
+      if (!v || !guide) return;
+      const board = captureBoardCanvasFromFrame(v, guide);
+      if (!board) return;
+      const extracted = extractPieceImages(board);
+      setBoardMetrics({
+        boardW: extracted.boardW,
+        boardH: extracted.boardH,
+        pad: extracted.pad,
+        pieceWpx: extracted.pieceWpx,
+        pieceHpx: extracted.pieceHpx,
+        cellW: extracted.cellW,
+        cellH: extracted.cellH,
+      });
+      setPieceUrls(extracted.urls);
+      setFallStarted(false);
+      fallStartedRef.current = false;
+      setFallTargets([]);
+      setBurstKey((k) => k + 1);
+      setPhase("playback");
     });
-    setPieceUrls(extracted.urls);
-    setFallStarted(false);
-    fallStartedRef.current = false;
-    setFallTargets([]);
-    setBurstKey((k) => k + 1);
-    setPhase("playback");
   }, []);
 
   const handleRetake = useCallback(() => {
@@ -496,6 +561,7 @@ export function PuzzleShotModal({
   if (!open) return null;
 
   const { boardW, boardH, pad, pieceWpx, pieceHpx, cellW, cellH } = boardMetrics;
+  const playbackCornerPx = Math.max(5, Math.min(boardW, boardH) * 0.065 * fitScale);
 
   return (
     <div
@@ -534,11 +600,7 @@ export function PuzzleShotModal({
               <p className="px-6 text-center text-sm text-amber-200/90 z-10">{camError}</p>
             ) : (
               <div className="relative z-10 pointer-events-none flex items-center justify-center">
-                <div className={FRAME_CAMERA_BOX_CLASS}>
-                  <div ref={puzzleHoleRef} className="absolute inset-[3px] overflow-hidden">
-                    <PuzzleShotGridSvgBeveled />
-                  </div>
-                </div>
+                <PuzzleShotGridSvgBeveled ref={puzzleGuideRef} className={CAMERA_FRAME_CLASS} />
               </div>
             )}
           </>
@@ -547,10 +609,11 @@ export function PuzzleShotModal({
         {phase === "playback" && pieceUrls.length > 0 && (
           <div className="relative z-10 flex items-center justify-center">
             <div
-              className={`${FRAME_BORDER_CLASS} overflow-hidden shrink-0`}
+              className="shrink-0 overflow-hidden"
               style={{
-                width: boardW * fitScale + 6,
-                height: boardH * fitScale + 6,
+                width: boardW * fitScale,
+                height: boardH * fitScale,
+                borderRadius: playbackCornerPx,
               }}
             >
               <div
