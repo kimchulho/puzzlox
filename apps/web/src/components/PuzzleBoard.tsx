@@ -3128,8 +3128,11 @@ export default function PuzzleBoard({
         };
         const getPieceQuarter = (piece: PIXI.Container) =>
           normalizeRotationQuarter((piece as any).__rotationQuarter ?? 0);
-        const canNeighborAttachInNightmare = (p1: PIXI.Container, p2: PIXI.Container) =>
-          getPieceQuarter(p1) === getPieceQuarter(p2);
+        /** 악몽: 앞면끼리만 이웃 결합(뒷면은 보드 고정만 가능·조각끼리 스냅 불가) */
+        const canNeighborAttachInNightmare = (p1: PIXI.Container, p2: PIXI.Container) => {
+          if ((p1 as any).__isBackFace === true || (p2 as any).__isBackFace === true) return false;
+          return getPieceQuarter(p1) === getPieceQuarter(p2);
+        };
 
         const getConnectedCluster = (startId: number) => {
           const cluster = new Set<number>([startId]);
