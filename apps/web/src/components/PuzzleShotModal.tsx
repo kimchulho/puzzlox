@@ -107,8 +107,9 @@ const PUZZLE_SHOT_NEIGHBOR_PAIRS: readonly [number, number][] = [
   [3, 5],
 ];
 
-const SNAP_CENTER_ERR_PX = 22;
-const SNAP_ROT_DEG = 16;
+/** 이웃 조각 중심 간 벡터가 맞춤 자세와 가까우면 스냅 (셀 크기와 함께 trySnap에서 더 보정) */
+const SNAP_CENTER_ERR_PX = 40;
+const SNAP_ROT_DEG = 24;
 
 function unwrapDeg(d: number) {
   let x = d;
@@ -204,7 +205,8 @@ function trySnapMergeOnePair(
     const err = Math.hypot(dWcx - dCcx, dWcy - dCcy);
     const ra = getR(ia);
     const rb = getR(ib);
-    if (err > SNAP_CENTER_ERR_PX) continue;
+    const snapPx = Math.max(SNAP_CENTER_ERR_PX, Math.min(cellW, cellH) * 0.28);
+    if (err > snapPx) continue;
     if (Math.abs(unwrapDeg(ra - rb)) > SNAP_ROT_DEG) continue;
 
     const setA = ga ? [...ga.members] : [ia];
@@ -261,14 +263,28 @@ function initialPiecePlayTransforms(): PiecePlayTransform[] {
   return puzzleShotPieceIndexList().map(() => ({ x: 0, y: 0, r: 0 }));
 }
 
-function buildScatterTransforms(): PiecePlayTransform[] {
+function buildScatterTransforms(metrics: {
+  boardW: number;
+  boardH: number;
+  pieceWpx: number;
+  pieceHpx: number;
+}): PiecePlayTransform[] {
   if (typeof window === "undefined") return initialPiecePlayTransforms();
   const vh = window.innerHeight;
   const vw = window.innerWidth;
+  // 대칭 분포 + 보드 크기 비율로 가로·세로 모두 넓게 흩어져 행/열이 섞이도록
+  const spreadX = Math.min(
+    Math.max(metrics.boardW * 0.62, metrics.pieceWpx * 3),
+    Math.max(300, vw * 0.52)
+  );
+  const spreadY = Math.min(
+    Math.max(metrics.boardH * 0.72, metrics.pieceHpx * 3.4),
+    Math.max(360, vh * 0.52)
+  );
   return puzzleShotPieceIndexList().map(() => ({
-    x: (Math.random() - 0.5) * Math.min(220, vw * 0.44),
-    y: (Math.random() - 0.22) * Math.min(260, vh * 0.4),
-    r: (Math.random() - 0.5) * 320,
+    x: (Math.random() - 0.5) * spreadX,
+    y: (Math.random() - 0.5) * spreadY,
+    r: (Math.random() - 0.5) * 300,
   }));
 }
 
@@ -852,7 +868,24 @@ export function PuzzleShotModal({
     const vh = typeof window !== "undefined" ? window.innerHeight : 700;
     const vw = typeof window !== "undefined" ? window.innerWidth : 400;
     const nPiece = puzzleShotPieceIndexList().length;
-    const entities = listPlaybackFallEntities(mergeGroupsRef.current, nPiece);
+    const { pieceWpx, pieceHpx, pad, cellW, cellH } = boardMetricsRef.current;
+    const plist = puzzleShotPieceIndexList();
+    const homeLeft = plist.map(({ col }) => col * pieceWpx - pad);
+    const homeTop = plist.map(({ row }) => row * pieceHpx - pad);
+    const transforms = pieceTransformRef.current;
+    const groups = mergeGroupsRef.current;
+    const flatTransforms: PiecePlayTransform[] = plist.map((_, idx) => {
+      const W = worldCenterOfPiece(idx, transforms, groups, homeLeft, homeTop, cellW, cellH);
+      const cx0 = homeLeft[idx] + cellW / 2;
+      const cy0 = homeTop[idx] + cellH / 2;
+      return { x: W.cx - cx0, y: W.cy - cy0, r: W.r };
+    });
+    setMergeGroups([]);
+    setPiecePlayTransform(flatTransforms);
+    const entities: PlaybackFallEntity[] = Array.from({ length: nPiece }, (_, i) => ({
+      type: "solo" as const,
+      i,
+    }));
     setFallEntitySnapshot(cloneFallEntitySnapshot(entities));
     const targets = entities.map((_, idx) => ({
       x: (Math.random() - 0.5) * Math.min(160, vw * 0.35),
@@ -911,7 +944,7 @@ export function PuzzleShotModal({
     }
     setScatterMoveTween(true);
     setMergeGroups([]);
-    setPiecePlayTransform(buildScatterTransforms());
+    setPiecePlayTransform(buildScatterTransforms(boardMetricsRef.current));
     setScatterMode(true);
     scatterMoveEndTimerRef.current = window.setTimeout(() => {
       scatterMoveEndTimerRef.current = null;
@@ -1824,8 +1857,8 @@ export function PuzzleShotModal({
             <>
               <p className="text-center text-xs text-white/60 max-w-sm">
                 {isKo
-                  ? "폰을 흔들면 조각이 흩어집니다. 한 손가락으로 이동, 두 손가락으로는 덜 움직이는 손가락을 축으로 다른 손가락 방향으로 회전·이동할 수 있습니다. 맞닿는 조각은 위치·각도가 가까우면 붙습니다. 저장은 떨어지는 연출만 합니다(파일 저장 없음)."
-                  : "Shake to scatter. One finger drags; with two fingers, the finger that moves less acts as the pivot while the other rotates around it (with pan). Neighbors snap when aligned. Save plays the drop animation only (no file saved)."}
+                  ? "폰을 흔들면 조각이 흩어집니다. 한 손가락으로 이동, 두 손가락으로는 덜 움직이는 손가락을 축으로 다른 손가락 방향으로 회전·이동할 수 있습니다. 맞닿는 조각은 위치·각도가 가까우면 붙습니다. 저장은 붙어 있던 조각을 풀어 낱개로 아래로 떨어지는 연출만 합니다(파일 저장 없음)."
+                  : "Shake to scatter. One finger drags; two fingers rotate around the less-moving touch. Neighbors snap when close. Save ungroups pieces and drops each one (animation only, no file saved)."}
               </p>
               <div className="flex flex-wrap justify-center gap-2">
                 <button
