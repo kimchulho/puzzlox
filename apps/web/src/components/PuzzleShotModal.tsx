@@ -21,6 +21,10 @@ const BEVEL_CORNER_RATIO = 0.065;
 const SHAKE_DELTA_THRESHOLD = 14;
 const SHAKE_COOLDOWN_MS = 450;
 
+/** 흩어보기 시 조각이 목표 위치로 이동하는 시간(초) */
+const SCATTER_MOVE_DURATION_S = 0.55;
+const SCATTER_MOVE_EASE: [number, number, number, number] = [0.22, 0.99, 0.36, 1];
+
 type PieceFallTarget = { x: number; y: number; rotate: number; duration: number; delay: number };
 
 type PiecePlayTransform = { x: number; y: number; r: number };
@@ -55,6 +59,27 @@ type PieceMergeGroup = {
   r: number;
 };
 
+type PlaybackFallEntity =
+  | { type: "group"; g: PieceMergeGroup }
+  | { type: "solo"; i: number };
+
+function cloneFallEntitySnapshot(entities: PlaybackFallEntity[]): PlaybackFallEntity[] {
+  return entities.map((ent) =>
+    ent.type === "group"
+      ? {
+          type: "group",
+          g: {
+            anchor: ent.g.anchor,
+            members: [...ent.g.members],
+            x: ent.g.x,
+            y: ent.g.y,
+            r: ent.g.r,
+          },
+        }
+      : { type: "solo", i: ent.i }
+  );
+}
+
 const PUZZLE_SHOT_NEIGHBOR_PAIRS: readonly [number, number][] = [
   [0, 1],
   [2, 3],
@@ -79,12 +104,9 @@ function findMergeGroupContaining(groups: PieceMergeGroup[], i: number): PieceMe
   return groups.find((g) => g.members.includes(i));
 }
 
-function listPlaybackFallEntities(
-  groups: PieceMergeGroup[],
-  nPiece: number
-): Array<{ type: "group"; g: PieceMergeGroup } | { type: "solo"; i: number }> {
+function listPlaybackFallEntities(groups: PieceMergeGroup[], nPiece: number): PlaybackFallEntity[] {
   const used = new Set<number>();
-  const out: Array<{ type: "group"; g: PieceMergeGroup } | { type: "solo"; i: number }> = [];
+  const out: PlaybackFallEntity[] = [];
   for (const g of groups) {
     out.push({ type: "group", g });
     for (const m of g.members) used.add(m);
@@ -654,6 +676,8 @@ export function PuzzleShotModal({
   const [facingUser, setFacingUser] = useState(true);
   const [fallStarted, setFallStarted] = useState(false);
   const [fallTargets, setFallTargets] = useState<PieceFallTarget[]>([]);
+  /** 저장(낙하) 시작 시점의 엔티티 목록 — targets 인덱스와 항상 일치 */
+  const [fallEntitySnapshot, setFallEntitySnapshot] = useState<PlaybackFallEntity[] | null>(null);
   const [boardMetrics, setBoardMetrics] = useState({
     boardW: 200,
     boardH: 300,
@@ -664,6 +688,8 @@ export function PuzzleShotModal({
     cellH: 120,
   });
   const [scatterMode, setScatterMode] = useState(false);
+  /** true면 흩어보기 직후 x/y/r을 부드럽게 보간(이후 드래그는 즉시 반응) */
+  const [scatterMoveTween, setScatterMoveTween] = useState(false);
   const [piecePlayTransform, setPiecePlayTransform] = useState<PiecePlayTransform[]>(initialPiecePlayTransforms);
   const [mergeGroups, setMergeGroups] = useState<PieceMergeGroup[]>([]);
   const [entityZMap, setEntityZMap] = useState<Record<string, number>>({});
@@ -675,6 +701,20 @@ export function PuzzleShotModal({
   const boardMetricsRef = useRef(boardMetrics);
   boardMetricsRef.current = boardMetrics;
   const zSeqRef = useRef(0);
+  const scatterMoveEndTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (scatterMoveEndTimerRef.current != null) {
+        window.clearTimeout(scatterMoveEndTimerRef.current);
+        scatterMoveEndTimerRef.current = null;
+      }
+      if (fallFallbackTimerRef.current != null) {
+        window.clearTimeout(fallFallbackTimerRef.current);
+        fallFallbackTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const touchDragRef = useRef<PuzzleShotTouchDragRef | null>(null);
   const touchRotateRef = useRef<PuzzleShotTouchRotateRef | null>(null);
@@ -690,6 +730,9 @@ export function PuzzleShotModal({
   } | null>(null);
 
   const fallStartedRef = useRef(false);
+  const fallFinishHandledRef = useRef(false);
+  const fallFallbackTimerRef = useRef<number | null>(null);
+  const returnToCameraRef = useRef<() => void>(() => {});
   const lastAccelRef = useRef<{ x: number; y: number; z: number } | null>(null);
   const lastShakeAtRef = useRef(0);
   const liveCameraBoardBufRef = useRef<HTMLCanvasElement | null>(null);
@@ -784,10 +827,16 @@ export function PuzzleShotModal({
   const startFall = useCallback(() => {
     if (fallStartedRef.current) return;
     fallStartedRef.current = true;
+    fallFinishHandledRef.current = false;
+    if (fallFallbackTimerRef.current != null) {
+      window.clearTimeout(fallFallbackTimerRef.current);
+      fallFallbackTimerRef.current = null;
+    }
     const vh = typeof window !== "undefined" ? window.innerHeight : 700;
     const vw = typeof window !== "undefined" ? window.innerWidth : 400;
     const nPiece = puzzleShotPieceIndexList().length;
     const entities = listPlaybackFallEntities(mergeGroupsRef.current, nPiece);
+    setFallEntitySnapshot(cloneFallEntitySnapshot(entities));
     const targets = entities.map((_, idx) => ({
       x: (Math.random() - 0.5) * Math.min(160, vw * 0.35),
       y: vh * 0.55 + Math.random() * vh * 0.28,
@@ -797,6 +846,14 @@ export function PuzzleShotModal({
     }));
     setFallTargets(targets);
     setFallStarted(true);
+    const maxEndMs =
+      targets.reduce((acc, t) => Math.max(acc, (t.delay + t.duration) * 1000), 0) + 900;
+    fallFallbackTimerRef.current = window.setTimeout(() => {
+      fallFallbackTimerRef.current = null;
+      if (fallFinishHandledRef.current) return;
+      fallFinishHandledRef.current = true;
+      returnToCameraRef.current();
+    }, maxEndMs);
   }, []);
 
   useEffect(() => {
@@ -804,17 +861,45 @@ export function PuzzleShotModal({
   }, [fallStarted]);
 
   useEffect(() => {
+    if (scatterMoveEndTimerRef.current != null) {
+      window.clearTimeout(scatterMoveEndTimerRef.current);
+      scatterMoveEndTimerRef.current = null;
+    }
     setPiecePlayTransform(initialPiecePlayTransforms());
     setScatterMode(false);
+    setScatterMoveTween(false);
     setMergeGroups([]);
     setEntityZMap({});
+    setFallEntitySnapshot(null);
+    fallFinishHandledRef.current = false;
+    if (fallFallbackTimerRef.current != null) {
+      window.clearTimeout(fallFallbackTimerRef.current);
+      fallFallbackTimerRef.current = null;
+    }
   }, [burstKey]);
+
+  const clearScatterMoveTween = useCallback(() => {
+    if (scatterMoveEndTimerRef.current != null) {
+      window.clearTimeout(scatterMoveEndTimerRef.current);
+      scatterMoveEndTimerRef.current = null;
+    }
+    setScatterMoveTween((v) => (v ? false : v));
+  }, []);
 
   const startScatter = useCallback(() => {
     if (fallStartedRef.current) return;
-    setPiecePlayTransform(buildScatterTransforms());
+    if (scatterMoveEndTimerRef.current != null) {
+      window.clearTimeout(scatterMoveEndTimerRef.current);
+      scatterMoveEndTimerRef.current = null;
+    }
+    setScatterMoveTween(true);
     setMergeGroups([]);
+    setPiecePlayTransform(buildScatterTransforms());
     setScatterMode(true);
+    scatterMoveEndTimerRef.current = window.setTimeout(() => {
+      scatterMoveEndTimerRef.current = null;
+      setScatterMoveTween(false);
+    }, Math.round(SCATTER_MOVE_DURATION_S * 1000) + 80);
   }, []);
 
   useEffect(() => {
@@ -847,6 +932,17 @@ export function PuzzleShotModal({
 
   useEffect(() => {
     if (!open) {
+      if (scatterMoveEndTimerRef.current != null) {
+        window.clearTimeout(scatterMoveEndTimerRef.current);
+        scatterMoveEndTimerRef.current = null;
+      }
+      if (fallFallbackTimerRef.current != null) {
+        window.clearTimeout(fallFallbackTimerRef.current);
+        fallFallbackTimerRef.current = null;
+      }
+      fallFinishHandledRef.current = false;
+      setFallEntitySnapshot(null);
+      setScatterMoveTween(false);
       stopStream();
       setPhase("camera");
       setPieceUrls([]);
@@ -933,6 +1029,17 @@ export function PuzzleShotModal({
   );
 
   const returnToCamera = useCallback(() => {
+    if (scatterMoveEndTimerRef.current != null) {
+      window.clearTimeout(scatterMoveEndTimerRef.current);
+      scatterMoveEndTimerRef.current = null;
+    }
+    if (fallFallbackTimerRef.current != null) {
+      window.clearTimeout(fallFallbackTimerRef.current);
+      fallFallbackTimerRef.current = null;
+    }
+    fallFinishHandledRef.current = false;
+    setFallEntitySnapshot(null);
+    setScatterMoveTween(false);
     setPhase("camera");
     setPieceUrls([]);
     setFallStarted(false);
@@ -943,6 +1050,8 @@ export function PuzzleShotModal({
     setMergeGroups([]);
     setEntityZMap({});
   }, []);
+
+  returnToCameraRef.current = returnToCamera;
 
   const handleCapture = useCallback(() => {
     if (!videoRef.current) return;
@@ -966,6 +1075,12 @@ export function PuzzleShotModal({
         cellH: extracted.cellH,
       });
       setPieceUrls(extracted.urls);
+      if (fallFallbackTimerRef.current != null) {
+        window.clearTimeout(fallFallbackTimerRef.current);
+        fallFallbackTimerRef.current = null;
+      }
+      fallFinishHandledRef.current = false;
+      setFallEntitySnapshot(null);
       setFallStarted(false);
       fallStartedRef.current = false;
       setFallTargets([]);
@@ -988,6 +1103,7 @@ export function PuzzleShotModal({
       if (fallStarted || !scatterMode) return;
       if (e.pointerType === "touch") return;
       e.preventDefault();
+      clearScatterMoveTween();
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       bumpEntityZForPiece(i);
       const gr = findMergeGroupContaining(mergeGroupsRef.current, i);
@@ -1016,7 +1132,7 @@ export function PuzzleShotModal({
         };
       }
     },
-    [fallStarted, scatterMode, bumpEntityZForPiece]
+    [fallStarted, scatterMode, bumpEntityZForPiece, clearScatterMoveTween]
   );
 
   const onPieceMousePointerMove = useCallback((e: React.PointerEvent, i: number) => {
@@ -1071,6 +1187,7 @@ export function PuzzleShotModal({
       if (fallStarted || !scatterMode) return;
       if (e.touches.length === 2) {
         e.preventDefault();
+        clearScatterMoveTween();
         touchDragRef.current = null;
         bumpEntityZForPiece(i);
         const a = e.touches[0];
@@ -1108,6 +1225,7 @@ export function PuzzleShotModal({
         return;
       }
       if (e.touches.length === 1) {
+        clearScatterMoveTween();
         bumpEntityZForPiece(i);
         const t = e.touches[0];
         const gr = findMergeGroupContaining(mergeGroupsRef.current, i);
@@ -1137,7 +1255,7 @@ export function PuzzleShotModal({
         }
       }
     },
-    [fallStarted, scatterMode, bumpEntityZForPiece]
+    [fallStarted, scatterMode, bumpEntityZForPiece, clearScatterMoveTween]
   );
 
   const onPieceTouchMove = useCallback(
@@ -1231,7 +1349,8 @@ export function PuzzleShotModal({
     () => listPlaybackFallEntities(mergeGroups, nPieces),
     [mergeGroups, nPieces]
   );
-  const lastFallEntityIdx = fallEntityList.length - 1;
+  const fallRenderList = fallEntitySnapshot ?? fallEntityList;
+  const lastFallEntityIdx = fallRenderList.length - 1;
 
   if (!open) return null;
 
@@ -1348,7 +1467,7 @@ export function PuzzleShotModal({
                     }}
                   >
                   {fallStarted
-                    ? fallEntityList.map((ent, fi) => {
+                    ? fallRenderList.map((ent, fi) => {
                         const t = fallTargets[fi];
                         if (ent.type === "solo") {
                           const i = ent.i;
@@ -1360,6 +1479,12 @@ export function PuzzleShotModal({
                           const dropping = Boolean(t);
                           const pt = piecePlayTransform[i] ?? { x: 0, y: 0, r: 0 };
                           const zk = `p${i}`;
+                          const restPose = {
+                            opacity: 1,
+                            x: pt.x,
+                            y: pt.y,
+                            rotate: pt.r,
+                          } as const;
                           return (
                             <motion.img
                               key={`${burstKey}-fall-s-${i}`}
@@ -1378,7 +1503,7 @@ export function PuzzleShotModal({
                                 zIndex: 12 + (entityZMap[zk] ?? 0),
                                 pointerEvents: "none",
                               }}
-                              initial={false}
+                              initial={restPose}
                               animate={
                                 dropping && t
                                   ? {
@@ -1387,7 +1512,7 @@ export function PuzzleShotModal({
                                       y: pt.y + t.y,
                                       rotate: pt.r + t.rotate,
                                     }
-                                  : { opacity: 1, x: pt.x, y: pt.y, rotate: pt.r }
+                                  : restPose
                               }
                               transition={
                                 dropping && t
@@ -1400,6 +1525,12 @@ export function PuzzleShotModal({
                               }
                               onAnimationComplete={() => {
                                 if (!dropping || fi !== lastFallEntityIdx) return;
+                                if (fallFinishHandledRef.current) return;
+                                fallFinishHandledRef.current = true;
+                                if (fallFallbackTimerRef.current != null) {
+                                  window.clearTimeout(fallFallbackTimerRef.current);
+                                  fallFallbackTimerRef.current = null;
+                                }
                                 window.setTimeout(() => {
                                   returnToCamera();
                                 }, 280);
@@ -1410,6 +1541,12 @@ export function PuzzleShotModal({
                         const g = ent.g;
                         const dropping = Boolean(t);
                         const zk = `g${g.anchor}`;
+                        const groupRestPose = {
+                          opacity: 1,
+                          x: g.x,
+                          y: g.y,
+                          rotate: g.r,
+                        } as const;
                         return (
                           <motion.div
                             key={`${burstKey}-fall-g-${g.anchor}`}
@@ -1422,7 +1559,7 @@ export function PuzzleShotModal({
                               overflow: "visible",
                               pointerEvents: "none",
                             }}
-                            initial={false}
+                            initial={groupRestPose}
                             animate={
                               dropping && t
                                 ? {
@@ -1431,7 +1568,7 @@ export function PuzzleShotModal({
                                     y: g.y + t.y,
                                     rotate: g.r + t.rotate,
                                   }
-                                : { opacity: 1, x: g.x, y: g.y, rotate: g.r }
+                                : groupRestPose
                             }
                             transition={
                               dropping && t
@@ -1444,6 +1581,12 @@ export function PuzzleShotModal({
                             }
                             onAnimationComplete={() => {
                               if (!dropping || fi !== lastFallEntityIdx) return;
+                              if (fallFinishHandledRef.current) return;
+                              fallFinishHandledRef.current = true;
+                              if (fallFallbackTimerRef.current != null) {
+                                window.clearTimeout(fallFallbackTimerRef.current);
+                                fallFallbackTimerRef.current = null;
+                              }
                               window.setTimeout(() => {
                                 returnToCamera();
                               }, 280);
@@ -1495,7 +1638,11 @@ export function PuzzleShotModal({
                               }}
                               initial={false}
                               animate={{ x: g.x, y: g.y, rotate: g.r }}
-                              transition={{ duration: 0 }}
+                              transition={
+                                scatterMoveTween
+                                  ? { duration: SCATTER_MOVE_DURATION_S, ease: SCATTER_MOVE_EASE }
+                                  : { duration: 0 }
+                              }
                             >
                               {g.members.map((m) => {
                                 const { col, row } = pieces[m];
@@ -1566,7 +1713,11 @@ export function PuzzleShotModal({
                               }}
                               initial={false}
                               animate={{ opacity: 1, x: pt.x, y: pt.y, rotate: pt.r }}
-                              transition={{ duration: 0 }}
+                              transition={
+                                scatterMoveTween
+                                  ? { duration: SCATTER_MOVE_DURATION_S, ease: SCATTER_MOVE_EASE }
+                                  : { duration: 0 }
+                              }
                               onPointerDown={(e) => onPieceMousePointerDown(e, i)}
                               onPointerMove={(e) => onPieceMousePointerMove(e, i)}
                               onPointerUp={(e) => onPieceMousePointerUp(e, i)}
