@@ -41,14 +41,24 @@ type PuzzleShotTouchDragRef = {
 };
 type PuzzleShotTouchRotateRef = {
   i: number;
-  ang0: number;
-  r0: number;
-  cx0: number;
-  cy0: number;
-  px0: number;
-  py0: number;
   mode: "solo" | "group";
   groupAnchor: number;
+  /** 두 손가락 identifier (순서 고정) */
+  tidA: number;
+  tidB: number;
+  ax0: number;
+  ay0: number;
+  bx0: number;
+  by0: number;
+  /** 직전 프레임의 (다른 손가락 − 피벗) 방향각(rad), 첫 move 전에는 null */
+  prevLineRad: number | null;
+  lastNx: number;
+  lastNy: number;
+  lastNr: number;
+  lastPivotSX: number;
+  lastPivotSY: number;
+  /** 직전 프레임에 A가 피벗이었는지(null이면 아직 없음) */
+  prevPivotIsA: boolean | null;
 };
 
 type PieceMergeGroup = {
@@ -62,6 +72,13 @@ type PieceMergeGroup = {
 type PlaybackFallEntity =
   | { type: "group"; g: PieceMergeGroup }
   | { type: "solo"; i: number };
+
+function touchById(touches: TouchList, id: number): Touch | undefined {
+  for (let k = 0; k < touches.length; k++) {
+    if (touches[k].identifier === id) return touches[k];
+  }
+  return undefined;
+}
 
 function cloneFallEntitySnapshot(entities: PlaybackFallEntity[]): PlaybackFallEntity[] {
   return entities.map((ent) =>
@@ -1192,34 +1209,45 @@ export function PuzzleShotModal({
         bumpEntityZForPiece(i);
         const a = e.touches[0];
         const b = e.touches[1];
-        const ang = (Math.atan2(b.clientY - a.clientY, b.clientX - a.clientX) * 180) / Math.PI;
-        const cx0 = (a.clientX + b.clientX) / 2;
-        const cy0 = (a.clientY + b.clientY) / 2;
         const gr = findMergeGroupContaining(mergeGroupsRef.current, i);
         if (gr) {
           touchRotateRef.current = {
             i,
-            ang0: ang,
-            r0: gr.r,
-            cx0,
-            cy0,
-            px0: gr.x,
-            py0: gr.y,
             mode: "group",
             groupAnchor: gr.anchor,
+            tidA: a.identifier,
+            tidB: b.identifier,
+            ax0: a.clientX,
+            ay0: a.clientY,
+            bx0: b.clientX,
+            by0: b.clientY,
+            prevLineRad: null,
+            lastNx: gr.x,
+            lastNy: gr.y,
+            lastNr: gr.r,
+            lastPivotSX: a.clientX,
+            lastPivotSY: a.clientY,
+            prevPivotIsA: null,
           };
         } else {
           const pt = pieceTransformRef.current[i];
           touchRotateRef.current = {
             i,
-            ang0: ang,
-            r0: pt.r,
-            cx0,
-            cy0,
-            px0: pt.x,
-            py0: pt.y,
             mode: "solo",
             groupAnchor: i,
+            tidA: a.identifier,
+            tidB: b.identifier,
+            ax0: a.clientX,
+            ay0: a.clientY,
+            bx0: b.clientX,
+            by0: b.clientY,
+            prevLineRad: null,
+            lastNx: pt.x,
+            lastNy: pt.y,
+            lastNr: pt.r,
+            lastPivotSX: a.clientX,
+            lastPivotSY: a.clientY,
+            prevPivotIsA: null,
           };
         }
         return;
@@ -1264,21 +1292,47 @@ export function PuzzleShotModal({
       const rot = touchRotateRef.current;
       if (rot && rot.i === i && e.touches.length >= 2) {
         e.preventDefault();
-        const t0 = e.touches[0];
-        const t1 = e.touches[1];
-        const ang = (Math.atan2(t1.clientY - t0.clientY, t1.clientX - t0.clientX) * 180) / Math.PI;
-        let dAng = ang - rot.ang0;
-        if (dAng > 180) dAng -= 360;
-        if (dAng < -180) dAng += 360;
-        const cxN = (t0.clientX + t1.clientX) / 2;
-        const cyN = (t0.clientY + t1.clientY) / 2;
+        const ta = touchById(e.touches, rot.tidA);
+        const tb = touchById(e.touches, rot.tidB);
+        if (!ta || !tb) return;
+        const d0 = Math.hypot(ta.clientX - rot.ax0, ta.clientY - rot.ay0);
+        const d1 = Math.hypot(tb.clientX - rot.bx0, tb.clientY - rot.by0);
+        const pivotIsA = d0 <= d1;
+        const Px = pivotIsA ? ta.clientX : tb.clientX;
+        const Py = pivotIsA ? ta.clientY : tb.clientY;
+        const Qx = pivotIsA ? tb.clientX : ta.clientX;
+        const Qy = pivotIsA ? tb.clientY : ta.clientY;
+        const lineRad = Math.atan2(Qy - Py, Qx - Px);
         const s = previewScaleRef.current;
         if (s < 1e-6) return;
-        const dx = (cxN - rot.cx0) / s;
-        const dy = (cyN - rot.cy0) / s;
-        const nx = rot.px0 + dx;
-        const ny = rot.py0 + dy;
-        const nr = rot.r0 + dAng;
+        if (rot.prevLineRad === null) {
+          rot.prevLineRad = lineRad;
+          rot.lastPivotSX = Px;
+          rot.lastPivotSY = Py;
+          rot.prevPivotIsA = pivotIsA;
+          return;
+        }
+        if (rot.prevPivotIsA !== null && pivotIsA !== rot.prevPivotIsA) {
+          rot.prevLineRad = lineRad;
+          rot.prevPivotIsA = pivotIsA;
+          rot.lastPivotSX = Px;
+          rot.lastPivotSY = Py;
+          return;
+        }
+        rot.prevPivotIsA = pivotIsA;
+        let dRad = lineRad - rot.prevLineRad;
+        if (dRad > Math.PI) dRad -= 2 * Math.PI;
+        if (dRad < -Math.PI) dRad += 2 * Math.PI;
+        rot.prevLineRad = lineRad;
+        const deltaDeg = (dRad * 180) / Math.PI;
+        const nx = rot.lastNx + (Px - rot.lastPivotSX) / s;
+        const ny = rot.lastNy + (Py - rot.lastPivotSY) / s;
+        const nr = rot.lastNr + deltaDeg;
+        rot.lastNx = nx;
+        rot.lastNy = ny;
+        rot.lastNr = nr;
+        rot.lastPivotSX = Px;
+        rot.lastPivotSY = Py;
         if (rot.mode === "group") {
           const a = rot.groupAnchor;
           setMergeGroups((gs) =>
@@ -1770,8 +1824,8 @@ export function PuzzleShotModal({
             <>
               <p className="text-center text-xs text-white/60 max-w-sm">
                 {isKo
-                  ? "폰을 흔들면 조각이 흩어집니다. 한 손가락으로 이동, 두 손가락으로 회전·이동(중심 기준)이 가능합니다. 맞닿는 조각은 위치·각도가 가까우면 붙습니다. 저장은 떨어지는 연출만 합니다(파일 저장 없음)."
-                  : "Shake to scatter. One finger drags; two fingers rotate around the piece center and pan. Neighbors snap together when position and angle align. Save plays the drop animation only (no file saved)."}
+                  ? "폰을 흔들면 조각이 흩어집니다. 한 손가락으로 이동, 두 손가락으로는 덜 움직이는 손가락을 축으로 다른 손가락 방향으로 회전·이동할 수 있습니다. 맞닿는 조각은 위치·각도가 가까우면 붙습니다. 저장은 떨어지는 연출만 합니다(파일 저장 없음)."
+                  : "Shake to scatter. One finger drags; with two fingers, the finger that moves less acts as the pivot while the other rotates around it (with pan). Neighbors snap when aligned. Save plays the drop animation only (no file saved)."}
               </p>
               <div className="flex flex-wrap justify-center gap-2">
                 <button
