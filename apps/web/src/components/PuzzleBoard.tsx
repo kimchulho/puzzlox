@@ -321,11 +321,11 @@ export default function PuzzleBoard({
     const visual = piece.getChildByLabel("pieceVisual") as PIXI.Container | null;
     if (visual) {
       visual.rotation = ((piece as any).__rotationQuarter * Math.PI) / 2;
-      const pieceSprite = visual.getChildByLabel("pieceSprite") as PIXI.DisplayObject | null;
+      const pieceSprite = visual.getChildByLabel("pieceSprite") as PIXI.Container | null;
       if (pieceSprite) pieceSprite.visible = (piece as any).__isBackFace !== true;
-      const ownerOverlay = visual.getChildByLabel("ownerOverlay") as PIXI.DisplayObject | null;
+      const ownerOverlay = visual.getChildByLabel("ownerOverlay") as PIXI.Container | null;
       if (ownerOverlay) ownerOverlay.renderable = (piece as any).__isBackFace !== true;
-      const backOverlay = visual.getChildByLabel("backFaceOverlay") as PIXI.DisplayObject | null;
+      const backOverlay = visual.getChildByLabel("backFaceOverlay") as PIXI.Container | null;
       if (backOverlay) backOverlay.visible = (piece as any).__isBackFace === true;
     }
   };
@@ -1113,7 +1113,7 @@ export default function PuzzleBoard({
           smoothedZ: null as number | null,
           lastSwitchAt: 0,
         };
-        const getPieceVisualChild = (piece: PIXI.Container, label: string): PIXI.DisplayObject | null => {
+        const getPieceVisualChild = (piece: PIXI.Container, label: string): PIXI.Container | null => {
           const visual = piece.getChildByLabel("pieceVisual") as PIXI.Container | null;
           if (visual) {
             const inner = visual.getChildByLabel(label);
@@ -3135,7 +3135,7 @@ export default function PuzzleBoard({
         const nightmarePieceShowsBackFace = (p: PIXI.Container): boolean => {
           if ((p as any).__isBackFace === true) return true;
           const visual = p.getChildByLabel("pieceVisual") as PIXI.Container | null;
-          const backOv = visual?.getChildByLabel("backFaceOverlay") as PIXI.DisplayObject | undefined;
+          const backOv = visual?.getChildByLabel("backFaceOverlay") as PIXI.Container | undefined;
           return Boolean(backOv && "visible" in backOv && backOv.visible === true);
         };
         /** 악몽: 두 조각 모두 앞면일 때만 이웃 결합(뒷면 포함 조합 전부 불가) */
@@ -3668,7 +3668,15 @@ export default function PuzzleBoard({
           if (!isNightmare || e.pointerType !== "mouse" || e.button !== 2) return false;
           e.stopPropagation();
           try {
-            e.nativeEvent?.preventDefault?.();
+            const ne = e.nativeEvent;
+            if (
+              ne != null &&
+              typeof ne === "object" &&
+              "preventDefault" in ne &&
+              typeof (ne as { preventDefault: () => void }).preventDefault === "function"
+            ) {
+              (ne as { preventDefault: () => void }).preventDefault();
+            }
           } catch {
             /* noop */
           }

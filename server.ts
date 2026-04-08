@@ -5,7 +5,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { createServer } from "http";
 import { Server } from "socket.io";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -69,7 +69,7 @@ function encodeRoomCodeForApi(id: number): string {
 
 /** Per-room locked piece counts and row totals for dashboard/profile progress (single batched query). */
 async function loadPieceProgressMaps(
-  client: ReturnType<typeof createClient>,
+  client: SupabaseClient,
   roomIds: number[]
 ): Promise<{ lockedByRoom: Map<number, number>; rowsByRoom: Map<number, number> } | null> {
   const lockedByRoom = new Map<number, number>();
