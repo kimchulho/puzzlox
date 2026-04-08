@@ -1011,7 +1011,11 @@ async function startServer() {
       return res.status(500).json({ message: completedError.message });
     }
 
-    const roomIds = active.map((r) => Number(r.id)).filter((id) => Number.isFinite(id));
+    const activeIds = active.map((r) => Number(r.id)).filter((id) => Number.isFinite(id));
+    const completedIds = (completedPublic ?? [])
+      .map((r) => Number((r as { id?: unknown }).id))
+      .filter((id) => Number.isFinite(id));
+    const roomIds = [...new Set([...activeIds, ...completedIds])];
     const totalByRoom = new Map<number, number>();
     const lockedByRoom = new Map<number, number>();
     const scoreByRoom = new Map<number, number>();
@@ -1042,6 +1046,41 @@ async function startServer() {
         const score = Number((row as { score?: unknown }).score ?? 0);
         if (!Number.isFinite(roomId) || roomId <= 0 || !Number.isFinite(score) || score <= 0) continue;
         scoreByRoom.set(roomId, (scoreByRoom.get(roomId) ?? 0) + Math.floor(score));
+      }
+    }
+
+    /** `pieces` row count is authoritative once rows exist; keep `rooms.piece_count` in sync for lobby and deep links. */
+    const roomByIdForPieceSync = new Map<number, any>();
+    for (const r of active) {
+      const id = Number((r as { id?: unknown }).id);
+      if (Number.isFinite(id)) roomByIdForPieceSync.set(id, r);
+    }
+    for (const r of completedPublic ?? []) {
+      const id = Number((r as { id?: unknown }).id);
+      if (Number.isFinite(id) && !roomByIdForPieceSync.has(id)) roomByIdForPieceSync.set(id, r);
+    }
+    const syncPieceUpdates: Promise<{ error: { message: string } | null }>[] = [];
+    for (const [rid, rowTotal] of totalByRoom) {
+      if (rowTotal <= 0) continue;
+      const rec = roomByIdForPieceSync.get(rid);
+      if (!rec) continue;
+      const dbCount = Number(rec.piece_count ?? 0);
+      if (!Number.isFinite(dbCount) || dbCount === rowTotal) continue;
+      syncPieceUpdates.push(
+        pieceStateSupabase
+          .from("rooms")
+          .update({ piece_count: rowTotal })
+          .eq("id", rid)
+          .then((up) => {
+            if (!up.error) rec.piece_count = rowTotal;
+            return { error: up.error };
+          })
+      );
+    }
+    if (syncPieceUpdates.length > 0) {
+      const syncResults = await Promise.all(syncPieceUpdates);
+      for (const sr of syncResults) {
+        if (sr.error) console.warn("[rooms-summary/sync-piece-count]", sr.error.message);
       }
     }
 
@@ -1096,6 +1135,19 @@ async function startServer() {
     const completedRooms = [...completedMerged.values()].sort(
       (a, b) => completionTimeMs(b) - completionTimeMs(a)
     );
+    for (const room of completedRooms) {
+      const id = Number(room.id);
+      const rowTotal = totalByRoom.get(id) ?? 0;
+      const pc = Number(room.piece_count ?? 0);
+      const denom = rowTotal > 0 ? rowTotal : pc;
+      if (denom > 0) {
+        room.totalPieces = denom;
+        const locked = lockedByRoom.get(id) ?? 0;
+        const scored = scoreByRoom.get(id) ?? 0;
+        room.snappedCount = Math.min(denom, Math.max(locked, scored));
+        room.currentPlayers = roomStates.get(id)?.users.size ?? 0;
+      }
+    }
     const payload = {
       activeRooms: finalActive,
       completedRooms,

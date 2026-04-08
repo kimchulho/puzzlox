@@ -438,6 +438,7 @@ export default function GameShell({
       <>
         <div className="h-screen w-screen overflow-hidden bg-slate-900 relative">
           <PuzzleBoard
+            key={currentRoom.id}
             roomId={currentRoom.id}
             imageUrl={currentRoom.imageUrl}
             pieceCount={currentRoom.pieceCount}

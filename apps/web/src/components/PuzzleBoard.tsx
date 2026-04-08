@@ -712,9 +712,11 @@ export default function PuzzleBoard({
         : undefined);
 
   useEffect(() => {
-    // Fetch room creation time and initial scores
+    hasResolvedActualPieceCountRef.current = false;
+    let cancelled = false;
     const fetchRoomData = async () => {
       const { data: roomData } = await supabase.from('rooms').select('total_play_time_seconds, max_players, piece_count').eq('id', roomId).single();
+      if (cancelled) return;
       if (roomData) {
         setPlayTime(roomData.total_play_time_seconds || 0);
         accumulatedTimeRef.current = roomData.total_play_time_seconds || 0;
@@ -726,11 +728,15 @@ export default function PuzzleBoard({
       }
 
       const { data: scoreData } = await supabase.from('scores').select('*').eq('room_id', roomId).order('score', { ascending: false });
+      if (cancelled) return;
       if (scoreData) {
         setScores(scoreData);
       }
     };
-    fetchRoomData();
+    void fetchRoomData();
+    return () => {
+      cancelled = true;
+    };
   }, [roomId, user?.id]);
 
   useEffect(() => {
@@ -942,6 +948,7 @@ export default function PuzzleBoard({
         setIsLoading(true);
         setLoadProgress(0);
         boardLockedPieceIdsRef.current.clear();
+        hasResolvedActualPieceCountRef.current = false;
 
         let progRaf: number | null = null;
         let progPending = 0;
@@ -955,6 +962,20 @@ export default function PuzzleBoard({
         };
         bumpProgress(2);
 
+        const waitForPixiHost = async (maxAttempts = 48) => {
+          for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            const el = pixiContainer.current;
+            if (el) {
+              const r = el.getBoundingClientRect();
+              if (r.width >= 1 && r.height >= 1) return el;
+            }
+            await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+          }
+          return pixiContainer.current;
+        };
+        const pixiHost = await waitForPixiHost();
+        if (!isMounted) return;
+
         // Update last active time when entering a room
         if (user && user.id) {
           supabase.from('users').update({ last_active_at: new Date().toISOString() }).eq('id', user.id).then();
@@ -962,9 +983,10 @@ export default function PuzzleBoard({
         }
         
         const app = new PIXI.Application();
+        const resizeTarget = pixiHost ?? window;
         try {
           await app.init({ 
-            resizeTo: pixiContainer.current ?? window, 
+            resizeTo: resizeTarget, 
             backgroundAlpha: 0,
             antialias: true,
             resolution: window.devicePixelRatio || 1,
@@ -974,7 +996,7 @@ export default function PuzzleBoard({
         } catch (e) {
           console.warn("WebGL failed, trying Canvas renderer", e);
           await app.init({
-            resizeTo: pixiContainer.current ?? window,
+            resizeTo: resizeTarget,
             backgroundAlpha: 0,
             antialias: true,
             /** Canvas 폴백: 기본 DPR 대비 절반(저해상도) */
@@ -5813,6 +5835,16 @@ export default function PuzzleBoard({
 
         bumpProgress(100);
         setIsLoading(false);
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            if (!isMounted) return;
+            try {
+              app.render();
+            } catch {
+              /* noop */
+            }
+          });
+        });
 
         if (deferBevelUpgrade && ENABLE_BEVEL) {
           requestAnimationFrame(() => {
@@ -6629,7 +6661,7 @@ export default function PuzzleBoard({
         setTimeout(runHeavyTeardown, 0);
       }
     };
-  }, [imageUrl, isTossMode, isTossWideMode, puzzleDifficulty]);
+  }, [roomId, pieceCount, imageUrl, isTossMode, isTossWideMode, puzzleDifficulty]);
 
   const handleMiniPadPointerDown = (e: React.PointerEvent) => {
     e.preventDefault();
@@ -7709,12 +7741,12 @@ export default function PuzzleBoard({
                 marginLeft: tossWidePuzzleInsetPx,
                 width: `calc(100% - ${tossWidePuzzleInsetPx}px)`,
                 opacity: isLoading ? 0 : 1,
-                visibility: isLoading ? 'hidden' : 'visible',
+                pointerEvents: isLoading ? "none" : "auto",
               }
             : {
                 width: "100%",
                 opacity: isLoading ? 0 : 1,
-                visibility: isLoading ? 'hidden' : 'visible',
+                pointerEvents: isLoading ? "none" : "auto",
               }
         }
       />
