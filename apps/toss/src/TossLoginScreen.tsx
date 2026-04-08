@@ -140,7 +140,7 @@ export default function TossLoginScreen({
           color="adaptive.grey600"
           style={{ marginTop: onCancel ? 0 : 8, marginBottom: 24 }}
         >
-          로컬: npm run dev:server 후 npm run dev:toss. AIT 빌드 전 루트 .env에 VITE_API_BASE_URL(Render URL)을 넣으세요.
+          로컬: npm run dev:server 후 npm run dev:toss. AIT 빌드 전 루트 .env에 VITE_API_BASE_URL(예: https://puzzlox.com)을 넣으세요.
         </Text>
       ) : (
         <div style={{ marginBottom: 24 }} />

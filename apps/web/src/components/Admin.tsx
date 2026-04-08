@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { ArrowLeft, ShieldAlert, Users, Image as ImageIcon } from 'lucide-react';
+import { ArrowLeft, ShieldAlert, Users, Image as ImageIcon, Layers } from 'lucide-react';
 import { motion } from 'motion/react';
 import UserManagement from './UserManagement';
 import ImageManagement from './ImageManagement';
+import AdminIrregularTemplates from './AdminIrregularTemplates';
 
 export default function Admin({ onBack }: { onBack: () => void }) {
-  const [activeTab, setActiveTab] = useState<'users' | 'images'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'images' | 'irregular'>('users');
 
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col items-center py-12 px-4 overflow-y-auto">
@@ -49,9 +50,24 @@ export default function Admin({ onBack }: { onBack: () => void }) {
             <ImageIcon className="w-5 h-5" />
             이미지 관리
           </button>
+          <button
+            onClick={() => setActiveTab('irregular')}
+            className={`flex items-center gap-2 px-6 py-3 rounded-2xl font-medium transition-colors ${
+              activeTab === 'irregular' ? 'bg-indigo-500 text-white' : 'bg-slate-900 text-slate-400 hover:bg-slate-800'
+            }`}
+          >
+            <Layers className="w-5 h-5" />
+            비정형 칼선
+          </button>
         </div>
 
-        {activeTab === 'users' ? <UserManagement /> : <ImageManagement />}
+        {activeTab === 'users' ? (
+          <UserManagement />
+        ) : activeTab === 'images' ? (
+          <ImageManagement />
+        ) : (
+          <AdminIrregularTemplates />
+        )}
       </motion.div>
     </div>
   );

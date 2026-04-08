@@ -28,6 +28,7 @@ import {
 import { HealthResponse } from "./packages/contracts/api";
 import { AuthSuccessResponse, TossLoginRequest } from "./packages/contracts/auth";
 import { tossPartnerRequest } from "./tossPartnerClient";
+import { parseIrregularPuzzleSvg } from "./lib/irregularSvgParse";
 
 dotenv.config();
 
@@ -131,7 +132,7 @@ async function startServer() {
   
   const PORT = process.env.PORT || 3000;
 
-  // Allow cross-origin API calls (e.g. local Granite WebView -> Render API).
+  // Allow cross-origin API calls (e.g. local Granite WebView -> production API).
   app.use((req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -142,7 +143,7 @@ async function startServer() {
     return next();
   });
 
-  app.use(express.json());
+  app.use(express.json({ limit: "8mb" }));
 
   if (!authSupabase) {
     console.warn(
@@ -156,6 +157,20 @@ async function startServer() {
       message: "Server is running with Socket.io",
     };
     res.json(payload);
+  });
+
+  app.get("/api/irregular-templates", async (_req, res) => {
+    const { data, error } = await supabase
+      .from("irregular_puzzle_templates")
+      .select("id, name, cut_kind, piece_count, assembly_count, svg_url, created_at")
+      .order("created_at", { ascending: false });
+    if (error) {
+      if (/relation|does not exist/i.test(error.message)) {
+        return res.json({ templates: [] });
+      }
+      return res.status(500).json({ message: error.message });
+    }
+    return res.json({ templates: data ?? [] });
   });
 
   const issueToken = (payload: JwtPayload) =>
@@ -181,6 +196,82 @@ async function startServer() {
       return res.status(401).json({ message: "Invalid or expired access token." });
     }
   };
+
+  app.post(
+    "/api/admin/irregular-templates",
+    authRequired,
+    async (req: AuthedRequest, res: Response) => {
+      if (!authSupabase) {
+        return res.status(503).json({ message: "Server misconfigured (service role)." });
+      }
+      const userId = Number(req.user?.sub);
+      if (!Number.isFinite(userId) || userId <= 0) {
+        return res.status(401).json({ message: "Invalid session." });
+      }
+      const { data: adminRow, error: adminErr } = await authSupabase
+        .from("users")
+        .select("role")
+        .eq("id", userId)
+        .maybeSingle();
+      if (adminErr) {
+        return res.status(500).json({ message: adminErr.message });
+      }
+      if (adminRow?.role !== "admin") {
+        return res.status(403).json({ message: "Admin only." });
+      }
+
+      const name = String((req.body ?? {}).name ?? "").trim();
+      const cutKindRaw = String((req.body ?? {}).cutKind ?? "generic").trim().toLowerCase();
+      const cut_kind = cutKindRaw === "image_specific" ? "image_specific" : "generic";
+      const svg = String((req.body ?? {}).svg ?? "");
+      if (!name || !svg.trim()) {
+        return res.status(400).json({ message: "name and svg are required." });
+      }
+
+      const ach = (req.body ?? {}).assemblyCountHint;
+      const assemblyCountHint =
+        ach === 1 || ach === "1" ? 1 : ach === 2 || ach === "2" ? 2 : undefined;
+
+      let definition;
+      try {
+        definition = parseIrregularPuzzleSvg(svg, { assemblyCountHint });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return res.status(400).json({ message: `SVG parse failed: ${msg}` });
+      }
+
+      const fileName = `irregular/${Date.now()}_${Math.random().toString(36).slice(2, 10)}.svg`;
+      const buf = Buffer.from(svg, "utf-8");
+      const { error: upErr } = await authSupabase.storage.from("puzzle_images").upload(fileName, buf, {
+        contentType: "image/svg+xml",
+        upsert: false,
+      });
+      if (upErr) {
+        return res.status(500).json({ message: `Storage upload failed: ${upErr.message}` });
+      }
+      const { data: pub } = authSupabase.storage.from("puzzle_images").getPublicUrl(fileName);
+      const svg_url = pub.publicUrl;
+
+      const { data: inserted, error: insErr } = await authSupabase
+        .from("irregular_puzzle_templates")
+        .insert({
+          name,
+          cut_kind,
+          svg_url,
+          definition,
+          piece_count: definition.pieceCount,
+          assembly_count: definition.assemblyCount,
+          created_by: userId,
+        })
+        .select("id, name, cut_kind, piece_count, assembly_count, svg_url")
+        .maybeSingle();
+
+      if (insErr) {
+        return res.status(500).json({ message: insErr.message });
+      }
+      return res.status(201).json({ template: inserted });
+    }
+  );
 
   app.post("/api/auth/web/signup", async (req, res) => {
     if (!authSupabase) {

@@ -13,6 +13,7 @@ import UserDashboard from './components/UserDashboard';
 import { supabase } from './lib/supabaseClient';
 import { decodeRoomId, roomCodeFromLocation, roomPath } from './lib/roomCode';
 import { normalizePuzzleDifficulty, type PuzzleDifficulty } from './lib/puzzleDifficulty';
+import type { JoinRoomMeta, PuzzleKind } from '@contracts/roomJoin';
 
 function readStoredPuzzleUser(): unknown | null {
   try {
@@ -32,7 +33,14 @@ export default function App() {
     return 'ko';
   });
   const [pathname, setPathname] = useState(() => window.location.pathname);
-  const [currentRoom, setCurrentRoom] = useState<{id: number, imageUrl: string, pieceCount: number, difficulty: PuzzleDifficulty} | null>(null);
+  const [currentRoom, setCurrentRoom] = useState<{
+    id: number;
+    imageUrl: string;
+    pieceCount: number;
+    difficulty: PuzzleDifficulty;
+    puzzleKind: PuzzleKind;
+    irregularTemplateId: number | null;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<any>(() => readStoredPuzzleUser());
   const [showAdmin, setShowAdmin] = useState(false);
@@ -77,11 +85,21 @@ export default function App() {
         .then(({ data, error }) => {
           if (cancelled) return;
           if (data && !error) {
+            const row = data as {
+              puzzle_kind?: string;
+              irregular_template_id?: number | null;
+            };
+            const pk: PuzzleKind = row.puzzle_kind === "irregular" ? "irregular" : "regular";
             setCurrentRoom({
               id: data.id,
               imageUrl: data.image_url,
               pieceCount: data.piece_count,
               difficulty: normalizePuzzleDifficulty((data as any).difficulty),
+              puzzleKind: pk,
+              irregularTemplateId:
+                pk === "irregular" && row.irregular_template_id != null
+                  ? Number(row.irregular_template_id)
+                  : null,
             });
           } else {
             window.history.replaceState({}, '', '/');
@@ -100,11 +118,26 @@ export default function App() {
     };
   }, []);
 
-  const handleJoinRoom = (roomId: number, imageUrl: string, pieceCount: number, difficulty: PuzzleDifficulty) => {
+  const handleJoinRoom = (
+    roomId: number,
+    imageUrl: string,
+    pieceCount: number,
+    difficulty: PuzzleDifficulty,
+    meta?: JoinRoomMeta
+  ) => {
     const path = roomPath(roomId);
     window.history.pushState({}, '', path);
     setPathname(path);
-    setCurrentRoom({ id: roomId, imageUrl, pieceCount, difficulty });
+    const pk: PuzzleKind = meta?.puzzleKind === "irregular" ? "irregular" : "regular";
+    setCurrentRoom({
+      id: roomId,
+      imageUrl,
+      pieceCount,
+      difficulty,
+      puzzleKind: pk,
+      irregularTemplateId:
+        pk === "irregular" && meta?.irregularTemplateId != null ? Number(meta.irregularTemplateId) : null,
+    });
   };
 
   const handleLeaveRoom = () => {
@@ -194,6 +227,8 @@ export default function App() {
           imageUrl={currentRoom.imageUrl} 
           pieceCount={currentRoom.pieceCount} 
           difficulty={currentRoom.difficulty}
+          puzzleKind={currentRoom.puzzleKind}
+          irregularTemplateId={currentRoom.irregularTemplateId}
           onBack={handleLeaveRoom}
           user={user}
           setUser={setUser}

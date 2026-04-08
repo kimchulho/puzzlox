@@ -29,6 +29,7 @@ import { encodeRoomId, roomPath } from '../lib/roomCode';
 import { recordUserRoomVisit } from '../lib/recordUserRoomVisit';
 import { canClusterLockOnBoard, canPieceLockOnBoard, normalizePuzzleDifficulty, type PuzzleDifficulty } from '../lib/puzzleDifficulty';
 import { createPuzzleHintLayer, type PuzzleHintLayer } from '../lib/puzzleHintLayer';
+import type { PuzzleKind } from "@contracts/roomJoin";
 
 const SNAP_THRESHOLD = 30;
 /** 와이드 툴바–퍼즐 사이 빈 줄(측정·라운딩·DP) 보정: 퍼즐 inset 을 살짝 줄임 */
@@ -180,11 +181,15 @@ export default function PuzzleBoard({
    */
   hostLeaderboardToggleRef,
   locale = 'ko',
+  puzzleKind = 'regular',
+  irregularTemplateId = null,
 }: {
   roomId: number;
   imageUrl: string;
   pieceCount: number;
   difficulty?: PuzzleDifficulty;
+  puzzleKind?: PuzzleKind;
+  irregularTemplateId?: number | null;
   onBack: () => void;
   user: any;
   setUser: (user: any) => void;
@@ -916,6 +921,11 @@ export default function PuzzleBoard({
     const offlineAfterByeRef = { current: new Set<string>() };
     /** presence에 처음 보인 유저만 1회 시드(이후 생존은 하트비트·브로드캐스트로만 갱신) */
     const peerPresenceSeededRef = { current: new Set<string>() };
+
+    if (puzzleKind !== "regular") {
+      setIsLoading(false);
+      return () => {};
+    }
 
     let isMounted = true;
     /** initPixi 안에서 할당: 방 나가기 시 스티키/드래그 중 lock 브로드캐스트 해제 */
@@ -6661,7 +6671,7 @@ export default function PuzzleBoard({
         setTimeout(runHeavyTeardown, 0);
       }
     };
-  }, [roomId, pieceCount, imageUrl, isTossMode, isTossWideMode, puzzleDifficulty]);
+  }, [roomId, pieceCount, imageUrl, isTossMode, isTossWideMode, puzzleDifficulty, puzzleKind]);
 
   const handleMiniPadPointerDown = (e: React.PointerEvent) => {
     e.preventDefault();
@@ -6792,6 +6802,33 @@ export default function PuzzleBoard({
   const connectionStatusDetail = isGameSocketConnected
     ? (isKo ? "실시간 동기화가 정상 동작 중입니다." : "Realtime sync is healthy.")
     : (isKo ? "재연결 전까지 진행 저장이 중단됩니다." : "Progress saving is paused until reconnect.");
+
+  if (puzzleKind === "irregular") {
+    return (
+      <div
+        className="w-full h-full relative flex flex-col items-center justify-center gap-4 p-6 text-center"
+        style={boardFrameStyle}
+      >
+        <p className="text-slate-200 max-w-md text-sm leading-relaxed">
+          {isKo
+            ? "비정형(SVG) 퍼즐의 플레이 보드는 다음 단계에서 연결됩니다. 방·조각 수·칼선 정의는 이미 저장되었으며, 멀티플레이용 pieces 테이블도 동일하게 사용할 수 있습니다."
+            : "Irregular (SVG) play mode is not wired to the Pixi board yet. Room metadata and the parsed template are saved; the same pieces table will support multiplayer."}
+        </p>
+        {irregularTemplateId != null && (
+          <p className="text-xs text-slate-500">
+            template #{irregularTemplateId} · {pieceCount} {isKo ? "조각" : "pieces"}
+          </p>
+        )}
+        <button
+          type="button"
+          onClick={onBack}
+          className="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-4 py-2 text-sm font-medium text-white"
+        >
+          {isKo ? "로비로" : "Back to lobby"}
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="w-full h-full relative" style={boardFrameStyle}>

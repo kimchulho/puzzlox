@@ -30,7 +30,7 @@ jobs:
           VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
         run: |
           if [ -z "$VITE_API_BASE_URL" ]; then
-            echo "VITE_API_BASE_URL=https://puzzlox.onrender.com" >> "$GITHUB_ENV"
+            echo "VITE_API_BASE_URL=https://puzzlox.com" >> "$GITHUB_ENV"
           else
             echo "VITE_API_BASE_URL=$VITE_API_BASE_URL" >> "$GITHUB_ENV"
           fi

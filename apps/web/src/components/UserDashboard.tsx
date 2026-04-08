@@ -19,6 +19,7 @@ import {
   puzzleDifficultyLabel,
   type PuzzleDifficulty,
 } from "../lib/puzzleDifficulty";
+import type { JoinRoomMeta, PuzzleKind } from "@contracts/roomJoin";
 
 type DashboardUser = {
   id?: number;
@@ -71,7 +72,13 @@ export default function UserDashboard({
   mode: "self" | "public";
   publicUsername?: string;
   onBack: () => void;
-  onJoinRoom: (roomId: number, imageUrl: string, pieceCount: number, difficulty: PuzzleDifficulty) => void;
+  onJoinRoom: (
+    roomId: number,
+    imageUrl: string,
+    pieceCount: number,
+    difficulty: PuzzleDifficulty,
+    meta?: JoinRoomMeta
+  ) => void;
   locale: "ko" | "en";
   user?: DashboardUser | null;
   setUser?: (u: DashboardUser) => void;
@@ -191,12 +198,13 @@ export default function UserDashboard({
       setError(isKo ? "방 정보를 불러올 수 없습니다." : "Could not load room.");
       return;
     }
-    onJoinRoom(
-      data.id,
-      data.image_url,
-      data.piece_count,
-      normalizePuzzleDifficulty((data as { difficulty?: string }).difficulty)
-    );
+    const row = data as { puzzle_kind?: string; irregular_template_id?: number | null };
+    const pk: PuzzleKind = row.puzzle_kind === "irregular" ? "irregular" : "regular";
+    onJoinRoom(data.id, data.image_url, data.piece_count, normalizePuzzleDifficulty(row.difficulty), {
+      puzzleKind: pk,
+      irregularTemplateId:
+        pk === "irregular" && row.irregular_template_id != null ? Number(row.irregular_template_id) : null,
+    });
   };
 
   const copyProfileLink = () => {

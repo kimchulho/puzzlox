@@ -1,5 +1,6 @@
 ﻿import React, { useState, useEffect, useRef } from 'react';
-import { Trophy, RefreshCw, Users, Lock, Image as ImageIcon, Play, Plus, Grid, Clock, RotateCcw, Maximize, Minimize, LogOut, ShieldAlert, LogIn, ChevronDown, Languages, Filter, Camera } from 'lucide-react';
+import { Trophy, RefreshCw, Users, Lock, Image as ImageIcon, Play, Plus, Grid, Clock, RotateCcw, Maximize, Minimize, LogOut, ShieldAlert, LogIn, ChevronDown, Languages, Filter, Camera, Layers } from 'lucide-react';
+import type { JoinRoomMeta } from "@contracts/roomJoin";
 import { supabase } from '../lib/supabaseClient';
 import { motion } from 'motion/react';
 import { encodeRoomId, parseRoomNumberOrCode } from '../lib/roomCode';
@@ -264,7 +265,13 @@ const Lobby = ({
   locale = 'ko',
   onToggleLocale,
 }: {
-  onJoinRoom: (roomId: number, imageUrl: string, pieceCount: number, difficulty: PuzzleDifficulty) => void;
+  onJoinRoom: (
+    roomId: number,
+    imageUrl: string,
+    pieceCount: number,
+    difficulty: PuzzleDifficulty,
+    meta?: JoinRoomMeta
+  ) => void;
   user?: any;
   onLogout: () => void;
   onAdmin: () => void;
@@ -286,6 +293,11 @@ const Lobby = ({
   const [isRoomsRefreshing, setIsRoomsRefreshing] = useState(false);
   const roomsRefreshDepthRef = useRef(0);
   const [pieceCount, setPieceCount] = useState(100);
+  const [puzzleShapeKind, setPuzzleShapeKind] = useState<"regular" | "irregular">("regular");
+  const [irregularTemplates, setIrregularTemplates] = useState<
+    { id: number; name: string; piece_count: number; assembly_count: number }[]
+  >([]);
+  const [selectedIrregularTemplateId, setSelectedIrregularTemplateId] = useState<number | null>(null);
   const [difficulty, setDifficulty] = useState<PuzzleDifficulty>(DEFAULT_PUZZLE_DIFFICULTY);
   const [imageUrl, setImageUrl] = useState('https://ewbjogsolylcbfmpmyfa.supabase.co/storage/v1/object/public/checki/2.jpg');
   const [imageSource, setImageSource] = useState<'public' | 'custom'>('public');
@@ -311,6 +323,17 @@ const Lobby = ({
       if (data) setPublicImages(data);
     };
     fetchPublicImages();
+  }, []);
+
+  useEffect(() => {
+    void (async () => {
+      const res = await fetch(apiUrl("/api/irregular-templates"));
+      const j = (await res.json().catch(() => ({}))) as {
+        templates?: { id: number; name: string; piece_count: number; assembly_count: number }[];
+      };
+      const list = j.templates ?? [];
+      setIrregularTemplates(list);
+    })();
   }, []);
 
 
@@ -528,7 +551,20 @@ const Lobby = ({
     console.log('Creating room with image URL:', currentImageUrl);
     const creatorName = user ? user.username : guestName.trim();
     if (!creatorName) return;
-    
+
+    const isIrregular = puzzleShapeKind === "irregular";
+    const selectedTpl = irregularTemplates.find((t) => t.id === selectedIrregularTemplateId);
+    if (isIrregular) {
+      if (irregularTemplates.length === 0) {
+        alert(isKo ? "등록된 비정형 칼선이 없습니다. 관리자에서 SVG를 먼저 올려 주세요." : "No irregular templates yet. Ask an admin to upload an SVG.");
+        return;
+      }
+      if (!selectedTpl) {
+        alert(isKo ? "비정형 칼선 템플릿을 선택하세요." : "Select an irregular cut template.");
+        return;
+      }
+    }
+
     setIsCreating(true);
 
     // If custom image, save it to puzzle_images
@@ -540,7 +576,9 @@ const Lobby = ({
         await supabase.from('puzzle_images').insert([insertData]);
     }
 
-    const resolvedPieceCount = await resolvePieceCountFromImage(currentImageUrl, pieceCount);
+    const resolvedPieceCount = isIrregular
+      ? selectedTpl!.piece_count
+      : await resolvePieceCountFromImage(currentImageUrl, pieceCount);
     const insertRow: Record<string, unknown> = {
       creator_name: creatorName,
       image_url: currentImageUrl,
@@ -550,7 +588,9 @@ const Lobby = ({
       status: 'active',
       has_password: !!password.trim(),
       is_private: isPrivate,
+      puzzle_kind: isIrregular ? "irregular" : "regular",
     };
+    if (isIrregular && selectedTpl) insertRow.irregular_template_id = selectedTpl.id;
     if (user?.id) insertRow.created_by = user.id;
 
     const { data, error } = await supabase.from('rooms').insert([insertRow]).select();
@@ -563,7 +603,15 @@ const Lobby = ({
       const newRecent = [roomId, ...recentRooms.filter((id: number) => id !== roomId)].slice(0, 10);
       localStorage.setItem('puzzle_recent_rooms', JSON.stringify(newRecent));
       const doEnter = () =>
-        onJoinRoom(roomId, data[0].image_url, resolvedPieceCount, normalizePuzzleDifficulty((data[0] as any).difficulty ?? difficulty));
+        onJoinRoom(
+          roomId,
+          data[0].image_url,
+          resolvedPieceCount,
+          normalizePuzzleDifficulty((data[0] as any).difficulty ?? difficulty),
+          isIrregular
+            ? { puzzleKind: "irregular", irregularTemplateId: selectedTpl?.id ?? null }
+            : { puzzleKind: "regular", irregularTemplateId: null }
+        );
       if (tossUi) {
         const ok = await runTossRewardedRoomEntry(roomId, doEnter);
         if (!ok) {
@@ -759,11 +807,17 @@ const Lobby = ({
     if (user?.id) void recordUserRoomVisit(room.id);
 
     const enter = () => {
+      const pk = room.puzzle_kind === "irregular" ? "irregular" : "regular";
       onJoinRoom(
         room.id,
         room.image_url,
         room.totalPieces || room.piece_count,
-        normalizePuzzleDifficulty(room.difficulty)
+        normalizePuzzleDifficulty(room.difficulty),
+        {
+          puzzleKind: pk,
+          irregularTemplateId:
+            pk === "irregular" ? (Number(room.irregular_template_id) || null) : null,
+        }
       );
       setRoomCodeInput("");
       setRoomCodeError(null);
@@ -1215,12 +1269,84 @@ const Lobby = ({
                   tossSkin ? tossSkin.label : "text-slate-300"
                 }`}
               >
+                <Layers className="w-4 h-4" /> {isKo ? "퍼즐 유형" : "Puzzle type"}
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPuzzleShapeKind("regular")}
+                  className={`py-2 rounded-lg text-sm font-medium transition-colors ${
+                    puzzleShapeKind === "regular"
+                      ? tossSkin
+                        ? tossSkin.segmentOn
+                        : "bg-indigo-500 text-white"
+                      : tossSkin
+                        ? tossSkin.segmentOff
+                        : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+                  }`}
+                >
+                  {isKo ? "정형 격자" : "Regular grid"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPuzzleShapeKind("irregular");
+                    if (irregularTemplates.length > 0 && selectedIrregularTemplateId == null) {
+                      setSelectedIrregularTemplateId(irregularTemplates[0]!.id);
+                    }
+                  }}
+                  className={`py-2 rounded-lg text-sm font-medium transition-colors ${
+                    puzzleShapeKind === "irregular"
+                      ? tossSkin
+                        ? tossSkin.segmentOn
+                        : "bg-indigo-500 text-white"
+                      : tossSkin
+                        ? tossSkin.segmentOff
+                        : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+                  }`}
+                >
+                  {isKo ? "비정형 (SVG)" : "Irregular (SVG)"}
+                </button>
+              </div>
+              {puzzleShapeKind === "irregular" && (
+                <div className="mt-2 space-y-1">
+                  <select
+                    value={selectedIrregularTemplateId ?? ""}
+                    onChange={(e) => setSelectedIrregularTemplateId(Number(e.target.value) || null)}
+                    className={`w-full rounded-xl px-3 py-2 text-sm ${
+                      tossSkin ? tossSkin.input : "bg-slate-950 border border-slate-800 text-white"
+                    }`}
+                  >
+                    <option value="">{isKo ? "— 칼선 템플릿 선택 —" : "— Select cut template —"}</option>
+                    {irregularTemplates.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name} · {t.piece_count} {isKo ? "조각" : "pcs"} · {t.assembly_count}{" "}
+                        {isKo ? "묶음" : "assemblies"}
+                      </option>
+                    ))}
+                  </select>
+                  <p className={`text-xs ${tossSkin ? tossSkin.empty : "text-slate-500"}`}>
+                    {isKo
+                      ? "복수 퍼즐이 한 이미지에 있으면, 모두 맞춰야 완성으로 처리할 수 있습니다."
+                      : "If the image contains multiple puzzles, all must be completed to finish."}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div>
+              <label
+                className={`block text-sm font-medium mb-2 flex items-center gap-2 ${
+                  tossSkin ? tossSkin.label : "text-slate-300"
+                }`}
+              >
                 <Grid className="w-4 h-4" /> {isKo ? "조각 수" : "Target Piece Count"}
               </label>
-              <div className="grid grid-cols-6 gap-2">
+              <div className={`grid grid-cols-6 gap-2 ${puzzleShapeKind === "irregular" ? "opacity-40 pointer-events-none" : ""}`}>
                 {[20, 100, 150, 300, 500, 1000].map((count) => (
                   <button
                     key={count}
+                    type="button"
                     onClick={() => setPieceCount(count)}
                     className={`py-2 rounded-lg text-sm font-medium transition-colors ${
                       pieceCount === count
@@ -1237,9 +1363,13 @@ const Lobby = ({
                 ))}
               </div>
               <p className={`text-xs mt-2 ${tossSkin ? tossSkin.empty : "text-slate-500"}`}>
-                {isKo
-                  ? "이미지 비율에 맞춰 정사각형 조각을 유지하기 위해 실제 조각 수는 약간 달라질 수 있습니다."
-                  : "Actual count may vary slightly to maintain square pieces based on image aspect ratio."}
+                {puzzleShapeKind === "irregular"
+                  ? isKo
+                    ? "비정형 방은 선택한 SVG 칼선의 조각 수가 그대로 적용됩니다."
+                    : "Irregular rooms use the piece count from the selected SVG template."
+                  : isKo
+                    ? "이미지 비율에 맞춰 정사각형 조각을 유지하기 위해 실제 조각 수는 약간 달라질 수 있습니다."
+                    : "Actual count may vary slightly to maintain square pieces based on image aspect ratio."}
               </p>
             </div>
 

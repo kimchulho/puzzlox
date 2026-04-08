@@ -20,7 +20,7 @@ const graniteWebPort = Number(process.env.TOSS_GRANITE_WEB_PORT ?? "5174");
  * - 원격(집 등): Cloudflare 터널 URL을 `TOSS_GRANITE_WEB_HOST` / `TOSS_GRANITE_WEB_PORT`(443) 로 지정.
  *
  * web.host / web.port 는 API(백엔드) 주소가 아닙니다.
- * Vite 개발 서버(미니앱 HTML/JS를 여는 주소)용이에요. Render 등 백엔드 URL은
+ * Vite 개발 서버(미니앱 HTML/JS를 여는 주소)용이에요. 프로덕션 백엔드 URL(예: https://puzzlox.com)은
  * 빌드 전 환경변수 VITE_API_BASE_URL · VITE_BACKEND_URL 로 넣습니다.
  *
  * @see https://developers-apps-in-toss.toss.im/tutorials/webview.html

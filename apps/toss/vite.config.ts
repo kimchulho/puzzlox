@@ -16,7 +16,7 @@ export default defineConfig(({ mode }) => {
     if (!apiBase) {
       throw new Error(
         "[apps/toss] Production build needs VITE_API_BASE_URL (or VITE_BACKEND_URL) in the repo-root .env — " +
-          "e.g. VITE_API_BASE_URL=https://puzzlox.onrender.com — then run npm run ait:build again. " +
+          "e.g. VITE_API_BASE_URL=https://puzzlox.com — then run npm run ait:build again. " +
           "If this is unset, login uses relative /api URLs and the Toss WebView receives HTML instead of JSON."
       );
     }
