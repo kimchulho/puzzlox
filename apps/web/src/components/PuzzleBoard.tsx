@@ -3128,9 +3128,19 @@ export default function PuzzleBoard({
         };
         const getPieceQuarter = (piece: PIXI.Container) =>
           normalizeRotationQuarter((piece as any).__rotationQuarter ?? 0);
-        /** 악몽: 앞면끼리만 이웃 결합(뒷면은 보드 고정만 가능·조각끼리 스냅 불가) */
+        /**
+         * 악몽: 화면에 뒷면이 보이면 결합 불가. `__isBackFace`와 실제 backFaceOverlay 표시를 둘 다 본다
+         * (원격 동기·직렬화 직후 한 프레임 어긋남 등으로 플래그만 믿으면 뒷면+뒷면이 붙을 수 있음).
+         */
+        const nightmarePieceShowsBackFace = (p: PIXI.Container): boolean => {
+          if ((p as any).__isBackFace === true) return true;
+          const visual = p.getChildByLabel("pieceVisual") as PIXI.Container | null;
+          const backOv = visual?.getChildByLabel("backFaceOverlay") as PIXI.DisplayObject | undefined;
+          return Boolean(backOv && "visible" in backOv && backOv.visible === true);
+        };
+        /** 악몽: 두 조각 모두 앞면일 때만 이웃 결합(뒷면 포함 조합 전부 불가) */
         const canNeighborAttachInNightmare = (p1: PIXI.Container, p2: PIXI.Container) => {
-          if ((p1 as any).__isBackFace === true || (p2 as any).__isBackFace === true) return false;
+          if (nightmarePieceShowsBackFace(p1) || nightmarePieceShowsBackFace(p2)) return false;
           return getPieceQuarter(p1) === getPieceQuarter(p2);
         };
 
@@ -3393,8 +3403,8 @@ export default function PuzzleBoard({
                   scoreAdd += 1;
                 }
               }
-            } else if (!isNightmare) {
-              // 악몽: 정위치+정방향으로 실제 잠금될 때만 위에서 점수. 잠금 없는 스냅에 +1 하면 뒤집힌 조각도 점수가 오름
+            } else {
+              // 조각-조각 스냅(이번에 신규 보드 잠금 없음). 악몽도 이웃 결합은 앞면끼리만 허용되므로 동일하게 +1
               scoreAdd = 1;
             }
             if (scoreAdd > 0) {
