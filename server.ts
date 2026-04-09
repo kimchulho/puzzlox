@@ -27,7 +27,7 @@ import {
 } from "./packages/contracts/realtime";
 import { HealthResponse } from "./packages/contracts/api";
 import { AuthSuccessResponse, TossLoginRequest } from "./packages/contracts/auth";
-import { tossPartnerRequest } from "./tossPartnerClient";
+import { tossPartnerRequest, TossPartnerRequestError } from "./tossPartnerClient";
 
 dotenv.config();
 
@@ -432,6 +432,12 @@ async function startServer() {
       providerUserId = String(userKey);
     } catch (error) {
       console.error("[toss-login] partner API request failed", error);
+      if (error instanceof TossPartnerRequestError) {
+        return res.status(502).json({
+          message: error.message,
+          code: error.code,
+        });
+      }
       return res.status(502).json({
         message: "Toss partner API request failed.",
         detail: error instanceof Error ? error.message : String(error),
