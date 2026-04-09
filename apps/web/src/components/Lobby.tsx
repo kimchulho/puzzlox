@@ -20,6 +20,11 @@ import {
   TOSS_LOBBY_BANNER_SLOT_H,
   TOSS_LOBBY_BANNER_VERTICAL_PAD,
 } from './TossLobbyBottomBanner';
+
+/** 토스 로비 고정 상단바: safeArea 아래 패딩+한 줄(약 36px)+하단 패딩 */
+const TOSS_LOBBY_TOP_BAR_BELOW_SAFE_PX = 52;
+/** 상단바 아래 본문과의 간격 */
+const TOSS_LOBBY_TOP_BAR_GAP_PX = 10;
 import { hasTossRewardAdBeenSeenForRoom, runTossRewardedRoomEntry } from '../lib/tossRewardedAdGate';
 
 const formatPlayTime = (seconds: number) => {
@@ -1042,7 +1047,10 @@ const Lobby = ({
         style={
           tossUi
             ? {
-                paddingTop: tossUi.safeArea.top + 12,
+                paddingTop:
+                  tossUi.safeArea.top +
+                  TOSS_LOBBY_TOP_BAR_BELOW_SAFE_PX +
+                  TOSS_LOBBY_TOP_BAR_GAP_PX,
                 paddingBottom:
                   tossUi.safeArea.bottom +
                   TOSS_LOBBY_BANNER_SLOT_H +
@@ -1051,6 +1059,56 @@ const Lobby = ({
             : undefined
         }
       >
+      {tossUi ? (
+        <header
+          className="fixed left-0 right-0 top-0 z-50 flex items-center justify-between gap-2 border-b border-[#D9E8FF] bg-white/95 shadow-sm backdrop-blur-sm"
+          style={{
+            paddingTop: tossUi.safeArea.top + 8,
+            paddingBottom: 8,
+            paddingLeft: tossUi.safeArea.left + 12,
+            paddingRight: tossUi.safeArea.right + 12,
+          }}
+        >
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            {tossUi.brandIconUrl ? (
+              <img
+                src={tossUi.brandIconUrl}
+                alt=""
+                className="h-9 w-9 shrink-0 rounded-lg object-cover"
+              />
+            ) : null}
+            <span className="truncate text-sm font-bold text-slate-900">{tossUi.brandTitle}</span>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {user ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => onOpenDashboard?.()}
+                  className="max-w-[42vw] truncate rounded-lg px-2 py-1.5 text-sm font-semibold text-[#2F6FE4] transition-colors hover:bg-[#EAF2FF] hover:text-[#2563EB]"
+                >
+                  {user.username}
+                </button>
+                <button
+                  type="button"
+                  onClick={onLogout}
+                  className="shrink-0 rounded-lg border border-[#D9E8FF] bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-[#F4F8FF] active:opacity-90"
+                >
+                  {isKo ? "로그아웃" : "Log out"}
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={onLoginClick}
+                className="shrink-0 rounded-lg bg-[#3182F6] px-3 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#2563EB] active:opacity-90"
+              >
+                {isKo ? "토스로 로그인" : "Sign in with Toss"}
+              </button>
+            )}
+          </div>
+        </header>
+      ) : null}
       {!tossUi ? (
         <div className="fixed top-0 left-0 w-full z-50 bg-slate-900/80 backdrop-blur-sm border-b border-slate-700/50 p-2 sm:p-3 flex items-center justify-between text-white">
           <div className="flex items-center gap-2">
