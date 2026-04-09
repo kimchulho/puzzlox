@@ -170,19 +170,23 @@ export default function GameShell({
    */
   useEffect(() => {
     if (loading || currentRoom || showAdmin) return;
-    const locPath = window.location.pathname;
-    if (locPath !== "/" && locPath !== "") return;
-    if (parseRoomCodeFromPathname(locPath)) return;
-    if (new URLSearchParams(window.location.search).get("room")) return;
+    /** 퍼즐 퇴장 직후 히스토리 정리와 첫 페인트가 겹치면 WebView에서 로비가 한 번 깜빡일 수 있어 한 프레임 뒤로 미룸 */
+    const raf = requestAnimationFrame(() => {
+      const locPath = window.location.pathname;
+      if (locPath !== "/" && locPath !== "") return;
+      if (parseRoomCodeFromPathname(locPath)) return;
+      if (new URLSearchParams(window.location.search).get("room")) return;
 
-    const st = window.history.state as { tossLobbyGuard?: string } | null;
-    if (st?.tossLobbyGuard === "top") return;
-    if (st?.tossLobbyGuard === "base") {
+      const st = window.history.state as { tossLobbyGuard?: string } | null;
+      if (st?.tossLobbyGuard === "top") return;
+      if (st?.tossLobbyGuard === "base") {
+        window.history.pushState({ tossLobbyGuard: "top" }, "", "/");
+        return;
+      }
+      window.history.replaceState({ tossLobbyGuard: "base" }, "", "/");
       window.history.pushState({ tossLobbyGuard: "top" }, "", "/");
-      return;
-    }
-    window.history.replaceState({ tossLobbyGuard: "base" }, "", "/");
-    window.history.pushState({ tossLobbyGuard: "top" }, "", "/");
+    });
+    return () => cancelAnimationFrame(raf);
   }, [loading, currentRoom, pathname, showAdmin]);
 
   useEffect(() => {

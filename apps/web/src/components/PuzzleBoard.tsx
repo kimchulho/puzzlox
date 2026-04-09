@@ -1,6 +1,7 @@
 ﻿import React, {
   type CSSProperties,
   type MutableRefObject,
+  startTransition,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -3005,6 +3006,32 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
             app.ticker.add(animateShine);
           }, 500);
         };
+
+        /**
+         * 토스 WebView: canvas-confetti(고정 2D 캔버스) + PIXI WebGL 합성 시 레이어 깜빡임이 잦음.
+         * DOM 폭죽·add 블렌드 샤인 대신 월드 안에서만 아주 약한 하이라이트 펄스.
+         */
+        const celebrateTossCompletion = () => {
+          const g = new PIXI.Graphics();
+          g.zIndex = 2000;
+          world.addChild(g);
+          let f = 0;
+          const maxF = 48;
+          const onTick = () => {
+            f++;
+            g.clear();
+            g.rect(boardStartX, boardStartY, boardWidth, boardHeight);
+            const wave = (Math.sin((f / maxF) * Math.PI * 2) * 0.5 + 0.5) * 0.07;
+            g.fill({ color: 0xffffff, alpha: wave });
+            if (f >= maxF) {
+              app.ticker.remove(onTick);
+              world.removeChild(g);
+              g.destroy();
+            }
+          };
+          app.ticker.add(onTick);
+        };
+
         const SNAP_SOUND_URL =
           "https://ewbjogsolylcbfmpmyfa.supabase.co/storage/v1/object/public/puzzle_images/sound/dragon-studio-button-press-382713.mp3";
         const playSnapSound = () => {
@@ -3048,9 +3075,17 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
               }
             }
           }
-          setPlacedPieces(lockedCount);
-          hintLayer?.setCompletionPercent((lockedCount / Math.max(1, PIECE_COUNT)) * 100);
-          
+          const pct = (lockedCount / Math.max(1, PIECE_COUNT)) * 100;
+          if (isTossMode && lockedCount === PIECE_COUNT) {
+            startTransition(() => {
+              setPlacedPieces(lockedCount);
+              hintLayer?.setCompletionPercent(pct);
+            });
+          } else {
+            setPlacedPieces(lockedCount);
+            hintLayer?.setCompletionPercent(pct);
+          }
+
           if (lockedCount === PIECE_COUNT) {
             isCompletedRef.current = true;
             
@@ -3083,12 +3118,20 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
                   profile_public: (uData as { profile_public?: boolean }).profile_public,
                 };
                 localStorage.setItem('puzzle_user', JSON.stringify(updatedUser));
-                setUser(updatedUser);
+                if (isTossMode) {
+                  startTransition(() => setUser(updatedUser));
+                } else {
+                  setUser(updatedUser);
+                }
               }, 700);
             }
-            triggerFireworks();
             zoomToCompletedPuzzle(true);
-            playShineEffect();
+            if (isTossMode) {
+              celebrateTossCompletion();
+            } else {
+              triggerFireworks();
+              playShineEffect();
+            }
           }
         };
 
@@ -5825,8 +5868,12 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
         if (initialPlacedCount === PIECE_COUNT) {
           isCompletedRef.current = true;
           zoomToCompletedPuzzle(false);
-          triggerFireworks();
-          playShineEffect();
+          if (isTossMode) {
+            celebrateTossCompletion();
+          } else {
+            triggerFireworks();
+            playShineEffect();
+          }
           if (socketRef.current) {
             socketRef.current.emit(ROOM_EVENTS.PuzzleCompleted, roomId);
           }
