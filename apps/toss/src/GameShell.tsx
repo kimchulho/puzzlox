@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button, Modal, Text } from "@toss/tds-mobile";
 import type { AuthUser } from "@contracts/auth";
-import type { JoinRoomMeta, PuzzleKind } from "@contracts/roomJoin";
+import type { JoinRoomMeta } from "@contracts/roomJoin";
 import Admin from "@web/components/Admin";
 import Lobby from "@web/components/Lobby";
 import PuzzleBoard from "@web/components/PuzzleBoard";
@@ -33,15 +33,11 @@ import { useTossHostChromePadding } from "./useTossHostChromePadding";
 import { useTossSafeAreaInsets } from "./useTossSafeAreaInsets";
 
 function roomRowToShellRoom(data: Record<string, unknown>) {
-  const pk: PuzzleKind = data.puzzle_kind === "irregular" ? "irregular" : "regular";
   return {
     id: Number(data.id),
     imageUrl: String(data.image_url ?? ""),
     pieceCount: Number(data.piece_count ?? 0),
     difficulty: normalizePuzzleDifficulty(String(data.difficulty ?? "medium")),
-    puzzleKind: pk,
-    irregularTemplateId:
-      pk === "irregular" && data.irregular_template_id != null ? Number(data.irregular_template_id) : null,
   };
 }
 
@@ -62,8 +58,6 @@ export default function GameShell({
     imageUrl: string;
     pieceCount: number;
     difficulty: PuzzleDifficulty;
-    puzzleKind: PuzzleKind;
-    irregularTemplateId: number | null;
   } | null>(null);
   const [loading, setLoading] = useState(true);
   const [showAdmin, setShowAdmin] = useState(false);
@@ -275,20 +269,16 @@ export default function GameShell({
     imageUrl: string,
     pieceCount: number,
     difficulty: PuzzleDifficulty = "medium",
-    meta?: JoinRoomMeta
+    _meta?: JoinRoomMeta
   ) => {
     const url = roomPath(roomId);
     window.history.pushState({ layer: "puzzle" }, "", url);
     window.history.pushState({ layer: "puzzle-top" }, "", url);
-    const pk: PuzzleKind = meta?.puzzleKind === "irregular" ? "irregular" : "regular";
     setCurrentRoom({
       id: roomId,
       imageUrl,
       pieceCount,
       difficulty,
-      puzzleKind: pk,
-      irregularTemplateId:
-        pk === "irregular" && meta?.irregularTemplateId != null ? Number(meta.irregularTemplateId) : null,
     });
   };
 
@@ -459,8 +449,6 @@ export default function GameShell({
             imageUrl={currentRoom.imageUrl}
             pieceCount={currentRoom.pieceCount}
             difficulty={currentRoom.difficulty}
-            puzzleKind={currentRoom.puzzleKind}
-            irregularTemplateId={currentRoom.irregularTemplateId}
             onBack={handleLeaveRoom}
             user={user}
             setUser={setUser as (u: unknown) => void}

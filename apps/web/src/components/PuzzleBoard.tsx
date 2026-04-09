@@ -29,7 +29,6 @@ import { encodeRoomId, roomPath } from '../lib/roomCode';
 import { recordUserRoomVisit } from '../lib/recordUserRoomVisit';
 import { canClusterLockOnBoard, canPieceLockOnBoard, normalizePuzzleDifficulty, type PuzzleDifficulty } from '../lib/puzzleDifficulty';
 import { createPuzzleHintLayer, type PuzzleHintLayer } from '../lib/puzzleHintLayer';
-import type { PuzzleKind } from "@contracts/roomJoin";
 
 const SNAP_THRESHOLD = 30;
 /** 와이드 툴바–퍼즐 사이 빈 줄(측정·라운딩·DP) 보정: 퍼즐 inset 을 살짝 줄임 */
@@ -164,7 +163,21 @@ function PuzzleLoadingSpinner({ toss }: { toss: boolean }) {
   );
 }
 
-export default function PuzzleBoard({
+export type PuzzleBoardProps = {
+  roomId: number;
+  imageUrl: string;
+  pieceCount: number;
+  difficulty?: PuzzleDifficulty;
+  onBack: () => void;
+  user: any;
+  setUser: (user: any) => void;
+  onToggleOrientation?: () => void | Promise<void>;
+  hostWebViewPadding?: { top: number; right: number; left: number };
+  hostLeaderboardToggleRef?: MutableRefObject<(() => void) | null>;
+  locale?: "ko" | "en";
+};
+
+const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
   roomId,
   imageUrl,
   pieceCount,
@@ -172,32 +185,11 @@ export default function PuzzleBoard({
   onBack,
   user,
   setUser,
-  /** 앱인토스 WebView 등: `setDeviceOrientation`으로 대체 (기본 HTML API는 WebView에서 실패하는 경우가 많음) */
   onToggleOrientation,
-  /** 앱인토스: SafeAreaInsets + 우측 네이티브 …/닫기 영역 — 상단바 겹침 완화 */
   hostWebViewPadding,
-  /**
-   * 앱인토스: 네비 액세서리 탭 시 리더보드 토글. 넘기면 인앱 트로피 버튼은 숨김(중복 방지).
-   */
   hostLeaderboardToggleRef,
-  locale = 'ko',
-  puzzleKind = 'regular',
-  irregularTemplateId = null,
-}: {
-  roomId: number;
-  imageUrl: string;
-  pieceCount: number;
-  difficulty?: PuzzleDifficulty;
-  puzzleKind?: PuzzleKind;
-  irregularTemplateId?: number | null;
-  onBack: () => void;
-  user: any;
-  setUser: (user: any) => void;
-  onToggleOrientation?: () => void | Promise<void>;
-  hostWebViewPadding?: { top: number; right: number; left: number };
-  hostLeaderboardToggleRef?: MutableRefObject<(() => void) | null>;
-  locale?: 'ko' | 'en';
-}) {
+  locale = "ko",
+}) => {
   const pixiContainer = useRef<HTMLDivElement>(null);
   const app = useRef<PIXI.Application | null>(null);
   const pieces = useRef<Map<number, PIXI.Container>>(new Map());
@@ -921,11 +913,6 @@ export default function PuzzleBoard({
     const offlineAfterByeRef = { current: new Set<string>() };
     /** presence에 처음 보인 유저만 1회 시드(이후 생존은 하트비트·브로드캐스트로만 갱신) */
     const peerPresenceSeededRef = { current: new Set<string>() };
-
-    if (puzzleKind !== "regular") {
-      setIsLoading(false);
-      return () => {};
-    }
 
     let isMounted = true;
     /** initPixi 안에서 할당: 방 나가기 시 스티키/드래그 중 lock 브로드캐스트 해제 */
@@ -2900,13 +2887,21 @@ export default function PuzzleBoard({
             1,
           );
 
-          // 토스 와이드: pivot + rotation(-90°). targetX/Y(피벗 0 가정) 대신 보드 중심 = 캔버스 중심.
+          // 토스 와이드: 완성 줌에서 pivot을 보드 중심으로 맞춤. 이전에는 콘텐츠(배치 영역) 중심이었을 수 있어,
+          // pivot만 바꾸고 position 을 화면 중앙으로 덮어쓰면 한 프레임에 퍼즐이 튀거나 빈 캔버스가 보여
+          // 토스 라이트 배경(#F4F8FF)이 깜빡이는 것처럼 보였음 → 보드 중심의 글로벌 좌표를 유지하도록 보정.
           if (isTossMode && isTossWideMode) {
             const boardCx = boardStartX + boardWidth / 2;
             const boardCy = boardStartY + boardHeight / 2;
+            const anchor = new PIXI.Point(boardCx, boardCy);
+            const before = new PIXI.Point();
+            world.toGlobal(anchor, before);
             world.pivot.set(boardCx, boardCy);
-            world.position.set(app.screen.width / 2, app.screen.height / 2);
             world.rotation = -Math.PI / 2;
+            const after = new PIXI.Point();
+            world.toGlobal(anchor, after);
+            world.x += before.x - after.x;
+            world.y += before.y - after.y;
 
             if (!animate) {
               world.scale.set(targetScale);
@@ -6671,7 +6666,7 @@ export default function PuzzleBoard({
         setTimeout(runHeavyTeardown, 0);
       }
     };
-  }, [roomId, pieceCount, imageUrl, isTossMode, isTossWideMode, puzzleDifficulty, puzzleKind]);
+  }, [roomId, pieceCount, imageUrl, isTossMode, isTossWideMode, puzzleDifficulty]);
 
   const handleMiniPadPointerDown = (e: React.PointerEvent) => {
     e.preventDefault();
@@ -6802,33 +6797,6 @@ export default function PuzzleBoard({
   const connectionStatusDetail = isGameSocketConnected
     ? (isKo ? "실시간 동기화가 정상 동작 중입니다." : "Realtime sync is healthy.")
     : (isKo ? "재연결 전까지 진행 저장이 중단됩니다." : "Progress saving is paused until reconnect.");
-
-  if (puzzleKind === "irregular") {
-    return (
-      <div
-        className="w-full h-full relative flex flex-col items-center justify-center gap-4 p-6 text-center"
-        style={boardFrameStyle}
-      >
-        <p className="text-slate-200 max-w-md text-sm leading-relaxed">
-          {isKo
-            ? "비정형(SVG) 퍼즐의 플레이 보드는 다음 단계에서 연결됩니다. 방·조각 수·칼선 정의는 이미 저장되었으며, 멀티플레이용 pieces 테이블도 동일하게 사용할 수 있습니다."
-            : "Irregular (SVG) play mode is not wired to the Pixi board yet. Room metadata and the parsed template are saved; the same pieces table will support multiplayer."}
-        </p>
-        {irregularTemplateId != null && (
-          <p className="text-xs text-slate-500">
-            template #{irregularTemplateId} · {pieceCount} {isKo ? "조각" : "pieces"}
-          </p>
-        )}
-        <button
-          type="button"
-          onClick={onBack}
-          className="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-4 py-2 text-sm font-medium text-white"
-        >
-          {isKo ? "로비로" : "Back to lobby"}
-        </button>
-      </div>
-    );
-  }
 
   return (
     <div className="w-full h-full relative" style={boardFrameStyle}>
@@ -8079,5 +8047,7 @@ export default function PuzzleBoard({
       )}
     </div>
   );
-}
+};
+
+export default PuzzleBoard;
 
