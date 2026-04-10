@@ -483,18 +483,47 @@ const Lobby = ({
         if (!cancelled) setMyUploadedImages([]);
         return;
       }
-      const { data, error } = await supabase
-        .from("puzzle_images")
-        .select("*")
+      const { data: myRooms, error: roomsErr } = await supabase
+        .from("rooms")
+        .select("image_url")
         .eq("created_by", user.id)
-        .neq("is_public", true);
+        .eq("is_private", true);
       if (cancelled) return;
-      if (error || !data) {
-        console.error("Failed to load my uploaded puzzle images:", error);
+      if (roomsErr || !myRooms) {
+        console.error("Failed to load my uploaded-image rooms:", roomsErr);
         setMyUploadedImages([]);
         return;
       }
-      setMyUploadedImages(data);
+      const urls = [...new Set(
+        myRooms
+          .map((r) => (typeof (r as { image_url?: unknown }).image_url === "string" ? String((r as { image_url?: unknown }).image_url) : ""))
+          .filter((u) => u.trim() !== "")
+      )];
+      if (urls.length === 0) {
+        setMyUploadedImages([]);
+        return;
+      }
+      const { data: imgRows, error: imgErr } = await supabase
+        .from("puzzle_images")
+        .select("*")
+        .in("url", urls)
+        .neq("is_public", true);
+      if (cancelled) return;
+      if (imgErr) {
+        console.error("Failed to load my uploaded puzzle images metadata:", imgErr);
+      }
+      const byUrl = new Map<string, any>();
+      for (const row of imgRows ?? []) {
+        const url = typeof (row as { url?: unknown }).url === "string" ? String((row as { url?: unknown }).url) : "";
+        if (!url) continue;
+        byUrl.set(url, row);
+      }
+      const merged = urls.map((url, idx) => ({
+        id: byUrl.get(url)?.id ?? `room-url-${idx}`,
+        url,
+        ...(byUrl.get(url) ?? {}),
+      }));
+      setMyUploadedImages(merged);
     };
     void fetchMyUploadedImages();
     return () => {

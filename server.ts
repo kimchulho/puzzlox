@@ -695,8 +695,7 @@ async function startServer() {
 
     let imageQuery = authSupabase
       .from("puzzle_images")
-      .select("id, url, is_public, created_by")
-      .eq("created_by", userId)
+      .select("id, url, is_public")
       .limit(1);
     if (Number.isFinite(imageId) && imageId > 0) {
       imageQuery = imageQuery.eq("id", imageId);
@@ -707,16 +706,12 @@ async function startServer() {
     if (imageErr) {
       return res.status(500).json({ message: imageErr.message });
     }
-    if (!imageRow) {
-      return res.status(404).json({ message: "Uploaded image not found." });
-    }
-    if (imageRow.is_public === true) {
-      return res.status(400).json({ message: "Public image cannot be deleted from this endpoint." });
-    }
-
-    const targetUrl = String(imageRow.url ?? "").trim();
+    const targetUrl = String(imageRow?.url ?? imageUrl ?? "").trim();
     if (!targetUrl) {
       return res.status(400).json({ message: "Image URL is empty." });
+    }
+    if (imageRow?.is_public === true) {
+      return res.status(400).json({ message: "Public image cannot be deleted from this endpoint." });
     }
 
     const { data: roomsByImage, error: roomsErr } = await authSupabase
@@ -730,34 +725,50 @@ async function startServer() {
     const roomIds = (roomsByImage ?? [])
       .map((r) => Number((r as { id?: unknown }).id))
       .filter((id) => Number.isFinite(id) && id > 0);
+    if (roomIds.length === 0) {
+      return res.status(403).json({ message: "Only your uploaded image can be deleted." });
+    }
 
-    if (roomIds.length > 0) {
-      const { error: piecesDelErr } = await authSupabase.from("pieces").delete().in("room_id", roomIds);
+    const { data: ownedRooms, error: ownedErr } = await authSupabase
+      .from("rooms")
+      .select("id")
+      .in("id", roomIds)
+      .eq("created_by", userId);
+    if (ownedErr) return res.status(500).json({ message: ownedErr.message });
+    const ownedRoomIds = (ownedRooms ?? [])
+      .map((r) => Number((r as { id?: unknown }).id))
+      .filter((id) => Number.isFinite(id) && id > 0);
+    if (ownedRoomIds.length === 0) {
+      return res.status(403).json({ message: "Only your uploaded image can be deleted." });
+    }
+
+    if (ownedRoomIds.length > 0) {
+      const { error: piecesDelErr } = await authSupabase.from("pieces").delete().in("room_id", ownedRoomIds);
       if (piecesDelErr) return res.status(500).json({ message: piecesDelErr.message });
 
-      const { error: scoresDelErr } = await authSupabase.from("scores").delete().in("room_id", roomIds);
+      const { error: scoresDelErr } = await authSupabase.from("scores").delete().in("room_id", ownedRoomIds);
       if (scoresDelErr) return res.status(500).json({ message: scoresDelErr.message });
 
       const { error: visitsDelErr } = await authSupabase
         .from("user_room_visits")
         .delete()
-        .in("room_id", roomIds);
+        .in("room_id", ownedRoomIds);
       if (visitsDelErr) return res.status(500).json({ message: visitsDelErr.message });
 
-      const { error: roomsDelErr } = await authSupabase.from("rooms").delete().in("id", roomIds);
+      const { error: roomsDelErr } = await authSupabase.from("rooms").delete().in("id", ownedRoomIds);
       if (roomsDelErr) return res.status(500).json({ message: roomsDelErr.message });
     }
 
-    const { error: imageDelErr } = await authSupabase
-      .from("puzzle_images")
-      .delete()
-      .eq("id", imageRow.id)
-      .eq("created_by", userId);
+    let imageDeleteQuery = authSupabase.from("puzzle_images").delete().eq("url", targetUrl).neq("is_public", true);
+    if (Number.isFinite(imageId) && imageId > 0) {
+      imageDeleteQuery = imageDeleteQuery.eq("id", imageId);
+    }
+    const { error: imageDelErr } = await imageDeleteQuery;
     if (imageDelErr) {
       return res.status(500).json({ message: imageDelErr.message });
     }
 
-    return res.json({ ok: true, deletedRoomCount: roomIds.length, deletedImageId: imageRow.id });
+    return res.json({ ok: true, deletedRoomCount: ownedRoomIds.length, deletedImageId: imageRow?.id ?? null });
   });
 
   app.get("/api/user/dashboard", authRequired, async (req: AuthedRequest, res) => {
