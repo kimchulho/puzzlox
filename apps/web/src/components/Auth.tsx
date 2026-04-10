@@ -22,6 +22,13 @@ export default function Auth({
     setError('');
     setLoading(true);
 
+    const trimmedId = username.trim().toLowerCase();
+    if (!isLogin && trimmedId.startsWith('toss_')) {
+      setError("'toss_'로 시작하는 아이디는 사용할 수 없습니다. (토스 연동 전용 접두사입니다.)");
+      setLoading(false);
+      return;
+    }
+
     try {
       const endpoint = isLogin ? '/api/auth/web/login' : '/api/auth/web/signup';
       const response = await fetch(endpoint, {

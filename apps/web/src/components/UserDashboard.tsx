@@ -1,9 +1,11 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import {
   ArrowLeft,
+  Check,
   CheckCircle,
+  ChevronDown,
   Copy,
-  Filter,
   Grid,
   Image as ImageIcon,
   Loader2,
@@ -14,6 +16,7 @@ import {
 } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import { apiUrl } from "../lib/apiBase";
+import { tossIntossProfileUrl } from "../lib/roomCode";
 import {
   normalizePuzzleDifficulty,
   puzzleDifficultyLabel,
@@ -60,6 +63,21 @@ type UploadRow = {
   completedAt?: string | null;
 };
 
+type ParticipatedRoomFilter = "all" | "only_created" | "hide_created";
+
+function participatedFilterLabel(v: ParticipatedRoomFilter, isKo: boolean): string {
+  switch (v) {
+    case "all":
+      return isKo ? "전체 보기" : "Show all";
+    case "only_created":
+      return isKo ? "내가 만든 방만" : "Only rooms I created";
+    case "hide_created":
+      return isKo ? "내가 만든 방 제외" : "Hide rooms I created";
+    default:
+      return "";
+  }
+}
+
 export default function UserDashboard({
   mode,
   publicUsername,
@@ -69,6 +87,8 @@ export default function UserDashboard({
   user,
   setUser,
   visualVariant = "web",
+  /** 앱인토스: 상단 안전 영역(px). 래퍼 `paddingTop` 대신 헤더에만 적용해 이중 여백을 줄입니다. */
+  safeAreaTop = 0,
 }: {
   mode: "self" | "public";
   publicUsername?: string;
@@ -85,6 +105,7 @@ export default function UserDashboard({
   setUser?: (u: DashboardUser) => void;
   /** 앱인토스: 로비와 맞춘 밝은 톤 */
   visualVariant?: "web" | "toss";
+  safeAreaTop?: number;
 }) {
   const isKo = locale === "ko";
   const [loading, setLoading] = useState(true);
@@ -94,8 +115,12 @@ export default function UserDashboard({
   const [myUploads, setMyUploads] = useState<UploadRow[]>([]);
   const [profileSaving, setProfileSaving] = useState(false);
   const [copyOk, setCopyOk] = useState(false);
-  /** 참여 목록에서 내가 만든 방 제외 */
-  const [hideRoomsICreated, setHideRoomsICreated] = useState(false);
+  const [profileQrDataUrl, setProfileQrDataUrl] = useState<string | null>(null);
+  /** 참여한 퍼즐방: 전체 / 내가 만든 방만 / 내가 만든 방 제외 */
+  const [participatedRoomFilter, setParticipatedRoomFilter] =
+    useState<ParticipatedRoomFilter>("all");
+  const [participatedFilterOpen, setParticipatedFilterOpen] = useState(false);
+  const participatedFilterRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -166,6 +191,52 @@ export default function UserDashboard({
     void load();
   }, [load]);
 
+  const toss = visualVariant === "toss";
+
+  useEffect(() => {
+    if (!toss || mode !== "self" || dashUser?.profile_public === false || !dashUser?.username) {
+      setProfileQrDataUrl(null);
+      return;
+    }
+    const url = tossIntossProfileUrl(dashUser.username);
+    let cancelled = false;
+    void import("qrcode")
+      .then((m) => {
+        const QR = m.default ?? m;
+        return QR.toDataURL(url, {
+          margin: 1,
+          width: 200,
+          color: { dark: "#0f172a", light: "#ffffff" },
+        });
+      })
+      .then((dataUrl) => {
+        if (!cancelled) setProfileQrDataUrl(dataUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setProfileQrDataUrl(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [toss, mode, dashUser?.username, dashUser?.profile_public]);
+
+  useEffect(() => {
+    if (!participatedFilterOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const el = participatedFilterRef.current;
+      if (el && !el.contains(e.target as Node)) setParticipatedFilterOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setParticipatedFilterOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [participatedFilterOpen]);
+
   const toggleProfilePublic = async (next: boolean) => {
     const token = localStorage.getItem("puzzle_access_token");
     if (!token) return;
@@ -207,12 +278,19 @@ export default function UserDashboard({
   const copyProfileLink = () => {
     const un = dashUser?.username ?? publicUsername ?? "";
     if (!un) return;
-    const url = `${window.location.origin}/u/${encodeURIComponent(un)}`;
+    const url = toss ? tossIntossProfileUrl(un) : `${window.location.origin}/u/${encodeURIComponent(un)}`;
     void navigator.clipboard.writeText(url).then(() => {
       setCopyOk(true);
       window.setTimeout(() => setCopyOk(false), 2000);
     });
   };
+
+  const profileShareUrl =
+    dashUser?.username != null && String(dashUser.username).trim() !== ""
+      ? toss
+        ? tossIntossProfileUrl(dashUser.username)
+        : `${window.location.origin}/u/${encodeURIComponent(dashUser.username)}`
+      : "";
 
   const title =
     mode === "self"
@@ -223,12 +301,14 @@ export default function UserDashboard({
         ? `${dashUser?.username ?? publicUsername ?? ""}님의 프로필`
         : `${dashUser?.username ?? publicUsername ?? ""}'s profile`;
 
-  const participatedFiltered = hideRoomsICreated
-    ? participated.filter((r) => !r.iAmCreator)
-    : participated;
+  const participatedFiltered = participated.filter((r) => {
+    if (mode !== "self") return true;
+    if (participatedRoomFilter === "hide_created") return !r.iAmCreator;
+    if (participatedRoomFilter === "only_created") return r.iAmCreator === true;
+    return true;
+  });
   const hasMyCreatedInParticipated = participated.some((r) => r.iAmCreator);
 
-  const toss = visualVariant === "toss";
   const skin = toss
     ? {
         page: "min-h-screen bg-[#F4F8FF] text-slate-900",
@@ -260,11 +340,16 @@ export default function UserDashboard({
         meta: "text-xs text-slate-600",
         dateSmall: "mt-1 text-[11px] text-slate-500",
         btnSmall: "mt-2 rounded-lg bg-[#3182F6] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#2563EB]",
-        h2Row: "flex items-center gap-2 text-base font-bold text-slate-900",
-        filterLabel:
-          "flex cursor-pointer items-center gap-2 rounded-lg border border-[#D9E8FF] bg-white px-3 py-2 text-sm text-slate-700 shadow-sm hover:bg-[#F4F8FF]",
-        filterIcon: "shrink-0 text-slate-400",
-        filterCheck: "h-4 w-4 rounded border-[#CBD5E1] bg-white text-emerald-600 focus:ring-emerald-500",
+        h2Row: "flex min-w-0 flex-1 items-center gap-2 text-base font-bold text-slate-900",
+        filterMenuRoot: "relative shrink-0",
+        filterMenuTrigger:
+          "flex w-[min(100%,10.5rem)] min-w-[8.5rem] items-center justify-between gap-1 rounded-lg border border-[#D9E8FF] bg-white px-2.5 py-2 text-left text-sm text-slate-900 shadow-sm transition-colors hover:bg-[#F4F8FF] focus:border-[#3182F6] focus:outline-none focus:ring-1 focus:ring-[#3182F6]",
+        filterMenuPanel:
+          "absolute right-0 top-[calc(100%+4px)] z-40 min-w-full overflow-hidden rounded-lg border border-[#D9E8FF] bg-white py-1 shadow-lg",
+        filterMenuOption:
+          "flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left text-sm text-slate-800 transition-colors hover:bg-[#EAF2FF]",
+        filterMenuOptionActive: "bg-[#EAF2FF] font-medium text-[#2F6FE4]",
+        filterMenuOptionDisabled: "cursor-not-allowed text-slate-400 hover:bg-transparent",
         empty: "text-sm text-slate-500",
         joinedLi: "flex gap-3 rounded-2xl border border-[#D9E8FF] bg-white p-3 shadow-sm",
         joinedThumb: "relative h-20 w-28 shrink-0 overflow-hidden rounded-lg bg-[#EAF2FF]",
@@ -311,11 +396,16 @@ export default function UserDashboard({
         meta: "text-xs text-slate-400",
         dateSmall: "mt-1 text-[11px] text-slate-500",
         btnSmall: "mt-2 rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700",
-        h2Row: "flex items-center gap-2 text-base font-bold text-white",
-        filterLabel:
-          "flex cursor-pointer items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800",
-        filterIcon: "shrink-0 text-slate-500",
-        filterCheck: "h-4 w-4 rounded border-slate-600 bg-slate-800 text-emerald-500 focus:ring-emerald-500",
+        h2Row: "flex min-w-0 flex-1 items-center gap-2 text-base font-bold text-white",
+        filterMenuRoot: "relative shrink-0",
+        filterMenuTrigger:
+          "flex w-[min(100%,10.5rem)] min-w-[8.5rem] items-center justify-between gap-1 rounded-lg border border-slate-600 bg-slate-900 px-2.5 py-2 text-left text-sm text-slate-100 shadow-sm transition-colors hover:bg-slate-800 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500",
+        filterMenuPanel:
+          "absolute right-0 top-[calc(100%+4px)] z-40 min-w-full overflow-hidden rounded-lg border border-slate-600 bg-slate-900 py-1 shadow-lg",
+        filterMenuOption:
+          "flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left text-sm text-slate-200 transition-colors hover:bg-slate-800",
+        filterMenuOptionActive: "bg-slate-800 font-medium text-indigo-300",
+        filterMenuOptionDisabled: "cursor-not-allowed text-slate-500 hover:bg-transparent",
         empty: "text-sm text-slate-500",
         joinedLi: "flex gap-3 rounded-2xl border border-slate-800 bg-slate-900/60 p-3",
         joinedThumb: "relative h-20 w-28 shrink-0 overflow-hidden rounded-lg bg-slate-800",
@@ -334,23 +424,30 @@ export default function UserDashboard({
         btnEnter: "mt-2 rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700",
       };
 
+  const headerStyle: CSSProperties | undefined =
+    toss && safeAreaTop > 0 ? { paddingTop: safeAreaTop } : undefined;
+
   return (
     <div className={skin.page}>
-      <header className={skin.header}>
-        <div className="mx-auto flex max-w-3xl items-center gap-3 px-4 py-3">
-          <button
-            type="button"
-            onClick={onBack}
-            className={skin.backBtn}
-            aria-label={isKo ? "뒤로" : "Back"}
-          >
-            <ArrowLeft size={20} />
-          </button>
+      <header className={skin.header} style={headerStyle}>
+        <div
+          className={`mx-auto flex max-w-3xl items-center px-4 ${toss ? "gap-2 py-2" : "gap-3 py-3"}`}
+        >
+          {!toss || mode === "public" ? (
+            <button
+              type="button"
+              onClick={onBack}
+              className={skin.backBtn}
+              aria-label={isKo ? "뒤로" : "Back"}
+            >
+              <ArrowLeft size={20} />
+            </button>
+          ) : null}
           <h1 className={skin.title}>{title}</h1>
         </div>
       </header>
 
-      <main className="mx-auto max-w-3xl space-y-8 px-4 py-6">
+      <main className={`mx-auto max-w-3xl space-y-8 px-4 ${toss ? "pb-4 pt-3" : "py-6"}`}>
         {loading ? (
           <div className={skin.loadingWrap}>
             <Loader2 className="h-10 w-10 animate-spin" />
@@ -364,18 +461,22 @@ export default function UserDashboard({
           </div>
         ) : (
           <>
-            <section className="grid gap-4 sm:grid-cols-2">
-              <div className={skin.statCard}>
+            <section className="grid min-w-0 grid-cols-2 gap-3 sm:gap-4">
+              <div className={`${skin.statCard} min-w-0`}>
                 <div className={skin.statLabel}>
-                  <Trophy size={18} className="text-amber-400" />
-                  <span className="text-sm">{isKo ? "완성한 퍼즐" : "Completed puzzles"}</span>
+                  <Trophy size={18} className="shrink-0 text-amber-400" />
+                  <span className="min-w-0 text-[11px] leading-tight sm:text-sm">
+                    {isKo ? "완성한 퍼즐" : "Completed puzzles"}
+                  </span>
                 </div>
                 <p className={skin.statNum}>{dashUser?.completed_puzzles ?? 0}</p>
               </div>
-              <div className={skin.statCard}>
+              <div className={`${skin.statCard} min-w-0`}>
                 <div className={skin.statLabel}>
-                  <Grid size={18} className="text-indigo-400" />
-                  <span className="text-sm">{isKo ? "맞춘 조각(누적)" : "Pieces placed (total)"}</span>
+                  <Grid size={18} className="shrink-0 text-indigo-400" />
+                  <span className="min-w-0 text-[11px] leading-tight sm:text-sm">
+                    {isKo ? "맞춘 조각(누적)" : "Pieces placed (total)"}
+                  </span>
                 </div>
                 <p className={skin.statNum}>{dashUser?.placed_pieces ?? 0}</p>
               </div>
@@ -390,8 +491,12 @@ export default function UserDashboard({
                       <p className={skin.profileTitle}>{isKo ? "프로필 공개" : "Public profile"}</p>
                       <p className={skin.profileDesc}>
                         {isKo
-                          ? "기본은 공개입니다. 체크를 해제하면 비공개로 전환됩니다. 공개 시 /u/아이디 에 통계·참여 방이 보이며, 직접 업로드한 퍼즐 이미지는 항상 비공개입니다."
-                          : "Public by default; uncheck to make your profile private. When public, stats and joined rooms appear at /u/username; images you uploaded as room photos stay private."}
+                          ? toss
+                            ? "기본은 공개입니다. 체크를 해제하면 비공개로 전환됩니다. 공개 시 intoss 프로필 링크로 통계·참여 방이 열리며, 직접 업로드한 퍼즐 이미지는 항상 비공개입니다."
+                            : "기본은 공개입니다. 체크를 해제하면 비공개로 전환됩니다. 공개 시 /u/아이디 에 통계·참여 방이 보이며, 직접 업로드한 퍼즐 이미지는 항상 비공개입니다."
+                          : toss
+                            ? "Public by default; uncheck to make your profile private. When public, others can open your stats via the intoss profile link; images you uploaded as room photos stay private."
+                            : "Public by default; uncheck to make your profile private. When public, stats and joined rooms appear at /u/username; images you uploaded as room photos stay private."}
                       </p>
                     </div>
                   </div>
@@ -420,10 +525,24 @@ export default function UserDashboard({
                         </>
                       )}
                     </button>
-                    <span className={skin.urlHint}>
-                      <Share2 size={14} />
-                      {`${window.location.origin}/u/${dashUser.username}`}
+                    <span className={`${skin.urlHint} max-w-full break-all`}>
+                      <Share2 size={14} className="shrink-0" />
+                      {profileShareUrl}
                     </span>
+                  </div>
+                ) : null}
+                {toss && mode === "self" && dashUser?.profile_public !== false && profileQrDataUrl ? (
+                  <div className="mt-4 flex flex-col items-center gap-2 border-t border-[#D9E8FF] pt-4">
+                    <p className="text-center text-xs text-slate-600">
+                      {isKo ? "프로필 공유 QR (토스 앱에서 스캔)" : "Profile QR (scan in Toss)"}
+                    </p>
+                    <img
+                      src={profileQrDataUrl}
+                      alt=""
+                      width={200}
+                      height={200}
+                      className="rounded-xl border border-[#D9E8FF] bg-white p-2 shadow-sm"
+                    />
                   </div>
                 ) : null}
               </section>
@@ -480,31 +599,85 @@ export default function UserDashboard({
             ) : null}
 
             <section>
-              <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="mb-3 flex flex-row items-start justify-between gap-2">
                 <h2 className={skin.h2Row}>
-                  <Users size={20} className="text-emerald-400" />
-                  {isKo ? "참여한 퍼즐방" : "Puzzle rooms joined"}
+                  <Users size={20} className="shrink-0 text-emerald-400" />
+                  <span className="min-w-0 sm:min-w-[unset]">
+                    {isKo ? "참여한 퍼즐방" : "Puzzle rooms joined"}
+                  </span>
                 </h2>
-                {participated.length > 0 && hasMyCreatedInParticipated ? (
-                  <label className={skin.filterLabel}>
-                    <Filter size={16} className={skin.filterIcon} />
-                    <span className="select-none">
-                      {isKo ? "내가 만든 방 숨기기" : "Hide rooms I created"}
-                    </span>
-                    <input
-                      type="checkbox"
-                      className={skin.filterCheck}
-                      checked={hideRoomsICreated}
-                      onChange={(e) => setHideRoomsICreated(e.target.checked)}
-                    />
-                  </label>
+                {participated.length > 0 && mode === "self" ? (
+                  <div className={skin.filterMenuRoot} ref={participatedFilterRef}>
+                    <button
+                      type="button"
+                      className={skin.filterMenuTrigger}
+                      aria-expanded={participatedFilterOpen}
+                      aria-haspopup="listbox"
+                      aria-label={isKo ? "참여한 방 필터" : "Filter joined rooms"}
+                      onClick={() => setParticipatedFilterOpen((o) => !o)}
+                    >
+                      <span className="min-w-0 truncate">
+                        {participatedFilterLabel(participatedRoomFilter, isKo)}
+                      </span>
+                      <ChevronDown
+                        size={18}
+                        className={`shrink-0 opacity-70 transition-transform ${participatedFilterOpen ? "rotate-180" : ""}`}
+                        aria-hidden
+                      />
+                    </button>
+                    {participatedFilterOpen ? (
+                      <ul
+                        className={skin.filterMenuPanel}
+                        role="listbox"
+                        aria-label={isKo ? "참여한 방 필터" : "Filter joined rooms"}
+                      >
+                        {(
+                          [
+                            "all",
+                            "only_created",
+                            "hide_created",
+                          ] as const satisfies readonly ParticipatedRoomFilter[]
+                        ).map((key) => {
+                          const disabled = key !== "all" && !hasMyCreatedInParticipated;
+                          const selected = participatedRoomFilter === key;
+                          return (
+                            <li key={key} role="presentation">
+                              <button
+                                type="button"
+                                role="option"
+                                aria-selected={selected}
+                                disabled={disabled}
+                                className={`${skin.filterMenuOption} ${selected ? skin.filterMenuOptionActive : ""} ${disabled ? skin.filterMenuOptionDisabled : ""}`}
+                                onClick={() => {
+                                  if (disabled) return;
+                                  setParticipatedRoomFilter(key);
+                                  setParticipatedFilterOpen(false);
+                                }}
+                              >
+                                <span className="min-w-0 flex-1 text-left">
+                                  {participatedFilterLabel(key, isKo)}
+                                </span>
+                                {selected ? <Check size={16} className="shrink-0 opacity-80" aria-hidden /> : null}
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    ) : null}
+                  </div>
                 ) : null}
               </div>
               {participated.length === 0 ? (
                 <p className={skin.empty}>{isKo ? "아직 기록이 없습니다." : "No history yet."}</p>
               ) : participatedFiltered.length === 0 ? (
                 <p className={skin.empty}>
-                  {isKo ? "필터 조건에 맞는 방이 없습니다." : "No rooms match this filter."}
+                  {participatedRoomFilter === "only_created" && !hasMyCreatedInParticipated
+                    ? isKo
+                      ? "참여 목록에 내가 만든 방이 없습니다."
+                      : "You have no rooms you created in this list."
+                    : isKo
+                      ? "필터 조건에 맞는 방이 없습니다."
+                      : "No rooms match this filter."}
                 </p>
               ) : (
                 <ul className="space-y-3">

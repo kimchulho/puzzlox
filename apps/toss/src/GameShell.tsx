@@ -316,7 +316,6 @@ export default function GameShell({
         <div
           className="min-h-screen box-border bg-[#F4F8FF]"
           style={{
-            paddingTop: tossSafeArea.top,
             paddingLeft: tossSafeArea.left,
             paddingRight: tossSafeArea.right,
             paddingBottom: tossSafeArea.bottom,
@@ -325,6 +324,7 @@ export default function GameShell({
           <UserDashboard
             mode="self"
             visualVariant="toss"
+            safeAreaTop={tossSafeArea.top}
             onBack={() => navigateToPath("/")}
             onJoinRoom={handleJoinRoom}
             locale="ko"
@@ -344,7 +344,6 @@ export default function GameShell({
         <div
           className="min-h-screen box-border bg-[#F4F8FF]"
           style={{
-            paddingTop: tossSafeArea.top,
             paddingLeft: tossSafeArea.left,
             paddingRight: tossSafeArea.right,
             paddingBottom: tossSafeArea.bottom,
@@ -353,6 +352,7 @@ export default function GameShell({
           <UserDashboard
             mode="public"
             visualVariant="toss"
+            safeAreaTop={tossSafeArea.top}
             publicUsername={un}
             onBack={() => navigateToPath("/")}
             onJoinRoom={handleJoinRoom}

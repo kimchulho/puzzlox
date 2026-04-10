@@ -47,6 +47,12 @@ export function tossIntossRoomUrl(roomId: number): string {
   return `intoss://${TOSS_INTOSS_APP_NAME}/room/${roomId}`;
 }
 
+/** 앱인토스 프로필 딥링크 (`intoss://앱이름/u/아이디`). 경로 세그먼트는 RFC 3986에 맞게 인코딩합니다. */
+export function tossIntossProfileUrl(username: string): string {
+  const seg = encodeURIComponent(String(username).trim());
+  return `intoss://${TOSS_INTOSS_APP_NAME}/u/${seg}`;
+}
+
 /** Reads encoded id or numeric id from pathname `/room/<code>`. */
 export function parseRoomCodeFromPathname(pathname: string): string | null {
   const m = pathname.trim().match(/^\/room\/([^/]+)\/?$/i);

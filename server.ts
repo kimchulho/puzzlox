@@ -198,6 +198,13 @@ async function startServer() {
       });
     }
 
+    if (normalizedUsername.startsWith("toss_")) {
+      return res.status(400).json({
+        message:
+          "'toss_'로 시작하는 아이디는 예약되어 있어 가입할 수 없습니다. 다른 아이디를 사용해 주세요.",
+      });
+    }
+
     const { data: existingIdentity, error: existingError } = await authSupabase
       .from("user_identities")
       .select("id")
