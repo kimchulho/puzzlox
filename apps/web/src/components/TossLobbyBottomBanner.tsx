@@ -1,8 +1,10 @@
 import { TossAds } from "@apps-in-toss/web-framework";
 import { useEffect, useRef, useState } from "react";
 
-/** 앱인토스 콘솔 테스트용 리스트형 배너 ID @see https://developers-apps-in-toss.toss.im/ads/develop.html */
-export const TOSS_LOBBY_TEST_BANNER_AD_GROUP_ID = "ait-ad-test-banner-id";
+/** 앱인토스 콘솔 라이브 리스트형 배너 ID @see https://developers-apps-in-toss.toss.im/ads/develop.html */
+export const TOSS_LOBBY_BANNER_AD_GROUP_ID = "ait.v2.live.4a380cf984524a90";
+// 테스트 광고 ID:
+// export const TOSS_LOBBY_BANNER_AD_GROUP_ID = "ait-ad-test-banner-id";
 
 type InitState = "idle" | "pending" | "ok" | "fail";
 let tossAdsInitState: InitState = "idle";
@@ -72,7 +74,7 @@ export function TossLobbyBottomBanner({
     if (!supported || !adsReady || !containerRef.current) return;
 
     const el = containerRef.current;
-    const attached = TossAds.attachBanner(TOSS_LOBBY_TEST_BANNER_AD_GROUP_ID, el, {
+    const attached = TossAds.attachBanner(TOSS_LOBBY_BANNER_AD_GROUP_ID, el, {
       theme: "auto",
       tone: "blackAndWhite",
       variant: "expanded",

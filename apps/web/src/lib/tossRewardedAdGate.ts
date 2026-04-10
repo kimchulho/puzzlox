@@ -1,7 +1,9 @@
 import { loadFullScreenAd, showFullScreenAd } from "@apps-in-toss/web-framework";
 
-/** 앱인토스 콘솔 보상형 광고 테스트용 그룹 ID @see https://developers-apps-in-toss.toss.im/bedrock/reference/framework/%EA%B4%91%EA%B3%A0/IntegratedAd.html */
-export const TOSS_REWARDED_AD_TEST_GROUP_ID = "ait-ad-test-rewarded-id";
+/** 앱인토스 콘솔 보상형 광고 라이브 그룹 ID @see https://developers-apps-in-toss.toss.im/bedrock/reference/framework/%EA%B4%91%EA%B3%A0/IntegratedAd.html */
+export const TOSS_REWARDED_AD_GROUP_ID = "ait.v2.live.b10044ea4f814bb9";
+// 테스트 광고 ID:
+// export const TOSS_REWARDED_AD_GROUP_ID = "ait-ad-test-rewarded-id";
 
 const LS_SEEN_ROOMS = "toss_puzzle_reward_ad_seen_room_ids";
 
@@ -72,12 +74,12 @@ export async function runTossRewardedRoomEntry(roomId: number, enter: () => void
     };
 
     loadUnregister = loadFullScreenAd({
-      options: { adGroupId: TOSS_REWARDED_AD_TEST_GROUP_ID },
+      options: { adGroupId: TOSS_REWARDED_AD_GROUP_ID },
       onEvent: (event) => {
         if (event.type !== "loaded") return;
         let rewarded = false;
         showUnregister = showFullScreenAd({
-          options: { adGroupId: TOSS_REWARDED_AD_TEST_GROUP_ID },
+          options: { adGroupId: TOSS_REWARDED_AD_GROUP_ID },
           onEvent: (ev) => {
             if (ev.type === "userEarnedReward") {
               rewarded = true;
