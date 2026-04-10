@@ -2496,7 +2496,8 @@ const Lobby = ({
         selectedUrl={imageUrl}
         onSelect={(url) => {
           setImageUrl(url);
-          setImageSource(myUploadedUrlSet.has(url) ? "custom" : "public");
+          // 갤러리(공개 + 내가 올린 사진 카테고리)에서 고른 경우 탭은 계속 갤러리로 유지.
+          setImageSource("public");
         }}
         onDeleteImage={handleDeleteMyUploadedImage}
         isKo={isKo}
