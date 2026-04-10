@@ -408,6 +408,7 @@ const Lobby = ({
   const [imageUrl, setImageUrl] = useState("");
   const [imageSource, setImageSource] = useState<'public' | 'custom'>('public');
   const [publicImages, setPublicImages] = useState<any[]>([]);
+  const [myUploadedImages, setMyUploadedImages] = useState<any[]>([]);
   const [isImageModalOpen, setIsImageModalOpen] = useState(false);
   const [puzzleShotOpen, setPuzzleShotOpen] = useState(false);
   const [showCustomUploadLoginModal, setShowCustomUploadLoginModal] = useState(false);
@@ -474,6 +475,32 @@ const Lobby = ({
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchMyUploadedImages = async () => {
+      if (!user?.id) {
+        if (!cancelled) setMyUploadedImages([]);
+        return;
+      }
+      const { data, error } = await supabase
+        .from("puzzle_images")
+        .select("*")
+        .eq("created_by", user.id)
+        .neq("is_public", true);
+      if (cancelled) return;
+      if (error || !data) {
+        console.error("Failed to load my uploaded puzzle images:", error);
+        setMyUploadedImages([]);
+        return;
+      }
+      setMyUploadedImages(data);
+    };
+    void fetchMyUploadedImages();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!user) {
@@ -550,6 +577,39 @@ const Lobby = ({
       setImageUrl(LOBBY_PUBLIC_IMAGE_FALLBACK_URL);
     }
   }, [user, imageSource, publicImages]);
+
+  const myUploadCategoryLabel = isKo ? "내가 올린 사진" : "My uploads";
+  const galleryImages = useMemo(() => {
+    const out: any[] = [];
+    const seenByUrl = new Set<string>();
+    for (const row of myUploadedImages) {
+      const url = typeof row?.url === "string" ? row.url : "";
+      if (!url || seenByUrl.has(url)) continue;
+      seenByUrl.add(url);
+      out.push({
+        ...row,
+        category: myUploadCategoryLabel,
+        __gallerySource: "custom",
+      });
+    }
+    for (const row of publicImages) {
+      const url = typeof row?.url === "string" ? row.url : "";
+      if (!url || seenByUrl.has(url)) continue;
+      seenByUrl.add(url);
+      out.push({
+        ...row,
+        __gallerySource: "public",
+      });
+    }
+    return out;
+  }, [myUploadedImages, publicImages, myUploadCategoryLabel]);
+  const myUploadedUrlSet = useMemo(() => {
+    return new Set(
+      myUploadedImages
+        .map((row) => (typeof row?.url === "string" ? row.url : ""))
+        .filter((u): u is string => u !== "")
+    );
+  }, [myUploadedImages]);
 
   useEffect(() => {
     const onFullscreenChange = () => setIsFullscreen(!!document.fullscreenElement);
@@ -2353,9 +2413,12 @@ const Lobby = ({
       <ImageSelectorModal
         isOpen={isImageModalOpen}
         onClose={() => setIsImageModalOpen(false)}
-        images={publicImages}
+        images={galleryImages}
         selectedUrl={imageUrl}
-        onSelect={setImageUrl}
+        onSelect={(url) => {
+          setImageUrl(url);
+          setImageSource(myUploadedUrlSet.has(url) ? "custom" : "public");
+        }}
         tossStyling={!!tossUi}
       />
 
