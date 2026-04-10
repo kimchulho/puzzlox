@@ -2,6 +2,8 @@ export const ROOM_EVENTS = {
   JoinRoom: "join_room",
   PlayerPresence: "player_presence",
   PuzzleCompleted: "puzzle_completed",
+  /** 관리자 전용: 방 조각/로비 상태 유지보수 후 클라이언트 동기화 */
+  AdminRoomMaintenance: "admin_room_maintenance",
   SyncTime: "sync_time",
   MoveBatch: "move_batch",
   CursorMove: "cursor_move",
@@ -20,6 +22,12 @@ export interface JoinRoomPayload {
   username?: string;
 }
 export type PuzzleCompletedPayload = number;
+
+export interface AdminRoomMaintenancePayload {
+  roomId: number;
+  kind: "pieces_unlocked" | "room_status";
+  status?: "active" | "completed";
+}
 
 export interface PlayerPresencePayload {
   roomId: number;

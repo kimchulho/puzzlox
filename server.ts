@@ -1599,6 +1599,42 @@ async function startServer() {
     }
     scheduleRoomPieceStateFlush(roomId);
   };
+  /** 관리자가 DB에서 잠금 해제한 뒤 서버 메모리의 단조 잠금 추적을 초기화 */
+  const clearRoomSolvedServerState = (roomId: number) => {
+    const t = roomPieceStateFlushTimer.get(roomId);
+    if (t) {
+      clearTimeout(t);
+      roomPieceStateFlushTimer.delete(roomId);
+    }
+    roomPieceStatePending.delete(roomId);
+    roomSolvedPieceIds.delete(roomId);
+    roomSolvedPieceOwner.delete(roomId);
+  };
+  /** 한 조각만 서버 메모리에서 잠금 추적 제거(단건 DB 해제용) */
+  const removePieceFromSolvedServerState = (roomId: number, pieceIndex: number) => {
+    const solved = roomSolvedPieceIds.get(roomId);
+    if (solved) {
+      solved.delete(pieceIndex);
+      if (solved.size === 0) roomSolvedPieceIds.delete(roomId);
+    }
+    const owners = roomSolvedPieceOwner.get(roomId);
+    if (owners) {
+      owners.delete(pieceIndex);
+      if (owners.size === 0) roomSolvedPieceOwner.delete(roomId);
+    }
+    const pending = roomPieceStatePending.get(roomId);
+    if (pending?.has(pieceIndex)) {
+      pending.delete(pieceIndex);
+      if (pending.size === 0) {
+        roomPieceStatePending.delete(roomId);
+        const tm = roomPieceStateFlushTimer.get(roomId);
+        if (tm) {
+          clearTimeout(tm);
+          roomPieceStateFlushTimer.delete(roomId);
+        }
+      }
+    }
+  };
   const endSocketPlaySession = (socketId: string) => {
     const session = socketUserPlaySessions.get(socketId);
     if (!session) return;
@@ -2195,6 +2231,168 @@ async function startServer() {
       socketUserId.delete(socket.id);
       socketUserPlaySessions.delete(socket.id);
     });
+  });
+
+  const adminRequired = async (req: Request, res: Response, next: NextFunction) => {
+    if (!authSupabase) {
+      return res.status(503).json({
+        message: "Auth server misconfigured. Set SUPABASE_SERVICE_ROLE_KEY in .env.",
+      });
+    }
+    const token = parseBearerToken(req.headers.authorization);
+    if (!token) {
+      return res.status(401).json({ message: "Missing access token." });
+    }
+    let decoded: JwtPayload;
+    try {
+      decoded = jwt.verify(token, jwtSecret) as JwtPayload;
+    } catch {
+      return res.status(401).json({ message: "Invalid or expired access token." });
+    }
+    const uid = Number(decoded.sub);
+    if (!Number.isFinite(uid) || uid <= 0) {
+      return res.status(403).json({ message: "Forbidden." });
+    }
+    const { data, error } = await authSupabase
+      .from("users")
+      .select("role")
+      .eq("id", uid)
+      .maybeSingle();
+    if (error || String((data as { role?: unknown } | null)?.role ?? "") !== "admin") {
+      return res.status(403).json({ message: "Forbidden." });
+    }
+    return next();
+  };
+
+  app.post("/api/admin/rooms/:roomId/unlock-solved-pieces", adminRequired, async (req, res) => {
+    const roomId = Number(req.params.roomId);
+    if (!Number.isFinite(roomId) || roomId <= 0) {
+      return res.status(400).json({ message: "Invalid room id." });
+    }
+    const { data, error } = await authSupabase!
+      .from("pieces")
+      .update({ is_locked: false, snapped_by: null })
+      .eq("room_id", roomId)
+      .eq("is_locked", true)
+      .select("piece_index");
+    if (error) {
+      return res.status(500).json({ message: error.message });
+    }
+    const unlockedCount = Array.isArray(data) ? data.length : 0;
+    clearRoomSolvedServerState(roomId);
+    io.to(roomId.toString()).emit(ROOM_EVENTS.AdminRoomMaintenance, {
+      roomId,
+      kind: "pieces_unlocked",
+    });
+    roomsSummaryCache.clear();
+    return res.json({ ok: true, unlockedCount });
+  });
+
+  app.post("/api/admin/rooms/:roomId/unlock-one-piece", adminRequired, async (req, res) => {
+    const roomId = Number(req.params.roomId);
+    const pieceIndex = Math.floor(Number((req.body ?? {}).pieceIndex));
+    if (!Number.isFinite(roomId) || roomId <= 0) {
+      return res.status(400).json({ message: "Invalid room id." });
+    }
+    if (!Number.isFinite(pieceIndex) || pieceIndex < 0) {
+      return res.status(400).json({ message: "pieceIndex must be a non-negative integer." });
+    }
+    const { data: roomRow, error: roomErr } = await authSupabase!
+      .from("rooms")
+      .select("piece_count")
+      .eq("id", roomId)
+      .maybeSingle();
+    if (roomErr) {
+      return res.status(500).json({ message: roomErr.message });
+    }
+    if (!roomRow) {
+      return res.status(404).json({ message: "Room not found." });
+    }
+    const pc = Math.max(0, Math.floor(Number((roomRow as { piece_count?: unknown }).piece_count ?? 0)));
+    if (pc <= 0 || pieceIndex >= pc) {
+      return res.status(400).json({ message: `pieceIndex must be between 0 and ${Math.max(0, pc - 1)}.` });
+    }
+
+    removePieceFromSolvedServerState(roomId, pieceIndex);
+
+    const { data, error } = await authSupabase!
+      .from("pieces")
+      .update({ is_locked: false, snapped_by: null })
+      .eq("room_id", roomId)
+      .eq("piece_index", pieceIndex)
+      .eq("is_locked", true)
+      .select("piece_index");
+    if (error) {
+      return res.status(500).json({ message: error.message });
+    }
+    const changed = Array.isArray(data) && data.length > 0;
+
+    io.to(roomId.toString()).emit(ROOM_EVENTS.AdminRoomMaintenance, {
+      roomId,
+      kind: "pieces_unlocked",
+    });
+    roomsSummaryCache.clear();
+    return res.json({ ok: true, pieceIndex, changed });
+  });
+
+  app.patch("/api/admin/rooms/:roomId/lobby-status", adminRequired, async (req, res) => {
+    const roomId = Number(req.params.roomId);
+    const status = (req.body ?? {}).status;
+    if (!Number.isFinite(roomId) || roomId <= 0) {
+      return res.status(400).json({ message: "Invalid room id." });
+    }
+    if (status !== "active" && status !== "completed") {
+      return res.status(400).json({ message: "status must be 'active' or 'completed'." });
+    }
+    const completedAt = status === "completed" ? new Date().toISOString() : null;
+    const { error } = await authSupabase!
+      .from("rooms")
+      .update({ status, completed_at: completedAt } as Record<string, unknown>)
+      .eq("id", roomId);
+    if (error) {
+      return res.status(500).json({ message: error.message });
+    }
+
+    const rs = roomStates.get(roomId);
+    if (rs) {
+      if (status === "completed") {
+        rs.isCompleted = true;
+        if (rs.lastResumeTime) {
+          rs.accumulatedTime += (Date.now() - rs.lastResumeTime) / 1000;
+          rs.lastResumeTime = null;
+        }
+      } else {
+        rs.isCompleted = false;
+        if (rs.users.size > 0 && rs.lastResumeTime == null) {
+          rs.lastResumeTime = Date.now();
+        }
+      }
+      const syncPayload: SyncTimePayload = {
+        accumulatedTime: getCurrentPlayTime(rs),
+        isRunning: status === "active" && rs.users.size > 0,
+      };
+      io.to(roomId.toString()).emit(ROOM_EVENTS.SyncTime, syncPayload);
+    } else {
+      const { data: row } = await supabase
+        .from("rooms")
+        .select("total_play_time_seconds")
+        .eq("id", roomId)
+        .maybeSingle();
+      const acc = Number((row as { total_play_time_seconds?: unknown } | null)?.total_play_time_seconds ?? 0);
+      const syncPayload: SyncTimePayload = {
+        accumulatedTime: Number.isFinite(acc) ? acc : 0,
+        isRunning: status === "active",
+      };
+      io.to(roomId.toString()).emit(ROOM_EVENTS.SyncTime, syncPayload);
+    }
+
+    io.to(roomId.toString()).emit(ROOM_EVENTS.AdminRoomMaintenance, {
+      roomId,
+      kind: "room_status",
+      status,
+    });
+    roomsSummaryCache.clear();
+    return res.json({ ok: true, status });
   });
 
   // 30초 주기의 느린 타이머 루프 (DB 백업용, 네트워크 통신 없음)

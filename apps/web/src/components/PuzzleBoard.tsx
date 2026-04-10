@@ -10,10 +10,11 @@
 } from 'react';
 import * as PIXI from 'pixi.js';
 import { throttle } from 'lodash';
-import { Clock, Users, Trophy, ChevronLeft, X, Palette, LayoutGrid, Zap, Heart, Image as ImageIcon, Bot, Maximize, Minimize, RotateCcw, Share2, Plus, Minus, Crosshair, Wifi, WifiOff } from 'lucide-react';
+import { Clock, Users, Trophy, ChevronLeft, X, Palette, LayoutGrid, Zap, Heart, Image as ImageIcon, Bot, Maximize, Minimize, RotateCcw, Share2, Plus, Minus, Crosshair, Wifi, WifiOff, Shield } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 import confetti from 'canvas-confetti';
 import {
+  AdminRoomMaintenancePayload,
   CursorMovePayload,
   LockAppliedPayload,
   LockDeniedPayload,
@@ -28,6 +29,7 @@ import { REALTIME_CHANNEL_STATES } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabaseClient';
 import { encodeRoomId, roomPath, tossIntossRoomUrl } from '../lib/roomCode';
 import { recordUserRoomVisit } from '../lib/recordUserRoomVisit';
+import { apiUrl } from '../lib/apiBase';
 import { canClusterLockOnBoard, canPieceLockOnBoard, normalizePuzzleDifficulty, type PuzzleDifficulty } from '../lib/puzzleDifficulty';
 import { createPuzzleHintLayer, type PuzzleHintLayer } from '../lib/puzzleHintLayer';
 
@@ -202,6 +204,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
   const socketScoreSyncRef = useRef<((payload: ScoreSyncPayload) => void) | null>(null);
   const socketMoveBatchRef = useRef<((payload: MoveBatchPayload) => void) | null>(null);
   const socketCursorMoveRef = useRef<((payload: CursorMovePayload) => void) | null>(null);
+  const socketAdminMaintenanceRef = useRef<((payload: AdminRoomMaintenancePayload) => void) | null>(null);
   const mainTextureRef = useRef<PIXI.Texture | null>(null);
   const objectUrlRef = useRef<string | null>(null);
   const puzzleBackTextureRef = useRef<PIXI.Texture | null>(null);
@@ -242,6 +245,11 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
   const [isQrLoading, setIsQrLoading] = useState(false);
   const [isQrError, setIsQrError] = useState(false);
   const [showBotMenu, setShowBotMenu] = useState(false);
+  const [showAdminRoomMenu, setShowAdminRoomMenu] = useState(false);
+  const [adminRoomActionBusy, setAdminRoomActionBusy] = useState(false);
+  const [roomLobbyStatus, setRoomLobbyStatus] = useState<"active" | "completed" | null>(null);
+  /** 관리자: 조각 하나만 풀기 — 화면 표시는 1부터 (왼쪽 위 = 1) */
+  const [adminSinglePieceDisplayNo, setAdminSinglePieceDisplayNo] = useState("1");
   const [showMosaicModal, setShowMosaicModal] = useState(false);
   const [mosaicError, setMosaicError] = useState<string | null>(null);
   const [isGameSocketConnected, setIsGameSocketConnected] = useState(true);
@@ -276,6 +284,123 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
   const [easyBgOpacityPct, setEasyBgOpacityPct] = useState(20);
   const [maxPlayers, setMaxPlayers] = useState(8);
   const isKo = locale === 'ko';
+  const runAdminUnlockPieces = useCallback(async () => {
+    const token = localStorage.getItem("puzzle_access_token");
+    if (!token) {
+      alert(isKo ? "로그인이 필요합니다." : "Please sign in.");
+      return;
+    }
+    setAdminRoomActionBusy(true);
+    try {
+      const res = await fetch(apiUrl(`/api/admin/rooms/${roomId}/unlock-solved-pieces`), {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const j = (await res.json().catch(() => ({}))) as { message?: string; unlockedCount?: number };
+      if (!res.ok) {
+        alert(j.message || (isKo ? "요청 실패" : "Request failed"));
+        return;
+      }
+      alert(
+        isKo
+          ? `맞춤(고정) 조각 ${j.unlockedCount ?? 0}개를 다시 움직일 수 있게 DB에 반영했습니다.`
+          : `Unlocked ${j.unlockedCount ?? 0} snapped piece(s) in the database.`,
+      );
+    } finally {
+      setAdminRoomActionBusy(false);
+      setShowAdminRoomMenu(false);
+    }
+  }, [roomId, isKo]);
+
+  const runAdminUnlockOnePiece = useCallback(async () => {
+    const token = localStorage.getItem("puzzle_access_token");
+    if (!token) {
+      alert(isKo ? "로그인이 필요합니다." : "Please sign in.");
+      return;
+    }
+    const display = adminSinglePieceDisplayNo.trim();
+    const displayNum = parseInt(display, 10);
+    if (!Number.isFinite(displayNum) || displayNum < 1 || displayNum > totalPieces) {
+      alert(
+        isKo
+          ? `조각 번호는 1부터 ${totalPieces} 사이로 입력해 주세요.`
+          : `Enter a piece number from 1 to ${totalPieces}.`,
+      );
+      return;
+    }
+    const pieceIndex = displayNum - 1;
+    setAdminRoomActionBusy(true);
+    try {
+      const res = await fetch(apiUrl(`/api/admin/rooms/${roomId}/unlock-one-piece`), {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ pieceIndex }),
+      });
+      const j = (await res.json().catch(() => ({}))) as {
+        message?: string;
+        changed?: boolean;
+        pieceIndex?: number;
+      };
+      if (!res.ok) {
+        alert(j.message || (isKo ? "요청 실패" : "Request failed"));
+        return;
+      }
+      if (j.changed === false) {
+        alert(
+          isKo
+            ? `조각 ${displayNum}번은 DB에 고정(맞춤) 상태가 아니었습니다. 서버 상태는 정리했습니다.`
+            : `Piece ${displayNum} was not locked in the DB; server state was cleared if needed.`,
+        );
+        return;
+      }
+      alert(isKo ? `조각 ${displayNum}번 고정을 해제했습니다.` : `Unlocked piece ${displayNum}.`);
+    } finally {
+      setAdminRoomActionBusy(false);
+    }
+  }, [roomId, isKo, totalPieces, adminSinglePieceDisplayNo]);
+
+  const runAdminLobbyStatus = useCallback(
+    async (status: "active" | "completed") => {
+      const token = localStorage.getItem("puzzle_access_token");
+      if (!token) {
+        alert(isKo ? "로그인이 필요합니다." : "Please sign in.");
+        return;
+      }
+      setAdminRoomActionBusy(true);
+      try {
+        const res = await fetch(apiUrl(`/api/admin/rooms/${roomId}/lobby-status`), {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ status }),
+        });
+        const j = (await res.json().catch(() => ({}))) as { message?: string };
+        if (!res.ok) {
+          alert(j.message || (isKo ? "요청 실패" : "Request failed"));
+          return;
+        }
+        setRoomLobbyStatus(status);
+        alert(
+          isKo
+            ? status === "completed"
+              ? "로비에서 이 방을 완료된 퍼즐로 표시했습니다."
+              : "로비에서 이 방을 진행 중인 퍼즐로 표시했습니다."
+            : status === "completed"
+              ? "Room is listed as completed in the lobby."
+              : "Room is listed as in progress in the lobby.",
+        );
+      } finally {
+        setAdminRoomActionBusy(false);
+        setShowAdminRoomMenu(false);
+      }
+    },
+    [roomId, isKo],
+  );
   const puzzleDifficulty = normalizePuzzleDifficulty(difficulty);
   const isNightmare = puzzleDifficulty === "nightmare";
   const [nightmareFloatingRotatePos, setNightmareFloatingRotatePos] = useState<{
@@ -747,6 +872,27 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
   }, [roomId, user?.id]);
 
   useEffect(() => {
+    let cancelled = false;
+    void supabase
+      .from("rooms")
+      .select("status")
+      .eq("id", roomId)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (cancelled) return;
+        const s = data?.status != null ? String(data.status) : "";
+        if (s === "active" || s === "completed") {
+          setRoomLobbyStatus(s);
+        } else {
+          setRoomLobbyStatus(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [roomId]);
+
+  useEffect(() => {
     // Socket.io 연결 및 플레이 타임 동기화 (기준 시간만 받음)
     const backendUrl = import.meta.env.VITE_BACKEND_URL;
     const socket = backendUrl ? io(backendUrl) : io();
@@ -795,6 +941,12 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
               const lockIcon = piece.getChildByLabel("lockIcon");
               if (lockIcon) lockIcon.visible = false;
               boardLockedPieceIdsRef.current.add(pieceId);
+            } else {
+              boardLockedPieceIdsRef.current.delete(pieceId);
+              piece.eventMode = "static";
+              piece.cursor = "pointer";
+              const lockIcon = piece.getChildByLabel("lockIcon");
+              if (lockIcon) (lockIcon as PIXI.Container).visible = false;
             }
           }
         }
@@ -856,6 +1008,9 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
     });
     socket.on(ROOM_EVENTS.CursorMove, (payload: CursorMovePayload) => {
       socketCursorMoveRef.current?.(payload);
+    });
+    socket.on(ROOM_EVENTS.AdminRoomMaintenance, (payload: AdminRoomMaintenancePayload) => {
+      socketAdminMaintenanceRef.current?.(payload);
     });
 
     if (socket.connected) {
@@ -3262,6 +3417,61 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
               triggerFireworks();
               playShineEffect();
             }
+          }
+        };
+
+        const adminSyncPiecesFromDb = async () => {
+          const { data: pieceData, error } = await supabase
+            .from("pieces")
+            .select("piece_index, x, y, is_locked, rotation_quarter, is_back_face")
+            .eq("room_id", roomId);
+          if (error || !Array.isArray(pieceData)) {
+            console.warn("[PuzzleBoard] adminSyncPiecesFromDb failed", error?.message ?? "no data");
+            return;
+          }
+          let anyUnlocked = false;
+          for (const row of pieceData) {
+            const pieceId = Number((row as { piece_index?: unknown }).piece_index);
+            const piece = pieces.current.get(pieceId);
+            if (!piece) continue;
+            const nextX = Number((row as { x?: unknown }).x);
+            const nextY = Number((row as { y?: unknown }).y);
+            if (Number.isFinite(nextX)) piece.x = nextX;
+            if (Number.isFinite(nextY)) piece.y = nextY;
+            const isLockedRow = (row as { is_locked?: unknown }).is_locked === true;
+            applyPieceOrientationVisual(
+              piece,
+              isLockedRow ? 0 : Number((row as { rotation_quarter?: unknown }).rotation_quarter ?? 0),
+              isLockedRow ? false : (row as { is_back_face?: unknown }).is_back_face === true
+            );
+            targetPositions.set(pieceId, { x: piece.x, y: piece.y });
+            if (isLockedRow) {
+              piece.eventMode = "none";
+              piece.zIndex = 0;
+              piece.alpha = 1;
+              boardLockedPieceIdsRef.current.add(pieceId);
+              hintLayer?.revealPiece(pieceId, GRID_COLS, GRID_ROWS);
+            } else {
+              anyUnlocked = true;
+              boardLockedPieceIdsRef.current.delete(pieceId);
+              solvedPieceOwner.delete(pieceId);
+              snappedSoundedPieceIds.delete(pieceId);
+              piece.eventMode = "static";
+              piece.cursor = "pointer";
+              topZIndex++;
+              piece.zIndex = topZIndex;
+              const lockIcon = piece.getChildByLabel("lockIcon");
+              if (lockIcon) (lockIcon as PIXI.Container).visible = false;
+            }
+          }
+          if (anyUnlocked) {
+            isCompletedRef.current = false;
+          }
+          await checkCompletion();
+          try {
+            app.renderer.render(world);
+          } catch {
+            /* noop */
           }
         };
 
@@ -6466,6 +6676,18 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
             handleRemoteCursorMove(payload);
           };
 
+          socketAdminMaintenanceRef.current = (payload) => {
+            if (payload.roomId !== roomId) return;
+            bumpInbound();
+            if (payload.kind === "pieces_unlocked") {
+              void adminSyncPiecesFromDb();
+              return;
+            }
+            if (payload.kind === "room_status" && payload.status === "active") {
+              isCompletedRef.current = false;
+            }
+          };
+
           channel
           .on('broadcast', { event: 'lock' }, ({ payload }) => {
             bumpInbound();
@@ -6706,6 +6928,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
       socketLockReleasedRef.current = null;
       socketLockDeniedRef.current = null;
       socketScoreSyncRef.current = null;
+      socketAdminMaintenanceRef.current = null;
       socketMoveBatchRef.current = null;
       socketCursorMoveRef.current = null;
       refreshPieceOwnerOverlayRef.current = null;
@@ -7544,6 +7767,143 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
               </span>
             </div>
           )}
+
+          {isAdminUser ? (
+            <div className="relative shrink-0">
+              <button
+                type="button"
+                onClick={() => setShowAdminRoomMenu(!showAdminRoomMenu)}
+                disabled={adminRoomActionBusy}
+                className={`flex items-center justify-center rounded-md border transition-colors shrink-0 ${
+                  isTossMode
+                    ? `h-8 w-10 rounded-lg border-none ${
+                        showAdminRoomMenu
+                          ? "bg-[#EAF2FF] text-[#2F6FE4]"
+                          : "bg-[#F4F8FF] text-[#2F6FE4]"
+                      }`
+                    : `w-7 h-7 ${
+                        showAdminRoomMenu
+                          ? "bg-amber-500/20 border-amber-500/50 text-amber-300"
+                          : "bg-slate-800/50 border-slate-700/50 text-slate-400 hover:bg-slate-700 hover:text-white"
+                      }`
+                } ${adminRoomActionBusy ? "opacity-50" : ""}`}
+                title={isKo ? "관리자 도구" : "Admin tools"}
+                aria-label={isKo ? "관리자 도구" : "Admin tools"}
+              >
+                <Shield size={14} className={adminRoomActionBusy ? "animate-pulse" : ""} />
+              </button>
+              {showAdminRoomMenu ? (
+                <div
+                  className={`absolute top-full mt-2 right-0 rounded-xl p-3 z-50 w-[min(92vw,17rem)] ${
+                    isTossMode
+                      ? "bg-white border border-[#D9E8FF] text-[#2F6FE4] shadow-[0_8px_20px_rgba(47,111,228,0.12)]"
+                      : "bg-slate-800 border border-slate-700 text-slate-200"
+                  }`}
+                >
+                  <div
+                    className={`flex items-center justify-between mb-2 pb-2 border-b ${
+                      isTossMode ? "border-[#EAF2FF]" : "border-slate-700"
+                    }`}
+                  >
+                    <span className={`text-xs font-bold uppercase tracking-wider ${isTossMode ? "text-[#2F6FE4]" : "text-slate-300"}`}>
+                      {isKo ? "관리자" : "Admin"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setShowAdminRoomMenu(false)}
+                      className={isTossMode ? "text-[#2F6FE4]" : "text-slate-500 hover:text-white"}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                  <p className={`text-[11px] leading-snug mb-2 ${isTossMode ? "text-slate-500" : "text-slate-400"}`}>
+                    {isKo
+                      ? "맞춤(고정) 조각만 DB에서 풀고, 로비 목록의 완료/진행 상태를 바꿉니다."
+                      : "Unlock snapped pieces in the DB; toggle lobby completed / in-progress."}
+                  </p>
+                  <div className="flex flex-col gap-1.5">
+                    <button
+                      type="button"
+                      disabled={adminRoomActionBusy}
+                      onClick={() => void runAdminUnlockPieces()}
+                      className={`text-left text-sm rounded-lg px-3 py-2 transition-colors disabled:opacity-50 ${
+                        isTossMode
+                          ? "bg-[#F4F8FF] hover:bg-[#EAF2FF] text-[#2F6FE4]"
+                          : "bg-slate-900/50 hover:bg-slate-700 text-slate-200"
+                      }`}
+                    >
+                      {isKo ? "고정 조각 다시 풀기 (DB)" : "Unlock snapped pieces (DB)"}
+                    </button>
+                    <div
+                      className={`rounded-lg px-2 py-2 space-y-1.5 ${
+                        isTossMode ? "bg-[#F4F8FF]/80" : "bg-slate-900/40"
+                      }`}
+                    >
+                      <label
+                        className={`block text-[11px] font-medium ${isTossMode ? "text-slate-600" : "text-slate-400"}`}
+                        htmlFor="admin-unlock-one-piece"
+                      >
+                        {isKo ? "조각 하나만 풀기 (번호 1~N, 왼쪽 위=1)" : "Unlock one piece (# 1–N, top-left = 1)"}
+                      </label>
+                      <div className="flex gap-1.5 items-center">
+                        <input
+                          id="admin-unlock-one-piece"
+                          type="number"
+                          min={1}
+                          max={Math.max(1, totalPieces)}
+                          inputMode="numeric"
+                          value={adminSinglePieceDisplayNo}
+                          onChange={(e) => setAdminSinglePieceDisplayNo(e.target.value)}
+                          disabled={adminRoomActionBusy}
+                          className={`min-w-0 flex-1 rounded-md border px-2 py-1 text-sm tabular-nums ${
+                            isTossMode
+                              ? "border-[#D9E8FF] bg-white text-[#2F6FE4]"
+                              : "border-slate-600 bg-slate-900 text-slate-100"
+                          }`}
+                        />
+                        <button
+                          type="button"
+                          disabled={adminRoomActionBusy || totalPieces < 1}
+                          onClick={() => void runAdminUnlockOnePiece()}
+                          className={`shrink-0 rounded-md px-2 py-1 text-xs font-semibold transition-colors disabled:opacity-50 ${
+                            isTossMode
+                              ? "bg-[#2F6FE4] text-white hover:bg-[#2570d9]"
+                              : "bg-amber-600/90 text-white hover:bg-amber-600"
+                          }`}
+                        >
+                          {isKo ? "해제" : "Unlock"}
+                        </button>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={adminRoomActionBusy || roomLobbyStatus === "completed"}
+                      onClick={() => void runAdminLobbyStatus("completed")}
+                      className={`text-left text-sm rounded-lg px-3 py-2 transition-colors disabled:opacity-50 ${
+                        isTossMode
+                          ? "bg-[#F4F8FF] hover:bg-[#EAF2FF] text-[#2F6FE4]"
+                          : "bg-slate-900/50 hover:bg-slate-700 text-slate-200"
+                      }`}
+                    >
+                      {isKo ? "로비: 완료로 표시" : "Lobby: mark completed"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={adminRoomActionBusy || roomLobbyStatus === "active"}
+                      onClick={() => void runAdminLobbyStatus("active")}
+                      className={`text-left text-sm rounded-lg px-3 py-2 transition-colors disabled:opacity-50 ${
+                        isTossMode
+                          ? "bg-[#F4F8FF] hover:bg-[#EAF2FF] text-[#2F6FE4]"
+                          : "bg-slate-900/50 hover:bg-slate-700 text-slate-200"
+                      }`}
+                    >
+                      {isKo ? "로비: 진행 중으로" : "Lobby: mark in progress"}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
 
           {!isTossMode && isAdminUser ? (
             <div className="relative">
