@@ -5,6 +5,7 @@
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -231,6 +232,8 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
   const [imageLoadError, setImageLoadError] = useState<string | null>(null);
   const [isColorBotLoading, setIsColorBotLoading] = useState(false);
   const [scores, setScores] = useState<{username: string, score: number}[]>([]);
+  /** 로그인 username → 표시용 닉네임(게스트·미가입은 맵에 없음 → username 그대로) */
+  const [scoreDisplayNames, setScoreDisplayNames] = useState<Record<string, string>>({});
   const [activeUsers, setActiveUsers] = useState<Set<string>>(new Set());
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [showPieceOwnerOverlay, setShowPieceOwnerOverlay] = useState(false);
@@ -870,6 +873,44 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
       cancelled = true;
     };
   }, [roomId, user?.id]);
+
+  const scoreUsernamesKey = useMemo(
+    () =>
+      [...new Set(scores.map((s) => String(s.username ?? "").trim()).filter(Boolean))].sort().join("\0"),
+    [scores],
+  );
+
+  useEffect(() => {
+    const names = scoreUsernamesKey ? scoreUsernamesKey.split("\0") : [];
+    if (names.length === 0) {
+      setScoreDisplayNames({});
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const { data } = await supabase
+        .from("users")
+        .select("username, nickname")
+        .in("username", names);
+      if (cancelled) return;
+      const next: Record<string, string> = {};
+      for (const n of names) {
+        next[n] = n;
+      }
+      if (data) {
+        for (const row of data as { username?: string; nickname?: string | null }[]) {
+          const u = String(row.username ?? "").trim();
+          if (!u) continue;
+          const nn = String(row.nickname ?? "").trim();
+          next[u] = nn || u;
+        }
+      }
+      setScoreDisplayNames(next);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [scoreUsernamesKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -8246,6 +8287,10 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
                 {scores.map((score, idx) => {
                   const currentUsername = user ? user.username : localStorage.getItem('puzzle_guest_name');
                   const isMe = score.username === currentUsername;
+                  const rankLabel =
+                    isMe
+                      ? currentPlayerLabel
+                      : (scoreDisplayNames[score.username] ?? score.username);
                   return (
                   <div key={idx} className={`flex items-center justify-between p-1 rounded-lg transition-colors ${
                     isMe
@@ -8291,8 +8336,8 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
                             : isLeaderboardPeerLive(score.username)
                             ? (isTossMode ? 'text-[#333D4B]' : 'text-slate-200')
                             : (isTossMode ? 'text-[#8B95A1]' : 'text-slate-400')
-                        }`} title={score.username}>
-                          {score.username}
+                        }`} title={rankLabel !== score.username ? score.username : rankLabel}>
+                          {rankLabel}
                         </span>
                         {isMe && <span className={`text-[9px] font-bold px-1 py-0.5 rounded-full ml-1 ${
                           isTossMode ? "text-[#2F6FE4] bg-[#EAF2FF]" : "text-indigo-300 bg-indigo-500/25"
