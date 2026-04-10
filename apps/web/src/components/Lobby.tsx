@@ -394,6 +394,11 @@ const Lobby = ({
   locale?: 'ko' | 'en';
   onToggleLocale?: () => void;
 }) => {
+  const displayName = (u?: { username?: string; nickname?: string | null } | null) => {
+    const nn = (u?.nickname ?? "").toString().trim();
+    if (nn) return nn;
+    return (u?.username ?? "").toString().trim();
+  };
   const [activeRooms, setActiveRooms] = useState<any[]>([]);
   const [continueRoomIdsServer, setContinueRoomIdsServer] = useState<number[]>([]);
   const [serverVisitAtMs, setServerVisitAtMs] = useState<Map<number, number>>(() => new Map());
@@ -845,7 +850,7 @@ const Lobby = ({
   const handleCreateRoom = async () => {
     const currentImageUrl = imageUrl;
     console.log('Creating room with image URL:', currentImageUrl);
-    const creatorName = user ? user.username : guestName.trim();
+    const creatorName = user ? displayName(user) : guestName.trim();
     if (!creatorName) return;
     if (!currentImageUrl.trim()) return;
 
@@ -1333,7 +1338,7 @@ const Lobby = ({
                         : "text-indigo-400 hover:text-indigo-300"
                     }`}
                   >
-                    {user.username}
+                    {displayName(user)}
                   </button>
                   <span className={`hidden sm:inline ${tossLight ? "text-slate-500" : "text-slate-500"}`}>
                     님
@@ -1498,7 +1503,7 @@ const Lobby = ({
                   onClick={() => onOpenDashboard?.()}
                   className="max-w-[38vw] truncate rounded-md px-2 py-1 text-sm font-semibold text-[#2F6FE4] transition-colors hover:bg-[#EAF2FF] hover:text-[#2563EB]"
                 >
-                  {user.username}
+                  {displayName(user)}
                 </button>
                 <button
                   type="button"

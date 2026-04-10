@@ -35,6 +35,7 @@ import type { JoinRoomMeta } from "@contracts/roomJoin";
 type DashboardUser = {
   id?: number;
   username: string;
+  nickname?: string | null;
   role?: string;
   completed_puzzles?: number;
   placed_pieces?: number;
@@ -126,6 +127,8 @@ export default function UserDashboard({
   const [participated, setParticipated] = useState<RoomRow[]>([]);
   const [myUploads, setMyUploads] = useState<UploadRow[]>([]);
   const [profileSaving, setProfileSaving] = useState(false);
+  const [nicknameSaving, setNicknameSaving] = useState(false);
+  const [nicknameDraft, setNicknameDraft] = useState("");
   const [copyOk, setCopyOk] = useState(false);
   const [profileQrDataUrl, setProfileQrDataUrl] = useState<string | null>(null);
   /** 참여한 퍼즐방: 전체 / 내가 만든 방만 / 내가 만든 방 제외 */
@@ -175,7 +178,12 @@ export default function UserDashboard({
         });
         const j = (await res.json().catch(() => ({}))) as {
           message?: string;
-          user?: { username: string; completed_puzzles?: number; placed_pieces?: number };
+          user?: {
+            username: string;
+            nickname?: string | null;
+            completed_puzzles?: number;
+            placed_pieces?: number;
+          };
           participatedRooms?: RoomRow[];
         };
         if (!res.ok) {
@@ -187,6 +195,7 @@ export default function UserDashboard({
           j.user
             ? {
                 username: j.user.username,
+                nickname: (j.user as { nickname?: string | null }).nickname ?? null,
                 completed_puzzles: j.user.completed_puzzles,
                 placed_pieces: j.user.placed_pieces,
               }
@@ -238,6 +247,11 @@ export default function UserDashboard({
       setLoading(false);
     }
   }, [mode, publicUsername, isKo]);
+
+  useEffect(() => {
+    const next = (dashUser?.nickname ?? dashUser?.username ?? "").toString();
+    setNicknameDraft(next);
+  }, [dashUser?.nickname, dashUser?.username]);
 
   useEffect(() => {
     void load();
@@ -318,6 +332,40 @@ export default function UserDashboard({
     }
   };
 
+  const saveNickname = async () => {
+    const token = localStorage.getItem("puzzle_access_token");
+    if (!token) return;
+    const nextNickname = nicknameDraft.trim();
+    if (!nextNickname) {
+      setError(isKo ? "닉네임은 비워둘 수 없습니다." : "Nickname cannot be empty.");
+      return;
+    }
+    setNicknameSaving(true);
+    try {
+      const res = await fetch(apiUrl("/api/user/profile"), {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ nickname: nextNickname }),
+      });
+      const j = (await res.json().catch(() => ({}))) as { user?: DashboardUser; message?: string };
+      if (!res.ok || !j.user) {
+        setError(j?.message || `HTTP ${res.status}`);
+        return;
+      }
+      setDashUser(j.user);
+      if (setUser && user) {
+        const merged = { ...user, ...j.user };
+        localStorage.setItem("puzzle_user", JSON.stringify(merged));
+        setUser(merged);
+      }
+    } finally {
+      setNicknameSaving(false);
+    }
+  };
+
   const enterRoom = async (roomId: number) => {
     const { data, error: qErr } = await supabase
       .from("rooms")
@@ -372,8 +420,8 @@ export default function UserDashboard({
         ? "내 대시보드"
         : "My dashboard"
       : isKo
-        ? `${dashUser?.username ?? publicUsername ?? ""}님의 프로필`
-        : `${dashUser?.username ?? publicUsername ?? ""}'s profile`;
+        ? `${(dashUser?.nickname ?? dashUser?.username ?? publicUsername ?? "").toString()}님의 프로필`
+        : `${(dashUser?.nickname ?? dashUser?.username ?? publicUsername ?? "").toString()}'s profile`;
 
   const participatedFiltered = participated.filter((r) => {
     if (mode === "public") {
@@ -628,6 +676,35 @@ export default function UserDashboard({
                       {isKo ? "프로필 공개" : "Profile public"}
                     </span>
                   </label>
+                </div>
+                <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <label className={`text-xs ${toss ? "text-slate-600" : "text-slate-400"}`}>
+                    {isKo ? "닉네임" : "Nickname"}
+                  </label>
+                  <input
+                    type="text"
+                    maxLength={32}
+                    value={nicknameDraft}
+                    onChange={(e) => setNicknameDraft(e.target.value)}
+                    className={
+                      toss
+                        ? "w-full rounded-lg border border-[#D9E8FF] bg-white px-3 py-2 text-sm text-slate-900 focus:border-[#3182F6] focus:outline-none"
+                        : "w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+                    }
+                    placeholder={isKo ? "닉네임 입력" : "Enter nickname"}
+                  />
+                  <button
+                    type="button"
+                    disabled={nicknameSaving || nicknameDraft.trim() === ""}
+                    onClick={() => void saveNickname()}
+                    className={
+                      toss
+                        ? "rounded-lg bg-[#3182F6] px-3 py-2 text-xs font-medium text-white hover:bg-[#2563EB] disabled:opacity-50"
+                        : "rounded-lg bg-indigo-500 px-3 py-2 text-xs font-medium text-white hover:bg-indigo-400 disabled:opacity-50"
+                    }
+                  >
+                    {nicknameSaving ? (isKo ? "저장 중..." : "Saving...") : isKo ? "닉네임 저장" : "Save nickname"}
+                  </button>
                 </div>
                 {dashUser?.profile_public !== false ? (
                   <div className={skin.profileDivTop}>

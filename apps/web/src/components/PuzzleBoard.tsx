@@ -6935,7 +6935,11 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
     user?.username != null && String(user.username).trim() !== ""
       ? String(user.username).trim()
       : (localStorage.getItem("puzzle_guest_name") || "guest");
-  const isAdminUser = currentPlayerId.trim().toLowerCase() === "admin";
+  const currentPlayerLabel =
+    user?.nickname != null && String(user.nickname).trim() !== ""
+      ? String(user.nickname).trim()
+      : currentPlayerId;
+  const isAdminUser = user?.role === "admin";
 
   const tossWidePuzzleInsetPx =
     isTossMode && isTossWideMode
@@ -7479,8 +7483,8 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
           {isTossMode ? (
             <>
               <div className="flex items-center justify-center gap-2 flex-1 min-w-0 h-8 rounded-lg bg-[#F4F8FF] px-3 text-[#2F6FE4]">
-                <span className="text-[11px] font-semibold max-w-[120px] truncate whitespace-nowrap" title={currentPlayerId}>
-                  {currentPlayerId}
+                <span className="text-[11px] font-semibold max-w-[120px] truncate whitespace-nowrap" title={currentPlayerLabel}>
+                  {currentPlayerLabel}
                 </span>
               </div>
               <div className="flex items-center justify-center gap-2 flex-1 min-w-0 h-8 rounded-lg bg-[#F4F8FF] px-3 text-[#2F6FE4]">
@@ -7494,8 +7498,8 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
                 className="flex items-center gap-1 px-2 h-7 rounded-md border flex-1 sm:flex-none justify-center bg-slate-800/50 border-slate-700/50"
                 title={isKo ? "현재 플레이어" : "Current player"}
               >
-                <span className="text-[11px] font-medium max-w-[96px] truncate whitespace-nowrap text-slate-300" title={currentPlayerId}>
-                  {currentPlayerId}
+                <span className="text-[11px] font-medium max-w-[96px] truncate whitespace-nowrap text-slate-300" title={currentPlayerLabel}>
+                  {currentPlayerLabel}
                 </span>
               </div>
               <div

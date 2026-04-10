@@ -141,7 +141,7 @@ export const ImageSelectorModal: React.FC<ImageSelectorModalProps> = ({
                     />
                     <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-slate-900/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200" />
                     
-                    <div className="absolute bottom-0 left-0 right-0 p-3 translate-y-4 group-hover:translate-y-0 transition-transform duration-200">
+                    <div className="absolute bottom-0 left-0 right-0 p-3 translate-y-0 group-hover:-translate-y-0.5 transition-transform duration-200">
                       <p className="text-white text-sm font-medium truncate">
                         {img.title || `${img.category} - ${img.style}`}
                       </p>

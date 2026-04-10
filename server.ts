@@ -302,13 +302,14 @@ async function startServer() {
       .from("users")
       .insert({
         username: normalizedUsername,
+        nickname: normalizedUsername,
         password: passwordHash,
         role: normalizedUsername === "admin" ? "admin" : "user",
         completed_puzzles: 0,
         placed_pieces: 0,
         profile_public: true,
       })
-      .select("id, username, role, completed_puzzles, placed_pieces, profile_public, created_at, last_active_at")
+      .select("id, username, nickname, role, completed_puzzles, placed_pieces, profile_public, created_at, last_active_at")
       .single();
 
     if (userInsertError || !createdUser) {
@@ -378,7 +379,7 @@ async function startServer() {
 
     const { data: user, error: userError } = await authSupabase
       .from("users")
-      .select("id, username, role, completed_puzzles, placed_pieces, profile_public, created_at, last_active_at")
+      .select("id, username, nickname, role, completed_puzzles, placed_pieces, profile_public, created_at, last_active_at")
       .eq("id", identity.user_id)
       .maybeSingle();
 
@@ -546,6 +547,7 @@ async function startServer() {
         .from("users")
         .insert({
           username: generatedUsername,
+          nickname: generatedUsername,
           password: "",
           role: "user",
           completed_puzzles: 0,
@@ -585,7 +587,7 @@ async function startServer() {
 
     const { data: user, error: userError } = await authSupabase
       .from("users")
-      .select("id, username, role, completed_puzzles, placed_pieces, profile_public, created_at, last_active_at")
+      .select("id, username, nickname, role, completed_puzzles, placed_pieces, profile_public, created_at, last_active_at")
       .eq("id", userId)
       .single();
 
@@ -625,7 +627,7 @@ async function startServer() {
 
     const { data: user, error } = await authSupabase
       .from("users")
-      .select("id, username, role, completed_puzzles, placed_pieces, profile_public, created_at, last_active_at")
+      .select("id, username, nickname, role, completed_puzzles, placed_pieces, profile_public, created_at, last_active_at")
       .eq("id", userId)
       .maybeSingle();
 
@@ -651,12 +653,21 @@ async function startServer() {
     }
     const body = req.body ?? {};
     const profilePublic = body.profilePublic;
-    if (typeof profilePublic !== "boolean") {
-      return res.status(400).json({ message: "profilePublic (boolean) is required." });
+    const nicknameRaw = (body as Record<string, unknown>).nickname;
+    const nextNickname =
+      nicknameRaw == null ? undefined : String(nicknameRaw).trim().slice(0, 32);
+    if (typeof profilePublic !== "boolean" && typeof nextNickname === "undefined") {
+      return res.status(400).json({ message: "profilePublic(boolean) or nickname(string) is required." });
     }
+    if (typeof nextNickname === "string" && nextNickname.length === 0) {
+      return res.status(400).json({ message: "nickname cannot be empty." });
+    }
+    const updatePayload: Record<string, unknown> = {};
+    if (typeof profilePublic === "boolean") updatePayload.profile_public = profilePublic;
+    if (typeof nextNickname === "string") updatePayload.nickname = nextNickname;
     const { error: upErr } = await authSupabase
       .from("users")
-      .update({ profile_public: profilePublic })
+      .update(updatePayload)
       .eq("id", userId);
     if (upErr) {
       console.warn("[api/user/profile]", upErr.message);
@@ -664,7 +675,7 @@ async function startServer() {
     }
     const { data: user, error: readErr } = await authSupabase
       .from("users")
-      .select("id, username, role, completed_puzzles, placed_pieces, profile_public, created_at, last_active_at")
+      .select("id, username, nickname, role, completed_puzzles, placed_pieces, profile_public, created_at, last_active_at")
       .eq("id", userId)
       .maybeSingle();
     if (readErr || !user) {
@@ -775,7 +786,7 @@ async function startServer() {
 
     const { data: me, error: meErr } = await authSupabase
       .from("users")
-      .select("id, username, role, completed_puzzles, placed_pieces, profile_public, created_at, last_active_at")
+      .select("id, username, nickname, role, completed_puzzles, placed_pieces, profile_public, created_at, last_active_at")
       .eq("id", userId)
       .maybeSingle();
     if (meErr || !me) {
@@ -935,7 +946,7 @@ async function startServer() {
 
     const { data: subject, error: subErr } = await authSupabase
       .from("users")
-      .select("id, username, completed_puzzles, placed_pieces, profile_public")
+      .select("id, username, nickname, completed_puzzles, placed_pieces, profile_public")
       .eq("username", raw)
       .maybeSingle();
 
@@ -1071,6 +1082,7 @@ async function startServer() {
     return res.json({
       user: {
         username: subject.username,
+        nickname: (subject as { nickname?: unknown }).nickname ?? null,
         completed_puzzles: subject.completed_puzzles,
         placed_pieces: subject.placed_pieces,
       },

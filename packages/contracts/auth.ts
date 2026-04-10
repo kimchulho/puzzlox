@@ -1,6 +1,8 @@
 export interface AuthUser {
   id: number;
   username: string;
+  /** Display name shown in UI; defaults to username on signup/backfill. */
+  nickname?: string | null;
   role: string;
   completed_puzzles: number;
   placed_pieces: number;
