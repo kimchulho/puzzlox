@@ -38,18 +38,6 @@ function tossShellIsKo() {
   }
 }
 
-async function fetchRoomRowWithPasswordGate(roomId: number): Promise<Record<string, unknown> | null> {
-  const { data, error } = await supabase
-    .from("rooms")
-    .select(ROOM_PUBLIC_COLUMNS)
-    .eq("id", roomId)
-    .maybeSingle();
-  if (!data || error) return null;
-  const hasPw = (data as { has_password?: boolean }).has_password === true;
-  const ok = await ensureRoomPasswordVerified(roomId, hasPw, tossShellIsKo());
-  return ok ? (data as Record<string, unknown>) : null;
-}
-
 export default function GameShell({
   user,
   setUser,
@@ -177,6 +165,31 @@ export default function GameShell({
   }, [loading, currentRoom, pathname, showAdmin]);
 
   useEffect(() => {
+    const gateUser = user ? { id: user.id, username: user.username } : null;
+    async function loadRoomRowWithPasswordGate(roomId: number): Promise<Record<string, unknown> | null> {
+      const { data, error } = await supabase
+        .from("rooms")
+        .select(ROOM_PUBLIC_COLUMNS)
+        .eq("id", roomId)
+        .maybeSingle();
+      if (!data || error) return null;
+      const hasPw = (data as { has_password?: boolean }).has_password === true;
+      const row = data as {
+        id: unknown;
+        created_by?: unknown;
+        creator_name?: string | null;
+      };
+      const ok = await ensureRoomPasswordVerified(roomId, hasPw, tossShellIsKo(), {
+        room: {
+          id: Number(row.id),
+          created_by: row.created_by,
+          creator_name: row.creator_name ?? null,
+        },
+        user: gateUser,
+      });
+      return ok ? (data as Record<string, unknown>) : null;
+    }
+
     const roomParam = roomCodeFromLocation();
 
     if (roomParam) {
@@ -184,7 +197,7 @@ export default function GameShell({
       const decodedId = isNumeric ? parseInt(roomParam, 10) : decodeRoomId(roomParam);
 
       if (decodedId) {
-        void fetchRoomRowWithPasswordGate(decodedId).then((data) => {
+        void loadRoomRowWithPasswordGate(decodedId).then((data) => {
           if (data) {
             const url = `${window.location.pathname}${window.location.search}`;
             // 스택에 로비(/)가 없으면 뒤로가기·go(-2)로 로비 복귀가 불가능해 한 번 깔아 둡니다.
@@ -233,7 +246,7 @@ export default function GameShell({
       const isNumeric = /^\d+$/.test(roomParamPop);
       const decodedId = isNumeric ? parseInt(roomParamPop, 10) : decodeRoomId(roomParamPop);
       if (decodedId) {
-        void fetchRoomRowWithPasswordGate(decodedId).then((data) => {
+        void loadRoomRowWithPasswordGate(decodedId).then((data) => {
           if (data) {
             setCurrentRoom(roomRowToShellRoom(data));
           }
@@ -243,7 +256,7 @@ export default function GameShell({
 
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, []);
+  }, [user]);
 
   const handleJoinRoom = (
     roomId: number,

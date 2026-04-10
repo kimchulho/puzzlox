@@ -29,7 +29,11 @@ import { motion } from 'motion/react';
 import { encodeRoomId, parseRoomNumberOrCode } from '../lib/roomCode';
 import { recordUserRoomVisit } from '../lib/recordUserRoomVisit';
 import { apiUrl } from '../lib/apiBase';
-import { ensureRoomPasswordVerified, ROOM_PUBLIC_COLUMNS } from '../lib/roomAccess';
+import {
+  ensureRoomPasswordVerified,
+  roomRowHasPasswordLobby,
+  ROOM_PUBLIC_COLUMNS,
+} from '../lib/roomAccess';
 import { ImageSelectorModal } from './ImageSelectorModal';
 import { PuzzleShotModal } from './PuzzleShotModal';
 import {
@@ -730,7 +734,10 @@ const Lobby = ({
     };
     if (user?.id) insertRow.created_by = user.id;
     const pwTrim = password.trim();
-    if (pwTrim) insertRow.password = pwTrim;
+    if (pwTrim) {
+      insertRow.room_password = pwTrim;
+      insertRow.password = pwTrim;
+    }
 
     const { data, error } = await supabase.from('rooms').insert([insertRow]).select(ROOM_PUBLIC_COLUMNS);
 
@@ -932,7 +939,7 @@ const Lobby = ({
     opts?: { skipTossRewardedAd?: boolean }
   ) => {
     if (room.has_password) {
-      const ok = await ensureRoomPasswordVerified(room.id, true, isKo);
+      const ok = await ensureRoomPasswordVerified(room.id, true, isKo, { room, user });
       if (!ok) return;
     }
 
@@ -1063,15 +1070,19 @@ const Lobby = ({
       lobbyContinueRoomOrder,
       serverVisitAtMs,
     );
-    return lobbyDifficultyFilter === "all"
-      ? sorted
-      : sorted.filter((r) => roomRowDifficulty(r) === lobbyDifficultyFilter);
+    const byDiff =
+      lobbyDifficultyFilter === "all"
+        ? sorted
+        : sorted.filter((r) => roomRowDifficulty(r) === lobbyDifficultyFilter);
+    return byDiff.filter((r) => !roomRowHasPasswordLobby(r));
   }, [activeRooms, user, lobbyContinueRoomOrder, serverVisitAtMs, lobbyDifficultyFilter]);
 
   const filteredCompletedRooms = useMemo(() => {
-    return lobbyDifficultyFilter === "all"
-      ? completedRooms
-      : completedRooms.filter((r) => roomRowDifficulty(r) === lobbyDifficultyFilter);
+    const byDiff =
+      lobbyDifficultyFilter === "all"
+        ? completedRooms
+        : completedRooms.filter((r) => roomRowDifficulty(r) === lobbyDifficultyFilter);
+    return byDiff.filter((r) => !roomRowHasPasswordLobby(r));
   }, [completedRooms, lobbyDifficultyFilter]);
 
   const visibleActiveRooms = useMemo(

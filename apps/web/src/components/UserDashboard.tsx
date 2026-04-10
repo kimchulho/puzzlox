@@ -18,7 +18,12 @@ import {
 } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import { apiUrl } from "../lib/apiBase";
-import { ensureRoomPasswordVerified, ROOM_PUBLIC_COLUMNS } from "../lib/roomAccess";
+import {
+  ensureRoomPasswordVerified,
+  profileParticipatedRowHasPassword,
+  roomRowHasPasswordLobby,
+  ROOM_PUBLIC_COLUMNS,
+} from "../lib/roomAccess";
 import { tossIntossProfileUrl } from "../lib/roomCode";
 import {
   normalizePuzzleDifficulty,
@@ -53,6 +58,8 @@ type RoomRow = {
   scoreInRoom?: number;
   iAmCreator?: boolean;
   imageHiddenReason?: string | null;
+  /** 공개 프로필 API: 비밀번호 방 여부(테스트 필터용). */
+  hasPassword?: boolean;
 };
 
 type UploadRow = {
@@ -185,7 +192,44 @@ export default function UserDashboard({
               }
             : null
         );
-        setParticipated(Array.isArray(j.participatedRooms) ? j.participatedRooms : []);
+        const participatedFromApi = Array.isArray(j.participatedRooms) ? j.participatedRooms : [];
+        const apiHasPasswordMeta = participatedFromApi.some(
+          (r) =>
+            (r as Record<string, unknown>).hasPassword != null ||
+            (r as Record<string, unknown>).has_password != null
+        );
+        let participatedNext = participatedFromApi;
+        /**
+         * Remote profile API(구버전)가 hasPassword/has_password 를 내려주지 않는 경우:
+         * 클라이언트에서 rooms.has_password 로 보강해 공개 프로필 비밀번호 필터가 동작하도록 한다.
+         */
+        if (!apiHasPasswordMeta && participatedFromApi.length > 0) {
+          const roomIds = [...new Set(participatedFromApi.map((r) => Number(r.roomId)).filter((id) => Number.isFinite(id) && id > 0))];
+          if (roomIds.length > 0) {
+            const { data: roomMeta, error: roomMetaErr } = await supabase
+              .from("rooms")
+              .select("id, has_password")
+              .in("id", roomIds);
+            if (!roomMetaErr && Array.isArray(roomMeta)) {
+              const hasPwById = new Map<number, boolean>();
+              for (const row of roomMeta) {
+                const rid = Number((row as { id?: unknown }).id);
+                if (!Number.isFinite(rid) || rid <= 0) continue;
+                hasPwById.set(
+                  rid,
+                  roomRowHasPasswordLobby({
+                    has_password: (row as { has_password?: unknown }).has_password,
+                  })
+                );
+              }
+              participatedNext = participatedFromApi.map((r) => ({
+                ...r,
+                hasPassword: hasPwById.get(Number(r.roomId)) === true,
+              }));
+            }
+          }
+        }
+        setParticipated(participatedNext);
         setMyUploads([]);
       }
     } catch (e) {
@@ -284,8 +328,23 @@ export default function UserDashboard({
       setError(isKo ? "방 정보를 불러올 수 없습니다." : "Could not load room.");
       return;
     }
-    const row = data as { id: number; image_url: string; piece_count: number; difficulty?: string; has_password?: boolean };
-    const ok = await ensureRoomPasswordVerified(row.id, row.has_password === true, isKo);
+    const row = data as {
+      id: number;
+      image_url: string;
+      piece_count: number;
+      difficulty?: string;
+      has_password?: boolean;
+      created_by?: unknown;
+      creator_name?: string | null;
+    };
+    const ok = await ensureRoomPasswordVerified(row.id, row.has_password === true, isKo, {
+      room: {
+        id: row.id,
+        created_by: row.created_by,
+        creator_name: row.creator_name ?? null,
+      },
+      user: user ? { id: user.id, username: user.username } : null,
+    });
     if (!ok) return;
     onJoinRoom(row.id, row.image_url, row.piece_count, normalizePuzzleDifficulty(row.difficulty));
   };
@@ -317,7 +376,10 @@ export default function UserDashboard({
         : `${dashUser?.username ?? publicUsername ?? ""}'s profile`;
 
   const participatedFiltered = participated.filter((r) => {
-    if (mode !== "self") return true;
+    if (mode === "public") {
+      const hp = profileParticipatedRowHasPassword(r);
+      return !hp;
+    }
     if (participatedRoomFilter === "hide_created") return !r.iAmCreator;
     if (participatedRoomFilter === "only_created") return r.iAmCreator === true;
     return true;
@@ -326,7 +388,7 @@ export default function UserDashboard({
 
   useEffect(() => {
     setParticipatedListPage(1);
-  }, [participatedRoomFilter]);
+  }, [participatedRoomFilter, mode]);
 
   const participatedTotalPages = Math.max(
     1,
@@ -725,13 +787,17 @@ export default function UserDashboard({
                 <p className={skin.empty}>{isKo ? "아직 기록이 없습니다." : "No history yet."}</p>
               ) : participatedFiltered.length === 0 ? (
                 <p className={skin.empty}>
-                  {participatedRoomFilter === "only_created" && !hasMyCreatedInParticipated
+                  {mode === "public"
                     ? isKo
-                      ? "참여 목록에 내가 만든 방이 없습니다."
-                      : "You have no rooms you created in this list."
-                    : isKo
-                      ? "필터 조건에 맞는 방이 없습니다."
-                      : "No rooms match this filter."}
+                      ? "표시할 방이 없습니다."
+                      : "Nothing to show."
+                    : participatedRoomFilter === "only_created" && !hasMyCreatedInParticipated
+                      ? isKo
+                        ? "참여 목록에 내가 만든 방이 없습니다."
+                        : "You have no rooms you created in this list."
+                      : isKo
+                        ? "필터 조건에 맞는 방이 없습니다."
+                        : "No rooms match this filter."}
                 </p>
               ) : (
                 <>

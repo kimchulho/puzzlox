@@ -109,6 +109,21 @@ function roomIsPrivateForListing(row: { is_private?: unknown }): boolean {
   return row.is_private === true;
 }
 
+/** 로비 진행/완료 목록: 비밀번호 방 제외 (`has_password`·`room_password`·레거시 `password` 컬럼까지 동일 기준). */
+function roomHasPasswordForLobbyList(row: {
+  has_password?: unknown;
+  room_password?: unknown;
+  password?: unknown;
+}): boolean {
+  const hp = row.has_password;
+  if (hp === true || hp === "true" || hp === "t" || hp === 1 || hp === "1") return true;
+  const rp = row.room_password;
+  if (rp != null && String(rp).trim() !== "") return true;
+  const leg = row.password;
+  if (leg != null && String(leg).trim() !== "") return true;
+  return false;
+}
+
 type AuthProvider = "web_local" | "toss";
 
 interface JwtPayload {
@@ -163,13 +178,23 @@ async function startServer() {
     res.json(payload);
   });
 
-  /** 로비/클라이언트 응답에서 방 비밀번호 평문 컬럼 제거 */
+  /** 로비/클라이언트 응답에서 방 입장 비밀번호 컬럼 제거 */
   function omitRoomPassword(row: Record<string, unknown>) {
-    const { password: _p, ...rest } = row;
+    const { password: _p, room_password: _rp, ...rest } = row;
     return rest;
   }
 
-  /** 비밀번호 방 입장 검증 (서비스 롤로만 `rooms.password` 조회). */
+  const issueToken = (payload: JwtPayload) =>
+    jwt.sign(payload, jwtSecret, { expiresIn: "7d" });
+
+  const parseBearerToken = (authorizationHeader?: string) => {
+    if (!authorizationHeader || !authorizationHeader.startsWith("Bearer ")) {
+      return null;
+    }
+    return authorizationHeader.slice("Bearer ".length).trim();
+  };
+
+  /** 비밀번호 방 입장 검증. 방장(JWT sub === created_by)은 비밀번호 없이 통과. */
   app.post("/api/rooms/verify-password", async (req, res) => {
     if (!authSupabase) {
       return res.status(503).json({
@@ -183,7 +208,7 @@ async function startServer() {
     }
     const { data: room, error } = await authSupabase
       .from("rooms")
-      .select("has_password, password")
+      .select("has_password, password, room_password, created_by")
       .eq("id", roomId)
       .maybeSingle();
     if (error) {
@@ -192,26 +217,33 @@ async function startServer() {
     if (!room) {
       return res.status(404).json({ message: "Room not found." });
     }
-    if (room.has_password !== true) {
+
+    const token = parseBearerToken(
+      typeof req.headers.authorization === "string" ? req.headers.authorization : undefined
+    );
+    if (token) {
+      try {
+        const decoded = jwt.verify(token, jwtSecret) as JwtPayload;
+        const uid = Number(decoded.sub);
+        const cb = room.created_by != null ? Number(room.created_by) : NaN;
+        if (Number.isFinite(uid) && uid > 0 && Number.isFinite(cb) && cb === uid) {
+          return res.status(204).end();
+        }
+      } catch {
+        /* invalid token → 비밀번호 검사로 진행 */
+      }
+    }
+
+    if (!roomHasPasswordForLobbyList(room as Record<string, unknown>)) {
       return res.status(204).end();
     }
-    const expected = (room.password ?? "").toString().trim();
+    const expected = (room.room_password ?? room.password ?? "").toString().trim();
     const got = attemptRaw == null ? "" : String(attemptRaw).trim();
     if (expected === "" || got !== expected) {
       return res.status(403).json({ message: "Wrong password." });
     }
     return res.status(204).end();
   });
-
-  const issueToken = (payload: JwtPayload) =>
-    jwt.sign(payload, jwtSecret, { expiresIn: "7d" });
-
-  const parseBearerToken = (authorizationHeader?: string) => {
-    if (!authorizationHeader || !authorizationHeader.startsWith("Bearer ")) {
-      return null;
-    }
-    return authorizationHeader.slice("Bearer ".length).trim();
-  };
 
   const authRequired = (req: AuthedRequest, res: Response, next: NextFunction) => {
     const token = parseBearerToken(req.headers.authorization);
@@ -893,13 +925,13 @@ async function startServer() {
       const { data: rooms, error: roomsErr } = await authSupabase
         .from("rooms")
         .select(
-          "id, image_url, piece_count, difficulty, status, creator_name, created_by, created_at, completed_at, is_private"
+          "id, image_url, piece_count, difficulty, status, creator_name, created_by, created_at, completed_at, is_private, has_password, room_password, password"
         )
         .in("id", [...roomIdSet]);
       if (roomsErr) {
         return res.status(500).json({ message: roomsErr.message });
       }
-      /** 공개 프로필: `is_private` 인 방(직접 업로드)은 목록에서 제외. */
+      /** 공개 프로필: 직접 업로드만 제외. 비밀번호 방은 `hasPassword` 로 내려 클라이언트에서 필터(테스트·제외). */
       const roomsForPublicProfile = (rooms ?? []).filter(
         (room: Record<string, unknown>) => !roomIsPrivateForListing(room)
       );
@@ -936,6 +968,7 @@ async function startServer() {
           lastVisitedAt: visitByRoom.get(rid) ?? null,
           scoreInRoom: userScoreSum,
           iAmCreator: subjectCreatedThis,
+          hasPassword: roomHasPasswordForLobbyList(room),
         };
       });
       participatedRooms.sort((a, b) => {
@@ -1016,11 +1049,10 @@ async function startServer() {
 
   app.get("/api/rooms/summary", async (req, res) => {
     /**
-     * 로비 진행/완료 목록: `is_private === true`(직접 업로드) 방은 누구에게도 노출하지 않음.
-     * 해당 방은 로그인 후 내 대시보드에서만 확인 (참여 목록·직접 업로드 섹션).
-     * Bearer 토큰은 예전과 달리 응답 분기에 쓰이지 않으며, 무시해도 됨.
+     * 로비 진행/완료 목록: 직접 업로드(`is_private`)·비밀번호(`has_password`) 방은 목록에서 제외.
+     * 입장은 방 코드 등으로만 가능.
      */
-    const cacheKey = "lobby:public-lists";
+    const cacheKey = "lobby:public-lists-v3";
     const cached = roomsSummaryCache.get(cacheKey);
     const now = Date.now();
     if (cached && now - cached.at < ROOMS_SUMMARY_CACHE_TTL_MS) {
@@ -1184,10 +1216,15 @@ async function startServer() {
         room.currentPlayers = roomStates.get(id)?.users.size ?? 0;
       }
     }
-    const isLobbyPublicRoom = (r: { is_private?: unknown }) => !roomIsPrivateForListing(r);
+    const isLobbyListableRoom = (r: {
+      is_private?: unknown;
+      has_password?: unknown;
+      room_password?: unknown;
+      password?: unknown;
+    }) => !roomIsPrivateForListing(r) && !roomHasPasswordForLobbyList(r);
     const payload = {
-      activeRooms: finalActive.filter(isLobbyPublicRoom).map(omitRoomPassword),
-      completedRooms: completedRooms.filter(isLobbyPublicRoom).map(omitRoomPassword),
+      activeRooms: finalActive.filter(isLobbyListableRoom).map(omitRoomPassword),
+      completedRooms: completedRooms.filter(isLobbyListableRoom).map(omitRoomPassword),
     };
     roomsSummaryCache.set(cacheKey, { at: now, payload });
     // Keep cache bounded even if many users hit this endpoint.

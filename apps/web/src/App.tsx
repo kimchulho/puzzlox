@@ -86,7 +86,19 @@ export default function App() {
         if (cancelled) return;
         if (data && !error) {
           const hasPw = (data as { has_password?: boolean }).has_password === true;
-          const allowed = await ensureRoomPasswordVerified(decodedId, hasPw, isKo);
+          const row = data as {
+            id: number;
+            created_by?: unknown;
+            creator_name?: string | null;
+          };
+          const allowed = await ensureRoomPasswordVerified(decodedId, hasPw, isKo, {
+            room: {
+              id: Number(row.id),
+              created_by: row.created_by,
+              creator_name: row.creator_name ?? null,
+            },
+            user: user ? { id: user.id, username: user.username } : null,
+          });
           if (cancelled) return;
           if (!allowed) {
             window.history.replaceState({}, '', '/');
@@ -116,7 +128,7 @@ export default function App() {
       cancelled = true;
       window.removeEventListener('popstate', syncFromLocation);
     };
-  }, [locale]);
+  }, [locale, user]);
 
   const handleJoinRoom = (
     roomId: number,
