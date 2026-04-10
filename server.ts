@@ -673,6 +673,93 @@ async function startServer() {
     return res.json({ user });
   });
 
+  /**
+   * 로그인 사용자가 직접 업로드한 이미지 삭제.
+   * 해당 이미지 URL로 생성된 비공개 방(직접 업로드 기반)도 함께 삭제한다.
+   */
+  app.delete("/api/user/uploaded-image", authRequired, async (req: AuthedRequest, res) => {
+    if (!authSupabase) {
+      return res.status(503).json({
+        message: "Auth server misconfigured. Set SUPABASE_SERVICE_ROLE_KEY in .env.",
+      });
+    }
+    const userId = Number(req.user?.sub);
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return res.status(401).json({ message: "Invalid token subject." });
+    }
+    const imageId = Number((req.body ?? {}).imageId);
+    const imageUrl = ((req.body ?? {}).imageUrl ?? "").toString().trim();
+    if ((!Number.isFinite(imageId) || imageId <= 0) && imageUrl === "") {
+      return res.status(400).json({ message: "imageId or imageUrl is required." });
+    }
+
+    let imageQuery = authSupabase
+      .from("puzzle_images")
+      .select("id, url, is_public, created_by")
+      .eq("created_by", userId)
+      .limit(1);
+    if (Number.isFinite(imageId) && imageId > 0) {
+      imageQuery = imageQuery.eq("id", imageId);
+    } else {
+      imageQuery = imageQuery.eq("url", imageUrl);
+    }
+    const { data: imageRow, error: imageErr } = await imageQuery.maybeSingle();
+    if (imageErr) {
+      return res.status(500).json({ message: imageErr.message });
+    }
+    if (!imageRow) {
+      return res.status(404).json({ message: "Uploaded image not found." });
+    }
+    if (imageRow.is_public === true) {
+      return res.status(400).json({ message: "Public image cannot be deleted from this endpoint." });
+    }
+
+    const targetUrl = String(imageRow.url ?? "").trim();
+    if (!targetUrl) {
+      return res.status(400).json({ message: "Image URL is empty." });
+    }
+
+    const { data: roomsByImage, error: roomsErr } = await authSupabase
+      .from("rooms")
+      .select("id")
+      .eq("image_url", targetUrl)
+      .eq("is_private", true);
+    if (roomsErr) {
+      return res.status(500).json({ message: roomsErr.message });
+    }
+    const roomIds = (roomsByImage ?? [])
+      .map((r) => Number((r as { id?: unknown }).id))
+      .filter((id) => Number.isFinite(id) && id > 0);
+
+    if (roomIds.length > 0) {
+      const { error: piecesDelErr } = await authSupabase.from("pieces").delete().in("room_id", roomIds);
+      if (piecesDelErr) return res.status(500).json({ message: piecesDelErr.message });
+
+      const { error: scoresDelErr } = await authSupabase.from("scores").delete().in("room_id", roomIds);
+      if (scoresDelErr) return res.status(500).json({ message: scoresDelErr.message });
+
+      const { error: visitsDelErr } = await authSupabase
+        .from("user_room_visits")
+        .delete()
+        .in("room_id", roomIds);
+      if (visitsDelErr) return res.status(500).json({ message: visitsDelErr.message });
+
+      const { error: roomsDelErr } = await authSupabase.from("rooms").delete().in("id", roomIds);
+      if (roomsDelErr) return res.status(500).json({ message: roomsDelErr.message });
+    }
+
+    const { error: imageDelErr } = await authSupabase
+      .from("puzzle_images")
+      .delete()
+      .eq("id", imageRow.id)
+      .eq("created_by", userId);
+    if (imageDelErr) {
+      return res.status(500).json({ message: imageDelErr.message });
+    }
+
+    return res.json({ ok: true, deletedRoomCount: roomIds.length, deletedImageId: imageRow.id });
+  });
+
   app.get("/api/user/dashboard", authRequired, async (req: AuthedRequest, res) => {
     if (!authSupabase) {
       return res.status(503).json({

@@ -8,6 +8,8 @@ interface ImageSelectorModalProps {
   images: any[];
   selectedUrl: string;
   onSelect: (url: string) => void;
+  onDeleteImage?: (image: any) => Promise<void> | void;
+  isKo?: boolean;
   /** 앱인토스 로비: 밝은 패널·토스 블루 */
   tossStyling?: boolean;
 }
@@ -18,9 +20,13 @@ export const ImageSelectorModal: React.FC<ImageSelectorModalProps> = ({
   images,
   selectedUrl,
   onSelect,
+  onDeleteImage,
+  isKo = true,
   tossStyling = false,
 }) => {
   const [activeCategory, setActiveCategory] = useState<string>('All');
+  const [pendingDeleteImage, setPendingDeleteImage] = useState<any | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const categories = useMemo(() => {
     const cats = new Set(images.map(img => img.category || 'Uncategorized'));
@@ -150,11 +156,84 @@ export const ImageSelectorModal: React.FC<ImageSelectorModalProps> = ({
                         <Check size={16} />
                       </div>
                     )}
+                    {img.__gallerySource === "custom" && onDeleteImage ? (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setPendingDeleteImage(img);
+                        }}
+                        className={`absolute left-2 top-2 rounded-md px-2 py-1 text-[11px] font-semibold ${
+                          tossStyling
+                            ? "bg-red-500 text-white hover:bg-red-600"
+                            : "bg-red-500/90 text-white hover:bg-red-500"
+                        }`}
+                      >
+                        {isKo ? "삭제" : "Delete"}
+                      </button>
+                    ) : null}
                   </div>
                 ))}
               </div>
             )}
           </div>
+          {pendingDeleteImage ? (
+            <div className="absolute inset-0 z-20 flex items-center justify-center p-4">
+              <div
+                className={`absolute inset-0 ${tossStyling ? "bg-black/35" : "bg-black/55"}`}
+                onClick={() => {
+                  if (!isDeleting) setPendingDeleteImage(null);
+                }}
+              />
+              <div
+                className={`relative w-full max-w-md rounded-2xl p-5 shadow-2xl ${
+                  tossStyling ? "border border-[#D9E8FF] bg-white" : "border border-slate-700 bg-slate-900"
+                }`}
+              >
+                <h4 className={`text-base font-bold ${tossStyling ? "text-slate-900" : "text-white"}`}>
+                  {isKo ? "사진을 삭제할까요?" : "Delete this image?"}
+                </h4>
+                <p className={`mt-2 text-sm leading-relaxed ${tossStyling ? "text-slate-600" : "text-slate-300"}`}>
+                  {isKo
+                    ? "삭제하면 이 사진으로 만든 퍼즐방도 함께 사라집니다. 이 작업은 되돌릴 수 없습니다."
+                    : "Deleting this image also removes puzzle rooms created with it. This cannot be undone."}
+                </p>
+                <div className="mt-4 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    disabled={isDeleting}
+                    onClick={() => setPendingDeleteImage(null)}
+                    className={`rounded-lg px-3 py-2 text-sm font-medium ${
+                      tossStyling
+                        ? "border border-[#D9E8FF] bg-white text-slate-700 hover:bg-[#F4F8FF]"
+                        : "border border-slate-600 bg-slate-800 text-slate-200 hover:bg-slate-700"
+                    } disabled:opacity-50`}
+                  >
+                    {isKo ? "취소" : "Cancel"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isDeleting}
+                    onClick={async () => {
+                      if (!onDeleteImage) return;
+                      try {
+                        setIsDeleting(true);
+                        await onDeleteImage(pendingDeleteImage);
+                        setPendingDeleteImage(null);
+                      } finally {
+                        setIsDeleting(false);
+                      }
+                    }}
+                    className={`rounded-lg px-3 py-2 text-sm font-semibold text-white ${
+                      tossStyling ? "bg-[#f04452] hover:bg-[#e03644]" : "bg-red-500 hover:bg-red-600"
+                    } disabled:opacity-50`}
+                  >
+                    {isDeleting ? (isKo ? "삭제 중..." : "Deleting...") : isKo ? "삭제하기" : "Delete"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </motion.div>
       </div>
     </AnimatePresence>

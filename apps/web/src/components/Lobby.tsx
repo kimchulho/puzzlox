@@ -611,6 +611,56 @@ const Lobby = ({
     );
   }, [myUploadedImages]);
 
+  const handleDeleteMyUploadedImage = async (img: any) => {
+    if (!user?.id) {
+      alert(isKo ? "로그인이 필요합니다." : "Please sign in.");
+      return;
+    }
+    const imageId = Number(img?.id);
+    const targetImageUrl = typeof img?.url === "string" ? img.url : "";
+    if ((!Number.isFinite(imageId) || imageId <= 0) && !targetImageUrl) {
+      throw new Error(isKo ? "이미지 정보를 확인할 수 없습니다." : "Invalid image data.");
+    }
+    const token = localStorage.getItem("puzzle_access_token");
+    if (!token) {
+      throw new Error(isKo ? "로그인 토큰이 없습니다." : "Missing access token.");
+    }
+    const res = await fetch(apiUrl("/api/user/uploaded-image"), {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        imageId: Number.isFinite(imageId) && imageId > 0 ? imageId : undefined,
+        imageUrl: targetImageUrl || undefined,
+      }),
+    });
+    const j = (await res.json().catch(() => ({}))) as {
+      message?: string;
+      deletedRoomCount?: number;
+    };
+    if (!res.ok) {
+      throw new Error(j?.message || `HTTP ${res.status}`);
+    }
+
+    setMyUploadedImages((prev) => prev.filter((x) => Number(x?.id) !== imageId));
+    if (targetImageUrl && imageUrl === targetImageUrl) {
+      const nextPublic =
+        publicImages.length > 0 && typeof publicImages[0]?.url === "string"
+          ? String(publicImages[0].url)
+          : LOBBY_PUBLIC_IMAGE_FALLBACK_URL;
+      setImageSource("public");
+      setImageUrl(nextPublic);
+    }
+    void fetchRooms({ background: true });
+    alert(
+      isKo
+        ? `사진을 삭제했습니다. 관련 퍼즐방 ${Number(j.deletedRoomCount ?? 0)}개도 함께 삭제됐어요.`
+        : `Image deleted. ${Number(j.deletedRoomCount ?? 0)} related puzzle rooms were also removed.`
+    );
+  };
+
   useEffect(() => {
     const onFullscreenChange = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener('fullscreenchange', onFullscreenChange);
@@ -2419,6 +2469,8 @@ const Lobby = ({
           setImageUrl(url);
           setImageSource(myUploadedUrlSet.has(url) ? "custom" : "public");
         }}
+        onDeleteImage={handleDeleteMyUploadedImage}
+        isKo={isKo}
         tossStyling={!!tossUi}
       />
 
