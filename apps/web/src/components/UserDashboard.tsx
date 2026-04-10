@@ -5,6 +5,8 @@ import {
   Check,
   CheckCircle,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Copy,
   Grid,
   Image as ImageIcon,
@@ -16,6 +18,7 @@ import {
 } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import { apiUrl } from "../lib/apiBase";
+import { ensureRoomPasswordVerified, ROOM_PUBLIC_COLUMNS } from "../lib/roomAccess";
 import { tossIntossProfileUrl } from "../lib/roomCode";
 import {
   normalizePuzzleDifficulty,
@@ -64,6 +67,8 @@ type UploadRow = {
 };
 
 type ParticipatedRoomFilter = "all" | "only_created" | "hide_created";
+
+const DASHBOARD_PARTICIPATED_PAGE_SIZE = 10;
 
 function participatedFilterLabel(v: ParticipatedRoomFilter, isKo: boolean): string {
   switch (v) {
@@ -121,6 +126,7 @@ export default function UserDashboard({
     useState<ParticipatedRoomFilter>("all");
   const [participatedFilterOpen, setParticipatedFilterOpen] = useState(false);
   const participatedFilterRef = useRef<HTMLDivElement>(null);
+  const [participatedListPage, setParticipatedListPage] = useState(1);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -157,7 +163,9 @@ export default function UserDashboard({
           setLoading(false);
           return;
         }
-        const res = await fetch(apiUrl(`/api/profile/${encodeURIComponent(u)}`));
+        const res = await fetch(apiUrl(`/api/profile/${encodeURIComponent(u)}`), {
+          cache: "no-store",
+        });
         const j = (await res.json().catch(() => ({}))) as {
           message?: string;
           user?: { username: string; completed_puzzles?: number; placed_pieces?: number };
@@ -267,12 +275,19 @@ export default function UserDashboard({
   };
 
   const enterRoom = async (roomId: number) => {
-    const { data, error: qErr } = await supabase.from("rooms").select("*").eq("id", roomId).maybeSingle();
+    const { data, error: qErr } = await supabase
+      .from("rooms")
+      .select(ROOM_PUBLIC_COLUMNS)
+      .eq("id", roomId)
+      .maybeSingle();
     if (qErr || !data) {
       setError(isKo ? "방 정보를 불러올 수 없습니다." : "Could not load room.");
       return;
     }
-    onJoinRoom(data.id, data.image_url, data.piece_count, normalizePuzzleDifficulty((data as { difficulty?: string }).difficulty));
+    const row = data as { id: number; image_url: string; piece_count: number; difficulty?: string; has_password?: boolean };
+    const ok = await ensureRoomPasswordVerified(row.id, row.has_password === true, isKo);
+    if (!ok) return;
+    onJoinRoom(row.id, row.image_url, row.piece_count, normalizePuzzleDifficulty(row.difficulty));
   };
 
   const copyProfileLink = () => {
@@ -308,6 +323,29 @@ export default function UserDashboard({
     return true;
   });
   const hasMyCreatedInParticipated = participated.some((r) => r.iAmCreator);
+
+  useEffect(() => {
+    setParticipatedListPage(1);
+  }, [participatedRoomFilter]);
+
+  const participatedTotalPages = Math.max(
+    1,
+    Math.ceil(participatedFiltered.length / DASHBOARD_PARTICIPATED_PAGE_SIZE),
+  );
+
+  useEffect(() => {
+    setParticipatedListPage((p) => Math.min(p, participatedTotalPages));
+  }, [participatedTotalPages]);
+
+  const participatedPageClamped = Math.min(
+    Math.max(1, participatedListPage),
+    participatedTotalPages,
+  );
+  const participatedOffset = (participatedPageClamped - 1) * DASHBOARD_PARTICIPATED_PAGE_SIZE;
+  const participatedPageItems = participatedFiltered.slice(
+    participatedOffset,
+    participatedOffset + DASHBOARD_PARTICIPATED_PAGE_SIZE,
+  );
 
   const skin = toss
     ? {
@@ -350,9 +388,17 @@ export default function UserDashboard({
           "flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left text-sm text-slate-800 transition-colors hover:bg-[#EAF2FF]",
         filterMenuOptionActive: "bg-[#EAF2FF] font-medium text-[#2F6FE4]",
         filterMenuOptionDisabled: "cursor-not-allowed text-slate-400 hover:bg-transparent",
+        paginationBar:
+          "mt-4 flex flex-col items-center gap-3 border-t border-[#D9E8FF] pt-4",
+        paginationInfo: "text-center text-xs text-slate-600",
+        paginationNav: "flex items-center justify-center gap-2",
+        paginationBtn:
+          "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[#D9E8FF] bg-white text-sm text-slate-800 transition-colors hover:bg-[#EAF2FF] disabled:pointer-events-none disabled:opacity-40",
         empty: "text-sm text-slate-500",
         joinedLi: "flex gap-3 rounded-2xl border border-[#D9E8FF] bg-white p-3 shadow-sm",
+        joinedGridLi: "flex min-w-0 flex-col gap-2 rounded-2xl border border-[#D9E8FF] bg-white p-2.5 shadow-sm sm:p-3",
         joinedThumb: "relative h-20 w-28 shrink-0 overflow-hidden rounded-lg bg-[#EAF2FF]",
+        joinedGridThumb: "relative h-20 w-full shrink-0 overflow-hidden rounded-lg bg-[#EAF2FF]",
         privateText:
           "flex h-full flex-col items-center justify-center gap-1 px-1 text-center text-[10px] text-slate-500",
         roomCode: "font-mono text-sm text-[#2F6FE4]",
@@ -406,9 +452,17 @@ export default function UserDashboard({
           "flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left text-sm text-slate-200 transition-colors hover:bg-slate-800",
         filterMenuOptionActive: "bg-slate-800 font-medium text-indigo-300",
         filterMenuOptionDisabled: "cursor-not-allowed text-slate-500 hover:bg-transparent",
+        paginationBar:
+          "mt-4 flex flex-col items-center gap-3 border-t border-slate-800 pt-4",
+        paginationInfo: "text-center text-xs text-slate-400",
+        paginationNav: "flex items-center justify-center gap-2",
+        paginationBtn:
+          "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-600 bg-slate-900 text-sm text-slate-200 transition-colors hover:bg-slate-800 disabled:pointer-events-none disabled:opacity-40",
         empty: "text-sm text-slate-500",
         joinedLi: "flex gap-3 rounded-2xl border border-slate-800 bg-slate-900/60 p-3",
+        joinedGridLi: "flex min-w-0 flex-col gap-2 rounded-2xl border border-slate-800 bg-slate-900/60 p-2.5 sm:p-3",
         joinedThumb: "relative h-20 w-28 shrink-0 overflow-hidden rounded-lg bg-slate-800",
+        joinedGridThumb: "relative h-20 w-full shrink-0 overflow-hidden rounded-lg bg-slate-800",
         privateText:
           "flex h-full flex-col items-center justify-center gap-1 px-1 text-center text-[10px] text-slate-500",
         roomCode: "font-mono text-sm text-indigo-300",
@@ -680,8 +734,9 @@ export default function UserDashboard({
                       : "No rooms match this filter."}
                 </p>
               ) : (
-                <ul className="space-y-3">
-                  {participatedFiltered.map((r) => {
+                <>
+                <ul className="m-0 grid list-none grid-cols-2 gap-2 p-0 sm:gap-3" role="list">
+                  {participatedPageItems.map((r) => {
                     const displayTotal =
                       typeof r.totalPieces === "number" && r.totalPieces > 0
                         ? r.totalPieces
@@ -699,8 +754,8 @@ export default function UserDashboard({
                       (displayTotal > 0 && displayLocked >= displayTotal);
                     const barPct = done ? 100 : pctRaw;
                     return (
-                      <li key={r.roomId} className={skin.joinedLi}>
-                        <div className={skin.joinedThumb}>
+                      <li key={r.roomId} className={skin.joinedGridLi}>
+                        <div className={skin.joinedGridThumb}>
                           {r.imageUrl ? (
                             <img src={r.imageUrl} alt="" className="h-full w-full object-cover" />
                           ) : (
@@ -767,7 +822,11 @@ export default function UserDashboard({
                               {isKo ? "최근 방문" : "Last visit"}: {new Date(r.lastVisitedAt).toLocaleString()}
                             </p>
                           ) : null}
-                          <button type="button" onClick={() => void enterRoom(r.roomId)} className={skin.btnEnter}>
+                          <button
+                            type="button"
+                            onClick={() => void enterRoom(r.roomId)}
+                            className={`${skin.btnEnter} w-full`}
+                          >
                             {isKo ? "입장" : "Enter"}
                           </button>
                         </div>
@@ -775,6 +834,44 @@ export default function UserDashboard({
                     );
                   })}
                 </ul>
+                {participatedFiltered.length > DASHBOARD_PARTICIPATED_PAGE_SIZE ? (
+                  <div
+                    className={skin.paginationBar}
+                    role="navigation"
+                    aria-label={isKo ? "참여한 퍼즐방 페이지" : "Joined puzzle rooms pagination"}
+                  >
+                    <p className={skin.paginationInfo}>
+                      {isKo
+                        ? `${participatedOffset + 1}–${participatedOffset + participatedPageItems.length}번째 · 총 ${participatedFiltered.length}개 · ${participatedPageClamped}/${participatedTotalPages} 페이지`
+                        : `Items ${participatedOffset + 1}–${participatedOffset + participatedPageItems.length} of ${participatedFiltered.length} · Page ${participatedPageClamped} / ${participatedTotalPages}`}
+                    </p>
+                    <div className={skin.paginationNav}>
+                      <button
+                        type="button"
+                        className={skin.paginationBtn}
+                        disabled={participatedPageClamped <= 1}
+                        aria-label={isKo ? "이전 페이지" : "Previous page"}
+                        onClick={() => setParticipatedListPage((p) => Math.max(1, p - 1))}
+                      >
+                        <ChevronLeft size={18} aria-hidden />
+                      </button>
+                      <button
+                        type="button"
+                        className={skin.paginationBtn}
+                        disabled={participatedPageClamped >= participatedTotalPages}
+                        aria-label={isKo ? "다음 페이지" : "Next page"}
+                        onClick={() =>
+                          setParticipatedListPage((p) =>
+                            Math.min(participatedTotalPages, p + 1),
+                          )
+                        }
+                      >
+                        <ChevronRight size={18} aria-hidden />
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+                </>
               )}
             </section>
           </>

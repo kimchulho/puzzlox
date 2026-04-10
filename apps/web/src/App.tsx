@@ -11,6 +11,7 @@ import Admin from './components/Admin';
 import TermsOfService from './components/TermsOfService';
 import UserDashboard from './components/UserDashboard';
 import { supabase } from './lib/supabaseClient';
+import { ensureRoomPasswordVerified, ROOM_PUBLIC_COLUMNS } from './lib/roomAccess';
 import { decodeRoomId, roomCodeFromLocation, roomPath } from './lib/roomCode';
 import { normalizePuzzleDifficulty, type PuzzleDifficulty } from './lib/puzzleDifficulty';
 import type { JoinRoomMeta } from '@contracts/roomJoin';
@@ -75,27 +76,38 @@ export default function App() {
       }
 
       setLoading(true);
-      supabase
-        .from('rooms')
-        .select('*')
-        .eq('id', decodedId)
-        .single()
-        .then(({ data, error }) => {
+      const isKo = locale === 'ko';
+      void (async () => {
+        const { data, error } = await supabase
+          .from('rooms')
+          .select(ROOM_PUBLIC_COLUMNS)
+          .eq('id', decodedId)
+          .maybeSingle();
+        if (cancelled) return;
+        if (data && !error) {
+          const hasPw = (data as { has_password?: boolean }).has_password === true;
+          const allowed = await ensureRoomPasswordVerified(decodedId, hasPw, isKo);
           if (cancelled) return;
-          if (data && !error) {
-            setCurrentRoom({
-              id: data.id,
-              imageUrl: data.image_url,
-              pieceCount: data.piece_count,
-              difficulty: normalizePuzzleDifficulty((data as any).difficulty),
-            });
-          } else {
+          if (!allowed) {
             window.history.replaceState({}, '', '/');
             setCurrentRoom(null);
             setPathname('/');
+            setLoading(false);
+            return;
           }
-          setLoading(false);
-        });
+          setCurrentRoom({
+            id: data.id,
+            imageUrl: data.image_url,
+            pieceCount: data.piece_count,
+            difficulty: normalizePuzzleDifficulty((data as any).difficulty),
+          });
+        } else {
+          window.history.replaceState({}, '', '/');
+          setCurrentRoom(null);
+          setPathname('/');
+        }
+        setLoading(false);
+      })();
     };
 
     syncFromLocation();
@@ -104,7 +116,7 @@ export default function App() {
       cancelled = true;
       window.removeEventListener('popstate', syncFromLocation);
     };
-  }, []);
+  }, [locale]);
 
   const handleJoinRoom = (
     roomId: number,

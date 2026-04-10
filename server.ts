@@ -104,6 +104,11 @@ function dashboardProgressSnapped(totalPieces: number, lockedFromDb: number, use
   return Math.min(totalPieces, Math.max(lockedFromDb, scored));
 }
 
+/** 로비 직접 업로드 방 — `rooms.is_private` (Lobby `handleCreateRoom` 과 동일). */
+function roomIsPrivateForListing(row: { is_private?: unknown }): boolean {
+  return row.is_private === true;
+}
+
 type AuthProvider = "web_local" | "toss";
 
 interface JwtPayload {
@@ -156,6 +161,46 @@ async function startServer() {
       message: "Server is running with Socket.io",
     };
     res.json(payload);
+  });
+
+  /** 로비/클라이언트 응답에서 방 비밀번호 평문 컬럼 제거 */
+  function omitRoomPassword(row: Record<string, unknown>) {
+    const { password: _p, ...rest } = row;
+    return rest;
+  }
+
+  /** 비밀번호 방 입장 검증 (서비스 롤로만 `rooms.password` 조회). */
+  app.post("/api/rooms/verify-password", async (req, res) => {
+    if (!authSupabase) {
+      return res.status(503).json({
+        message: "Auth server misconfigured. Set SUPABASE_SERVICE_ROLE_KEY in .env.",
+      });
+    }
+    const roomId = Number((req.body ?? {}).roomId);
+    const attemptRaw = (req.body ?? {}).password;
+    if (!Number.isFinite(roomId) || roomId <= 0) {
+      return res.status(400).json({ message: "roomId is required." });
+    }
+    const { data: room, error } = await authSupabase
+      .from("rooms")
+      .select("has_password, password")
+      .eq("id", roomId)
+      .maybeSingle();
+    if (error) {
+      return res.status(500).json({ message: error.message });
+    }
+    if (!room) {
+      return res.status(404).json({ message: "Room not found." });
+    }
+    if (room.has_password !== true) {
+      return res.status(204).end();
+    }
+    const expected = (room.password ?? "").toString().trim();
+    const got = attemptRaw == null ? "" : String(attemptRaw).trim();
+    if (expected === "" || got !== expected) {
+      return res.status(403).json({ message: "Wrong password." });
+    }
+    return res.status(204).end();
   });
 
   const issueToken = (payload: JwtPayload) =>
@@ -848,13 +893,17 @@ async function startServer() {
       const { data: rooms, error: roomsErr } = await authSupabase
         .from("rooms")
         .select(
-          "id, image_url, piece_count, difficulty, status, creator_name, created_by, created_at, completed_at"
+          "id, image_url, piece_count, difficulty, status, creator_name, created_by, created_at, completed_at, is_private"
         )
         .in("id", [...roomIdSet]);
       if (roomsErr) {
         return res.status(500).json({ message: roomsErr.message });
       }
-      participatedRooms = (rooms ?? []).map((room: Record<string, unknown>) => {
+      /** 공개 프로필: `is_private` 인 방(직접 업로드)은 목록에서 제외. */
+      const roomsForPublicProfile = (rooms ?? []).filter(
+        (room: Record<string, unknown>) => !roomIsPrivateForListing(room)
+      );
+      participatedRooms = roomsForPublicProfile.map((room: Record<string, unknown>) => {
         const rid = Number(room.id);
         const createdBy = room.created_by != null ? Number(room.created_by) : NaN;
         const subjectCreatedThis = Number.isFinite(createdBy) && createdBy === subjectId;
@@ -966,20 +1015,12 @@ async function startServer() {
   });
 
   app.get("/api/rooms/summary", async (req, res) => {
-    let userId: number | null = null;
-    const token = parseBearerToken(
-      typeof req.headers.authorization === "string" ? req.headers.authorization : undefined
-    );
-    if (token) {
-      try {
-        const decoded = jwt.verify(token, jwtSecret) as JwtPayload;
-        const sub = Number(decoded.sub);
-        if (Number.isFinite(sub) && sub > 0) userId = Math.floor(sub);
-      } catch {
-        // Public endpoint: ignore invalid bearer and continue without "my rooms".
-      }
-    }
-    const cacheKey = userId != null ? `u:${userId}` : "u:anon";
+    /**
+     * 로비 진행/완료 목록: `is_private === true`(직접 업로드) 방은 누구에게도 노출하지 않음.
+     * 해당 방은 로그인 후 내 대시보드에서만 확인 (참여 목록·직접 업로드 섹션).
+     * Bearer 토큰은 예전과 달리 응답 분기에 쓰이지 않으며, 무시해도 됨.
+     */
+    const cacheKey = "lobby:public-lists";
     const cached = roomsSummaryCache.get(cacheKey);
     const now = Date.now();
     if (cached && now - cached.at < ROOMS_SUMMARY_CACHE_TTL_MS) {
@@ -994,25 +1035,7 @@ async function startServer() {
     if (activePublicError) {
       return res.status(500).json({ message: activePublicError.message });
     }
-    let activeMine: any[] = [];
-    if (userId != null) {
-      const { data: mine, error: mineError } = await supabase
-        .from("rooms")
-        .select("*")
-        .eq("status", "active")
-        .eq("created_by", userId);
-      if (mineError) {
-        return res.status(500).json({ message: mineError.message });
-      }
-      activeMine = mine ?? [];
-    }
-    const merged = new Map<number, any>();
-    for (const r of activePublic ?? []) merged.set(Number(r.id), r);
-    for (const r of activeMine) {
-      const id = Number(r.id);
-      if (!merged.has(id)) merged.set(id, r);
-    }
-    const active = [...merged.values()];
+    const active = [...(activePublic ?? [])];
 
     const { data: completedPublic, error: completedError } = await supabase
       .from("rooms")
@@ -1161,9 +1184,10 @@ async function startServer() {
         room.currentPlayers = roomStates.get(id)?.users.size ?? 0;
       }
     }
+    const isLobbyPublicRoom = (r: { is_private?: unknown }) => !roomIsPrivateForListing(r);
     const payload = {
-      activeRooms: finalActive,
-      completedRooms,
+      activeRooms: finalActive.filter(isLobbyPublicRoom).map(omitRoomPassword),
+      completedRooms: completedRooms.filter(isLobbyPublicRoom).map(omitRoomPassword),
     };
     roomsSummaryCache.set(cacheKey, { at: now, payload });
     // Keep cache bounded even if many users hit this endpoint.

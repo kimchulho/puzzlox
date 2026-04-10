@@ -13,6 +13,7 @@ import {
   roomCodeFromLocation,
   roomPath,
 } from "@web/lib/roomCode";
+import { ensureRoomPasswordVerified, ROOM_PUBLIC_COLUMNS } from "@web/lib/roomAccess";
 import { normalizePuzzleDifficulty, type PuzzleDifficulty } from "@web/lib/puzzleDifficulty";
 import { supabase } from "@web/lib/supabaseClient";
 import { clearSession } from "./lib/tossSession";
@@ -27,6 +28,26 @@ function roomRowToShellRoom(data: Record<string, unknown>) {
     pieceCount: Number(data.piece_count ?? 0),
     difficulty: normalizePuzzleDifficulty(String(data.difficulty ?? "medium")),
   };
+}
+
+function tossShellIsKo() {
+  try {
+    return localStorage.getItem("webpuzzle_locale") !== "en";
+  } catch {
+    return true;
+  }
+}
+
+async function fetchRoomRowWithPasswordGate(roomId: number): Promise<Record<string, unknown> | null> {
+  const { data, error } = await supabase
+    .from("rooms")
+    .select(ROOM_PUBLIC_COLUMNS)
+    .eq("id", roomId)
+    .maybeSingle();
+  if (!data || error) return null;
+  const hasPw = (data as { has_password?: boolean }).has_password === true;
+  const ok = await ensureRoomPasswordVerified(roomId, hasPw, tossShellIsKo());
+  return ok ? (data as Record<string, unknown>) : null;
 }
 
 export default function GameShell({
@@ -163,24 +184,19 @@ export default function GameShell({
       const decodedId = isNumeric ? parseInt(roomParam, 10) : decodeRoomId(roomParam);
 
       if (decodedId) {
-        supabase
-          .from("rooms")
-          .select("*")
-          .eq("id", decodedId)
-          .single()
-          .then(({ data, error }) => {
-            if (data && !error) {
-              const url = `${window.location.pathname}${window.location.search}`;
-              // 스택에 로비(/)가 없으면 뒤로가기·go(-2)로 로비 복귀가 불가능해 한 번 깔아 둡니다.
-              window.history.replaceState({ layer: "lobby" }, "", "/");
-              window.history.pushState({ layer: "puzzle" }, "", url);
-              window.history.pushState({ layer: "puzzle-top" }, "", url);
-              setCurrentRoom(roomRowToShellRoom(data as Record<string, unknown>));
-            } else {
-              window.history.replaceState({}, "", "/");
-            }
-            setLoading(false);
-          });
+        void fetchRoomRowWithPasswordGate(decodedId).then((data) => {
+          if (data) {
+            const url = `${window.location.pathname}${window.location.search}`;
+            // 스택에 로비(/)가 없으면 뒤로가기·go(-2)로 로비 복귀가 불가능해 한 번 깔아 둡니다.
+            window.history.replaceState({ layer: "lobby" }, "", "/");
+            window.history.pushState({ layer: "puzzle" }, "", url);
+            window.history.pushState({ layer: "puzzle-top" }, "", url);
+            setCurrentRoom(roomRowToShellRoom(data));
+          } else {
+            window.history.replaceState({}, "", "/");
+          }
+          setLoading(false);
+        });
       } else {
         window.history.replaceState({}, "", "/");
         setLoading(false);
@@ -217,16 +233,11 @@ export default function GameShell({
       const isNumeric = /^\d+$/.test(roomParamPop);
       const decodedId = isNumeric ? parseInt(roomParamPop, 10) : decodeRoomId(roomParamPop);
       if (decodedId) {
-        supabase
-          .from("rooms")
-          .select("*")
-          .eq("id", decodedId)
-          .single()
-          .then(({ data, error }) => {
-            if (data && !error) {
-              setCurrentRoom(roomRowToShellRoom(data as Record<string, unknown>));
-            }
-          });
+        void fetchRoomRowWithPasswordGate(decodedId).then((data) => {
+          if (data) {
+            setCurrentRoom(roomRowToShellRoom(data));
+          }
+        });
       }
     };
 

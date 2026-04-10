@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef, type CSSProperties } from "react";
+﻿import React, { useState, useEffect, useMemo, useRef, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import {
   Trophy,
@@ -29,6 +29,7 @@ import { motion } from 'motion/react';
 import { encodeRoomId, parseRoomNumberOrCode } from '../lib/roomCode';
 import { recordUserRoomVisit } from '../lib/recordUserRoomVisit';
 import { apiUrl } from '../lib/apiBase';
+import { ensureRoomPasswordVerified, ROOM_PUBLIC_COLUMNS } from '../lib/roomAccess';
 import { ImageSelectorModal } from './ImageSelectorModal';
 import { PuzzleShotModal } from './PuzzleShotModal';
 import {
@@ -251,6 +252,19 @@ function mergeContinueRoomOrder(serverOrdered: number[], localOrdered: number[])
   return out;
 }
 
+function readLocalContinueRoomIds(): number[] {
+  try {
+    const raw = localStorage.getItem("puzzle_recent_rooms");
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((x): x is number => typeof x === "number") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 진행·완료 방 목록 무한 스크롤 배치 크기 */
+const LOBBY_ROOM_PAGE_SIZE = 10;
+
 /** Pinned = 내 방 또는 이어하기(continue) 목록에 있는 방. 그 안에서는 가장 최근 접속이 맨 위. */
 function sortActiveRoomsForLobby(
   rooms: any[],
@@ -402,6 +416,14 @@ const Lobby = ({
   const [isJoiningByCode, setIsJoiningByCode] = useState(false);
   /** 진행 중·완료 방 목록 공통 난이도 필터 */
   const [lobbyDifficultyFilter, setLobbyDifficultyFilter] = useState<LobbyDifficultyFilter>("all");
+  const [lobbyActiveVisibleCount, setLobbyActiveVisibleCount] = useState(LOBBY_ROOM_PAGE_SIZE);
+  const [lobbyCompletedVisibleCount, setLobbyCompletedVisibleCount] = useState(LOBBY_ROOM_PAGE_SIZE);
+  const activeRoomsScrollRef = useRef<HTMLDivElement>(null);
+  const completedRoomsScrollRef = useRef<HTMLDivElement>(null);
+  const activeRoomsLoadSentinelRef = useRef<HTMLDivElement>(null);
+  const completedRoomsLoadSentinelRef = useRef<HTMLDivElement>(null);
+  const filteredActiveLenRef = useRef(0);
+  const filteredCompletedLenRef = useRef(0);
   const gptLoadPromiseRef = useRef<Promise<void> | null>(null);
   const gptServicesEnabledRef = useRef(false);
   const isKo = locale === 'ko';
@@ -707,8 +729,10 @@ const Lobby = ({
       is_private: isPrivate,
     };
     if (user?.id) insertRow.created_by = user.id;
+    const pwTrim = password.trim();
+    if (pwTrim) insertRow.password = pwTrim;
 
-    const { data, error } = await supabase.from('rooms').insert([insertRow]).select();
+    const { data, error } = await supabase.from('rooms').insert([insertRow]).select(ROOM_PUBLIC_COLUMNS);
 
     if (data && data.length > 0) {
       const roomId = data[0].id;
@@ -908,8 +932,8 @@ const Lobby = ({
     opts?: { skipTossRewardedAd?: boolean }
   ) => {
     if (room.has_password) {
-      const pwd = prompt(isKo ? '방 비밀번호를 입력하세요:' : 'Enter room password:');
-      if (pwd === null) return;
+      const ok = await ensureRoomPasswordVerified(room.id, true, isKo);
+      if (!ok) return;
     }
 
     const recentRooms = JSON.parse(localStorage.getItem('puzzle_recent_rooms') || '[]');
@@ -989,7 +1013,7 @@ const Lobby = ({
     }
 
     setIsJoiningByCode(true);
-    const { data, error } = await supabase.from('rooms').select('*').eq('id', id).maybeSingle();
+    const { data, error } = await supabase.from('rooms').select(ROOM_PUBLIC_COLUMNS).eq('id', id).maybeSingle();
     setIsJoiningByCode(false);
 
     if (error) {
@@ -1025,6 +1049,84 @@ const Lobby = ({
     activeRooms.length === 0 && (isRoomsLoading || isRoomsRefreshing);
   const showCompletedRoomsLoading =
     completedRooms.length === 0 && (isRoomsLoading || isRoomsRefreshing);
+
+  const lobbyContinueRoomOrder = useMemo(
+    () => mergeContinueRoomOrder(continueRoomIdsServer, readLocalContinueRoomIds()),
+    [continueRoomIdsServer],
+  );
+  const lobbyContinueSet = useMemo(() => new Set(lobbyContinueRoomOrder), [lobbyContinueRoomOrder]);
+
+  const filteredActiveRooms = useMemo(() => {
+    const sorted = sortActiveRoomsForLobby(
+      activeRooms,
+      user,
+      lobbyContinueRoomOrder,
+      serverVisitAtMs,
+    );
+    return lobbyDifficultyFilter === "all"
+      ? sorted
+      : sorted.filter((r) => roomRowDifficulty(r) === lobbyDifficultyFilter);
+  }, [activeRooms, user, lobbyContinueRoomOrder, serverVisitAtMs, lobbyDifficultyFilter]);
+
+  const filteredCompletedRooms = useMemo(() => {
+    return lobbyDifficultyFilter === "all"
+      ? completedRooms
+      : completedRooms.filter((r) => roomRowDifficulty(r) === lobbyDifficultyFilter);
+  }, [completedRooms, lobbyDifficultyFilter]);
+
+  const visibleActiveRooms = useMemo(
+    () => filteredActiveRooms.slice(0, lobbyActiveVisibleCount),
+    [filteredActiveRooms, lobbyActiveVisibleCount],
+  );
+  const visibleCompletedRooms = useMemo(
+    () => filteredCompletedRooms.slice(0, lobbyCompletedVisibleCount),
+    [filteredCompletedRooms, lobbyCompletedVisibleCount],
+  );
+
+  filteredActiveLenRef.current = filteredActiveRooms.length;
+  filteredCompletedLenRef.current = filteredCompletedRooms.length;
+
+  useEffect(() => {
+    setLobbyActiveVisibleCount(LOBBY_ROOM_PAGE_SIZE);
+  }, [lobbyDifficultyFilter, activeRooms]);
+
+  useEffect(() => {
+    setLobbyCompletedVisibleCount(LOBBY_ROOM_PAGE_SIZE);
+  }, [lobbyDifficultyFilter, completedRooms]);
+
+  useEffect(() => {
+    const root = activeRoomsScrollRef.current;
+    const target = activeRoomsLoadSentinelRef.current;
+    if (!root || !target || lobbyActiveVisibleCount >= filteredActiveLenRef.current) return;
+    const ob = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((e) => e.isIntersecting)) return;
+        setLobbyActiveVisibleCount((n) =>
+          Math.min(n + LOBBY_ROOM_PAGE_SIZE, filteredActiveLenRef.current),
+        );
+      },
+      { root, rootMargin: "100px", threshold: 0 },
+    );
+    ob.observe(target);
+    return () => ob.disconnect();
+  }, [filteredActiveRooms, lobbyActiveVisibleCount]);
+
+  useEffect(() => {
+    const root = completedRoomsScrollRef.current;
+    const target = completedRoomsLoadSentinelRef.current;
+    if (!root || !target || lobbyCompletedVisibleCount >= filteredCompletedLenRef.current) return;
+    const ob = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((e) => e.isIntersecting)) return;
+        setLobbyCompletedVisibleCount((n) =>
+          Math.min(n + LOBBY_ROOM_PAGE_SIZE, filteredCompletedLenRef.current),
+        );
+      },
+      { root, rootMargin: "100px", threshold: 0 },
+    );
+    ob.observe(target);
+    return () => ob.disconnect();
+  }, [filteredCompletedRooms, lobbyCompletedVisibleCount]);
 
   const tossJoinCtaLabel = (roomId: number) => {
     if (tossRewardGateBusy) return isKo ? "대기 중…" : "Wait…";
@@ -1740,7 +1842,7 @@ const Lobby = ({
 
         {/* Middle Column: Active Rooms Gallery */}
         <div
-          className="flex flex-col h-[600px]"
+          className="flex flex-col h-[680px]"
         >
           <div
             className={`mb-3 pb-3 border-b ${
@@ -1749,12 +1851,21 @@ const Lobby = ({
           >
             <div className="flex items-center justify-between gap-2 min-h-[40px]">
               <h2
-                className={`text-xl font-bold flex items-center gap-2 min-w-0 ${
+                className={`text-xl font-bold flex flex-wrap items-center gap-x-2 gap-y-0.5 min-w-0 ${
                   tossSkin ? tossSkin.heading : "text-white"
                 }`}
               >
                 <Grid className={`w-5 h-5 shrink-0 ${tossSkin ? tossSkin.subtleIcon : "text-indigo-400"}`} />
-                {isKo ? "진행 중인 퍼즐방" : "Active Puzzle Rooms"}
+                <span className="min-w-0">
+                  {isKo ? "진행 중인 퍼즐방" : "Active Puzzle Rooms"}
+                  <span
+                    className={`ml-1.5 text-base font-semibold tabular-nums ${
+                      tossSkin ? "text-slate-600" : "text-slate-400"
+                    }`}
+                  >
+                    ({filteredActiveRooms.length})
+                  </span>
+                </span>
               </h2>
               <button
                 type="button"
@@ -1833,7 +1944,10 @@ const Lobby = ({
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto pr-2 space-y-3 custom-scrollbar">
+          <div
+            ref={activeRoomsScrollRef}
+            className="flex-1 overflow-y-auto pr-2 space-y-3 custom-scrollbar"
+          >
             {showActiveRoomsLoading ? (
               <div
                 className={`h-full flex flex-col items-center justify-center ${
@@ -1855,51 +1969,25 @@ const Lobby = ({
                 <p>{isKo ? koT("아직 진행 중인 방이 없습니다.", "아직 진행 중인 방이 없어요.") : "No active rooms yet."}</p>
                 <p className="text-sm mt-1">{isKo ? "첫 번째 방을 만들어 보세요!" : "Be the first to create one!"}</p>
               </div>
-            ) : (() => {
-              let localContinueIds: number[] = [];
-              try {
-                const raw = localStorage.getItem("puzzle_recent_rooms");
-                const parsed = raw ? JSON.parse(raw) : [];
-                localContinueIds = Array.isArray(parsed)
-                  ? parsed.filter((x: unknown): x is number => typeof x === "number")
-                  : [];
-              } catch {
-                localContinueIds = [];
-              }
-              const continueRoomOrder = mergeContinueRoomOrder(continueRoomIdsServer, localContinueIds);
-              const continueSet = new Set(continueRoomOrder);
-              const displayActiveRooms = sortActiveRoomsForLobby(
-                activeRooms,
-                user,
-                continueRoomOrder,
-                serverVisitAtMs
-              );
-              const filteredActiveRooms =
-                lobbyDifficultyFilter === "all"
-                  ? displayActiveRooms
-                  : displayActiveRooms.filter(
-                      (r) => roomRowDifficulty(r) === lobbyDifficultyFilter
-                    );
-              if (filteredActiveRooms.length === 0) {
-                return (
-                  <div
-                    className={`h-full flex flex-col items-center justify-center text-center px-2 ${
-                      tossSkin ? tossSkin.empty : "text-slate-500"
-                    }`}
-                  >
-                    <Filter className={`w-10 h-10 mb-2 opacity-25 ${tossSkin ? "text-[#2F6FE4]" : ""}`} />
-                    <p className="text-sm">
-                      {isKo
-                        ? koT("선택한 난이도의 진행 중인 방이 없습니다.", "선택한 난이도의 진행 중인 방이 없어요.")
-                        : "No active rooms for this difficulty."}
-                    </p>
-                    <p className="text-xs mt-1 opacity-80">
-                      {isKo ? "다른 난이도를 선택하거나 필터를 ‘전체’로 바꿔 보세요." : "Try another difficulty or choose “All”."}
-                    </p>
-                  </div>
-                );
-              }
-              return filteredActiveRooms.map((room) => (
+            ) : filteredActiveRooms.length === 0 ? (
+              <div
+                className={`h-full flex flex-col items-center justify-center text-center px-2 ${
+                  tossSkin ? tossSkin.empty : "text-slate-500"
+                }`}
+              >
+                <Filter className={`w-10 h-10 mb-2 opacity-25 ${tossSkin ? "text-[#2F6FE4]" : ""}`} />
+                <p className="text-sm">
+                  {isKo
+                    ? koT("선택한 난이도의 진행 중인 방이 없습니다.", "선택한 난이도의 진행 중인 방이 없어요.")
+                    : "No active rooms for this difficulty."}
+                </p>
+                <p className="text-xs mt-1 opacity-80">
+                  {isKo ? "다른 난이도를 선택하거나 필터를 ‘전체’로 바꿔 보세요." : "Try another difficulty or choose “All”."}
+                </p>
+              </div>
+            ) : (
+              <>
+                {visibleActiveRooms.map((room) => (
                 <div
                   key={room.id}
                   className={`group h-[224px] rounded-2xl overflow-hidden transition-all duration-300 border flex flex-col ${
@@ -1932,7 +2020,7 @@ const Lobby = ({
                           {isKo ? "내 방" : "My room"}
                         </span>
                       )}
-                      {!roomIsMine(room, user) && continueSet.has(room.id) && (
+                      {!roomIsMine(room, user) && lobbyContinueSet.has(room.id) && (
                         <span
                           className={`backdrop-blur-sm text-[10px] font-semibold px-2 py-0.5 rounded-md border leading-tight ${
                             tossSkin
@@ -2046,14 +2134,22 @@ const Lobby = ({
                     </button>
                   </div>
                 </div>
-              ));
-            })()}
+                ))}
+                {lobbyActiveVisibleCount < filteredActiveRooms.length ? (
+                  <div
+                    ref={activeRoomsLoadSentinelRef}
+                    className="h-14 w-full shrink-0"
+                    aria-hidden
+                  />
+                ) : null}
+              </>
+            )}
           </div>
         </div>
 
         {/* Right Column: Completed Rooms Gallery */}
         <div
-          className="flex flex-col h-[600px] md:col-span-2 lg:col-span-1"
+          className="flex flex-col h-[680px] md:col-span-2 lg:col-span-1"
         >
           <div
             className={`mb-3 pb-3 border-b ${
@@ -2062,19 +2158,31 @@ const Lobby = ({
           >
             <div className="flex items-center justify-between gap-2 min-h-[40px]">
               <h2
-                className={`text-xl font-bold flex items-center gap-2 min-w-0 ${
+                className={`text-xl font-bold flex flex-wrap items-center gap-x-2 gap-y-0.5 min-w-0 ${
                   tossSkin ? tossSkin.heading : "text-white"
                 }`}
               >
-                <Trophy className={`w-5 h-5 ${tossSkin ? tossSkin.subtleIcon : "text-amber-400"}`} />
-                {isKo ? "완료된 퍼즐방" : "Completed Puzzles"}
+                <Trophy className={`w-5 h-5 shrink-0 ${tossSkin ? tossSkin.subtleIcon : "text-amber-400"}`} />
+                <span className="min-w-0">
+                  {isKo ? "완료된 퍼즐방" : "Completed Puzzles"}
+                  <span
+                    className={`ml-1.5 text-base font-semibold tabular-nums ${
+                      tossSkin ? "text-slate-600" : "text-slate-400"
+                    }`}
+                  >
+                    ({filteredCompletedRooms.length})
+                  </span>
+                </span>
               </h2>
               {/* Height/spacing parity with left header refresh button */}
               <span className="w-[34px] h-[34px] shrink-0" aria-hidden="true" />
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
+          <div
+            ref={completedRoomsScrollRef}
+            className="flex-1 overflow-y-auto pr-2 custom-scrollbar"
+          >
             {showCompletedRoomsLoading ? (
               <div
                 className={`h-full flex flex-col items-center justify-center ${
@@ -2095,35 +2203,26 @@ const Lobby = ({
                 <Trophy className={`w-12 h-12 mb-3 ${tossSkin ? "opacity-30 text-[#2F6FE4]" : "opacity-20"}`} />
                 <p>{isKo ? koT("아직 완료된 퍼즐방이 없습니다.", "아직 완료된 퍼즐방이 없어요.") : "No completed puzzles yet."}</p>
               </div>
-            ) : (() => {
-              const filteredCompleted =
-                lobbyDifficultyFilter === "all"
-                  ? completedRooms
-                  : completedRooms.filter(
-                      (r) => roomRowDifficulty(r) === lobbyDifficultyFilter
-                    );
-              if (filteredCompleted.length === 0) {
-                return (
-                  <div
-                    className={`h-full flex flex-col items-center justify-center text-center px-2 ${
-                      tossSkin ? tossSkin.empty : "text-slate-500"
-                    }`}
-                  >
-                    <Filter className={`w-10 h-10 mb-2 opacity-25 ${tossSkin ? "text-[#2F6FE4]" : ""}`} />
-                    <p className="text-sm">
-                      {isKo
-                        ? koT("선택한 난이도의 완료된 방이 없습니다.", "선택한 난이도의 완료된 방이 없어요.")
-                        : "No completed rooms for this difficulty."}
-                    </p>
-                    <p className="text-xs mt-1 opacity-80">
-                      {isKo ? "다른 난이도를 선택하거나 필터를 ‘전체’로 바꿔 보세요." : "Try another difficulty or choose “All”."}
-                    </p>
-                  </div>
-                );
-              }
-              return (
+            ) : filteredCompletedRooms.length === 0 ? (
+              <div
+                className={`h-full flex flex-col items-center justify-center text-center px-2 ${
+                  tossSkin ? tossSkin.empty : "text-slate-500"
+                }`}
+              >
+                <Filter className={`w-10 h-10 mb-2 opacity-25 ${tossSkin ? "text-[#2F6FE4]" : ""}`} />
+                <p className="text-sm">
+                  {isKo
+                    ? koT("선택한 난이도의 완료된 방이 없습니다.", "선택한 난이도의 완료된 방이 없어요.")
+                    : "No completed rooms for this difficulty."}
+                </p>
+                <p className="text-xs mt-1 opacity-80">
+                  {isKo ? "다른 난이도를 선택하거나 필터를 ‘전체’로 바꿔 보세요." : "Try another difficulty or choose “All”."}
+                </p>
+              </div>
+            ) : (
+              <>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-1 gap-3">
-                {filteredCompleted.map((room) => (
+                {visibleCompletedRooms.map((room) => (
                   <div
                     key={room.id}
                     className={`group h-[224px] rounded-2xl overflow-hidden transition-all duration-300 border flex flex-col ${
@@ -2227,8 +2326,15 @@ const Lobby = ({
                   </div>
                 ))}
               </div>
-              );
-            })()}
+                {lobbyCompletedVisibleCount < filteredCompletedRooms.length ? (
+                  <div
+                    ref={completedRoomsLoadSentinelRef}
+                    className="h-14 w-full shrink-0"
+                    aria-hidden
+                  />
+                ) : null}
+              </>
+            )}
           </div>
         </div>
       </motion.div>
