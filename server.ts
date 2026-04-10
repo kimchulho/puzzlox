@@ -1188,8 +1188,10 @@ async function startServer() {
     const totalByRoom = new Map<number, number>();
     const lockedByRoom = new Map<number, number>();
     const scoreByRoom = new Map<number, number>();
+    /** RLS로 `pieces`/`scores` 일부만 보이면 행 수·잠금 수가 1~2로만 잡혀 방이 즉시 "완료" 처리됨 → 서비스 롤로 전체 집계 */
+    const lobbyAggClient = pieceStateSupabase;
     if (roomIds.length > 0) {
-      const { data: pieces, error: piecesError } = await supabase
+      const { data: pieces, error: piecesError } = await lobbyAggClient
         .from("pieces")
         .select("room_id,is_locked")
         .in("room_id", roomIds);
@@ -1203,7 +1205,7 @@ async function startServer() {
           lockedByRoom.set(roomId, (lockedByRoom.get(roomId) ?? 0) + 1);
         }
       }
-      const { data: scores, error: scoresError } = await supabase
+      const { data: scores, error: scoresError } = await lobbyAggClient
         .from("scores")
         .select("room_id,score")
         .in("room_id", roomIds);
@@ -1218,49 +1220,18 @@ async function startServer() {
       }
     }
 
-    /** `pieces` row count is authoritative once rows exist; keep `rooms.piece_count` in sync for lobby and deep links. */
-    const roomByIdForPieceSync = new Map<number, any>();
-    for (const r of active) {
-      const id = Number((r as { id?: unknown }).id);
-      if (Number.isFinite(id)) roomByIdForPieceSync.set(id, r);
-    }
-    for (const r of completedPublic ?? []) {
-      const id = Number((r as { id?: unknown }).id);
-      if (Number.isFinite(id) && !roomByIdForPieceSync.has(id)) roomByIdForPieceSync.set(id, r);
-    }
-    const syncPieceUpdates: Promise<{ error: { message: string } | null }>[] = [];
-    for (const [rid, rowTotal] of totalByRoom) {
-      if (rowTotal <= 0) continue;
-      const rec = roomByIdForPieceSync.get(rid);
-      if (!rec) continue;
-      const dbCount = Number(rec.piece_count ?? 0);
-      if (!Number.isFinite(dbCount) || dbCount === rowTotal) continue;
-      syncPieceUpdates.push(
-        (async () => {
-          const up = await pieceStateSupabase
-            .from("rooms")
-            .update({ piece_count: rowTotal })
-            .eq("id", rid);
-          if (!up.error) rec.piece_count = rowTotal;
-          return { error: up.error };
-        })()
-      );
-    }
-    if (syncPieceUpdates.length > 0) {
-      const syncResults = await Promise.all(syncPieceUpdates);
-      for (const sr of syncResults) {
-        if (sr.error) console.warn("[rooms-summary/sync-piece-count]", sr.error.message);
-      }
-    }
+    /** rooms.piece_count 는 방 생성·퍼즐보드에서만 갱신. 요약 폴링으로 pieces 행 수를 DB에 쓰면 삽입 중·캐시 레이스로 조각 수가 출렁임 */
 
     const newlyCompletedIds: number[] = [];
     for (const room of active) {
       const id = Number(room.id);
-      const total = totalByRoom.get(id) ?? Number(room.piece_count ?? 0);
+      const rowTotal = totalByRoom.get(id) ?? 0;
+      const pc = Number(room.piece_count ?? 0);
+      const total = Math.max(rowTotal, Number.isFinite(pc) ? pc : 0);
       const locked = lockedByRoom.get(id) ?? 0;
       const scored = scoreByRoom.get(id) ?? 0;
-      const snapped = Math.min(total > 0 ? total : Number(room.piece_count ?? 0), Math.max(locked, scored));
-      room.totalPieces = total > 0 ? total : Number(room.piece_count ?? 0);
+      const snapped = total > 0 ? Math.min(total, Math.max(locked, scored)) : 0;
+      room.totalPieces = total;
       room.snappedCount = snapped;
       room.currentPlayers = roomStates.get(id)?.users.size ?? 0;
       if (room.totalPieces > 0 && room.totalPieces === room.snappedCount && room.status === "active") {
@@ -1270,13 +1241,13 @@ async function startServer() {
     }
     if (newlyCompletedIds.length > 0) {
       const completedAtIso = new Date().toISOString();
-      const { error: markCompletedError } = await supabase
+      const { error: markCompletedError } = await lobbyAggClient
         .from("rooms")
         .update({ status: "completed", completed_at: completedAtIso } as any)
         .in("id", newlyCompletedIds);
       if (markCompletedError) {
         // Backward compatibility: if DB column is not migrated yet, retry without completed_at.
-        const retry = await supabase
+        const retry = await lobbyAggClient
           .from("rooms")
           .update({ status: "completed" })
           .in("id", newlyCompletedIds);
@@ -1308,7 +1279,7 @@ async function startServer() {
       const id = Number(room.id);
       const rowTotal = totalByRoom.get(id) ?? 0;
       const pc = Number(room.piece_count ?? 0);
-      const denom = rowTotal > 0 ? rowTotal : pc;
+      const denom = Math.max(rowTotal, Number.isFinite(pc) ? pc : 0);
       if (denom > 0) {
         room.totalPieces = denom;
         const locked = lockedByRoom.get(id) ?? 0;

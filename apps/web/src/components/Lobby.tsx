@@ -266,6 +266,19 @@ function readLocalContinueRoomIds(): number[] {
   }
 }
 
+/**
+ * 로비 카드·입장 시 표시할 총 조각 수: API 집계 `totalPieces`와 DB `piece_count` 중 더 큰 값.
+ * `totalPieces || piece_count`는 작은 `totalPieces`(예: 집계만 39)가 truthy면 큰 `piece_count`를 무시해 버림.
+ */
+function lobbyDisplayPieceTotal(room: { totalPieces?: unknown; piece_count?: unknown }): number {
+  const tp = Number(room?.totalPieces);
+  const pc = Number(room?.piece_count);
+  let m = 0;
+  if (Number.isFinite(tp) && tp > 0) m = Math.max(m, tp);
+  if (Number.isFinite(pc) && pc > 0) m = Math.max(m, pc);
+  return m;
+}
+
 /** 진행·완료 방 목록 무한 스크롤 배치 크기 */
 const LOBBY_ROOM_PAGE_SIZE = 10;
 
@@ -1097,7 +1110,7 @@ const Lobby = ({
       onJoinRoom(
         room.id,
         room.image_url,
-        room.totalPieces || room.piece_count,
+        lobbyDisplayPieceTotal(room),
         normalizePuzzleDifficulty(room.difficulty),
       );
       setRoomCodeInput("");
@@ -2196,7 +2209,7 @@ const Lobby = ({
                               : "bg-slate-900/80 text-white border-slate-700"
                           }`}
                         >
-                          {room.totalPieces || room.piece_count} {isKo ? "조각" : "Pieces"}
+                          {lobbyDisplayPieceTotal(room)} {isKo ? "조각" : "Pieces"}
                         </span>
                         <span
                           className={roomDifficultyBadgeClass(roomRowDifficulty(room), !!tossSkin)}
@@ -2223,13 +2236,15 @@ const Lobby = ({
                       </span>
                     </div>
                   </div>
-                  {room.snappedCount !== undefined && room.totalPieces !== undefined && (
+                  {room.snappedCount !== undefined && lobbyDisplayPieceTotal(room) > 0 && (
                     <div className={`w-full h-1.5 overflow-hidden ${tossSkin ? tossSkin.progress : "bg-slate-800"}`}>
                       <div
                         className={`h-full transition-all duration-500 ${
                           tossSkin ? tossSkin.progressFill : "bg-indigo-500"
                         }`}
-                        style={{ width: `${Math.round((room.snappedCount / room.totalPieces) * 100)}%` }}
+                        style={{
+                          width: `${Math.round((room.snappedCount / lobbyDisplayPieceTotal(room)) * 100)}%`,
+                        }}
                       />
                     </div>
                   )}
@@ -2259,14 +2274,14 @@ const Lobby = ({
                           </span>
                         )}
                       </p>
-                      {room.snappedCount !== undefined && room.totalPieces !== undefined && (
+                      {room.snappedCount !== undefined && lobbyDisplayPieceTotal(room) > 0 && (
                         <p
                           className={`text-xs font-medium mt-1 ${
                             tossSkin ? "text-[#2F6FE4]" : "text-indigo-400"
                           }`}
                         >
-                          {Math.round((room.snappedCount / room.totalPieces) * 100)}% {isKo ? "완료" : "Complete"} (
-                          {room.snappedCount}/{room.totalPieces})
+                          {Math.round((room.snappedCount / lobbyDisplayPieceTotal(room)) * 100)}%{" "}
+                          {isKo ? "완료" : "Complete"} ({room.snappedCount}/{lobbyDisplayPieceTotal(room)})
                         </p>
                       )}
                       <p className={`text-xs flex items-center mt-1 ${tossSkin ? "text-slate-500" : "text-slate-500"}`}>
@@ -2407,7 +2422,7 @@ const Lobby = ({
                                 : "bg-slate-900/80 text-white border-slate-700"
                             }`}
                           >
-                            {room.totalPieces || room.piece_count} {isKo ? "조각" : "Pieces"}
+                            {lobbyDisplayPieceTotal(room)} {isKo ? "조각" : "Pieces"}
                           </span>
                           <span
                             className={roomDifficultyBadgeClass(roomRowDifficulty(room), !!tossSkin)}
