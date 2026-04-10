@@ -17,6 +17,7 @@ export interface PuzzleHintLayer {
   revealPiece: (pieceId: number, cols: number, rows: number) => void;
   revealPieces: (pieceIds: Iterable<number>, cols: number, rows: number) => void;
   setCompletionPercent: (percent: number) => void;
+  setBaseAlpha: (alpha: number) => void;
   destroy: () => void;
 }
 
@@ -36,6 +37,7 @@ export const createPuzzleHintLayer = (opts: HintLayerOptions): PuzzleHintLayer =
       revealPiece: () => {},
       revealPieces: () => {},
       setCompletionPercent: () => {},
+      setBaseAlpha: () => {},
       destroy: () => {},
     };
   }
@@ -50,10 +52,15 @@ export const createPuzzleHintLayer = (opts: HintLayerOptions): PuzzleHintLayer =
   hintSprite.zIndex = -0.5;
   if (difficulty === "easy") {
     world.addChild(hintSprite);
+    const setBaseAlpha = (alpha: number) => {
+      const a = Math.max(0, Math.min(1, alpha));
+      hintSprite.alpha = a;
+    };
     return {
       revealPiece: () => {},
       revealPieces: () => {},
       setCompletionPercent: () => {},
+      setBaseAlpha,
       destroy: () => hintSprite.destroy(),
     };
   }
@@ -74,6 +81,7 @@ export const createPuzzleHintLayer = (opts: HintLayerOptions): PuzzleHintLayer =
     revealPiece,
     revealPieces: () => {},
     setCompletionPercent,
+    setBaseAlpha: () => {},
     destroy: () => {
       hintSprite.destroy();
     },

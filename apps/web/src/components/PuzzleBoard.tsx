@@ -272,6 +272,8 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
   const [mosaicQuick, setMosaicQuick] = useState(false);
   const [mosaicGap, setMosaicGap] = useState(1.6);
   const [bgColor, setBgColor] = useState('#1e293b'); // default slate-800
+  /** 초급: 배경 가이드 이미지(힌트) 투명도 0~100 */
+  const [easyBgOpacityPct, setEasyBgOpacityPct] = useState(20);
   const [maxPlayers, setMaxPlayers] = useState(8);
   const isKo = locale === 'ko';
   const puzzleDifficulty = normalizePuzzleDifficulty(difficulty);
@@ -306,6 +308,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
   const refreshPieceOwnerOverlayRef = useRef<(() => void) | null>(null);
   const showPieceOwnerOverlayRef = useRef(showPieceOwnerOverlay);
   const ownerOverlayOpacityRef = useRef(ownerOverlayOpacityPct / 100);
+  const hintLayerRef = useRef<PuzzleHintLayer | null>(null);
   const boardLockedPieceIdsRef = useRef<Set<number>>(new Set());
 
   const normalizeRotationQuarter = (value: unknown) => {
@@ -537,6 +540,11 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
       // Ignore storage access errors.
     }
   }, [ownerOverlayOpacityPct]);
+
+  useEffect(() => {
+    if (puzzleDifficulty !== "easy") return;
+    hintLayerRef.current?.setBaseAlpha(Math.max(0, Math.min(1, easyBgOpacityPct / 100)));
+  }, [easyBgOpacityPct, puzzleDifficulty]);
 
   const peerLastSeenMsRef = useRef<Map<string, number>>(new Map());
   const [peerWatchEpoch, setPeerWatchEpoch] = useState(0);
@@ -2162,7 +2170,25 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
           puzzleBackTextureRef.current = PIXI.Texture.from(br.img);
           puzzleBackObjectUrlRef.current = br.objectUrl;
         } catch (e) {
-          console.warn("[PuzzleBoard] puzzle back face image failed, using solid back", e);
+          /** 토스 WebView 등에서 공용 뒷면 이미지 로드 실패 시: 회색 대신 현재 퍼즐 이미지를 뒷면 텍스처로 사용 */
+          if (img && img.width > 0 && img.height > 0) {
+            const backCanvas = document.createElement("canvas");
+            backCanvas.width = img.width;
+            backCanvas.height = img.height;
+            const backCtx = backCanvas.getContext("2d");
+            if (backCtx) {
+              backCtx.drawImage(img, 0, 0);
+              puzzleBackTextureRef.current = PIXI.Texture.from(backCanvas);
+              console.warn(
+                "[PuzzleBoard] puzzle back face image failed; fallback to current puzzle image texture",
+                e
+              );
+            } else {
+              console.warn("[PuzzleBoard] puzzle back face image failed, using solid back", e);
+            }
+          } else {
+            console.warn("[PuzzleBoard] puzzle back face image failed, using solid back", e);
+          }
         }
         
         const tabDepth = Math.min(pieceWidth, pieceHeight) * 0.2;
@@ -2250,6 +2276,10 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
           pieceHeight,
           difficulty: puzzleDifficulty,
         });
+        hintLayerRef.current = hintLayer;
+        if (puzzleDifficulty === "easy") {
+          hintLayerRef.current.setBaseAlpha(easyBgOpacityPct / 100);
+        }
         bumpProgress(38);
 
         // 탭(돌기) 방향 미리 계산
@@ -6766,6 +6796,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
           try {
             hintLayer?.destroy();
             hintLayer = null;
+            hintLayerRef.current = null;
           } catch {
             /* noop */
           }
@@ -7668,6 +7699,34 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
                     />
                   </div>
                 </div>
+                {puzzleDifficulty === "easy" ? (
+                  <div className={`mt-2.5 ${isTossMode ? "" : "border-t border-slate-700 pt-2.5"}`}>
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <span className={`text-[11px] ${isTossMode ? "text-[#2F6FE4]" : "text-slate-400"}`}>
+                        {isKo ? "배경 이미지" : "Background image"}
+                      </span>
+                      <span
+                        className={`text-[11px] font-semibold tabular-nums ${
+                          isTossMode ? "text-[#2F6FE4]" : "text-slate-300"
+                        }`}
+                      >
+                        {easyBgOpacityPct}%
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={easyBgOpacityPct}
+                      onChange={(e) =>
+                        setEasyBgOpacityPct(Math.max(0, Math.min(100, Number(e.target.value) || 0)))
+                      }
+                      className="h-1.5 w-full cursor-pointer accent-indigo-500"
+                      aria-label={isKo ? "초급 배경 이미지 투명도" : "Easy background image opacity"}
+                    />
+                  </div>
+                ) : null}
               </div>
             )}
           </div>
