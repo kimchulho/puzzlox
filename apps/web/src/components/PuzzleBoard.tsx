@@ -3009,28 +3009,126 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
         };
 
         /**
-         * 토스 WebView: canvas-confetti(고정 2D 캔버스) + PIXI WebGL 합성 시 레이어 깜빡임이 잦음.
-         * DOM 폭죽·add 블렌드 샤인 대신 월드 안에서만 아주 약한 하이라이트 펄스.
+         * 토스 WebView: `canvas-confetti`는 별도 2D 캔버스를 올려 WebGL과 겹치며 깜빡일 수 있음.
+         * 웹 `triggerFireworks`와 동일한 리듬(3초, 250ms 간격, 좌·우 origin, 시간에 따른 입자 수)으로
+         * PIXI만 써서 스테이지(화면) 좌표에 폭죽을 그림 — 퍼즐 월드 줌과 무관하게 화면 전체 규모.
          */
-        const celebrateTossCompletion = () => {
-          const g = new PIXI.Graphics();
-          g.zIndex = 2000;
-          world.addChild(g);
-          let f = 0;
-          const maxF = 48;
-          const onTick = () => {
-            f++;
-            g.clear();
-            g.rect(boardStartX, boardStartY, boardWidth, boardHeight);
-            const wave = (Math.sin((f / maxF) * Math.PI * 2) * 0.5 + 0.5) * 0.07;
-            g.fill({ color: 0xffffff, alpha: wave });
-            if (f >= maxF) {
-              app.ticker.remove(onTick);
-              world.removeChild(g);
-              g.destroy();
-            }
-          };
-          app.ticker.add(onTick);
+        const triggerPixiConfetti = () => {
+          try {
+            const container = new PIXI.Container();
+            container.eventMode = "none";
+            const colors = [0x3182f6, 0xf97316, 0xeab308, 0x22c55e, 0xec4899, 0xa855f7];
+            type PConf = {
+              g: PIXI.Graphics;
+              vx: number;
+              vy: number;
+              rot: number;
+              vr: number;
+              life: number;
+              maxLife: number;
+            };
+            const particles: PConf[] = [];
+            const randomInRange = (min: number, max: number) => Math.random() * (max - min) + min;
+
+            const spawnFromOrigin = (originX: number, originY: number, count: number) => {
+              for (let i = 0; i < count; i++) {
+                const g = new PIXI.Graphics();
+                const color = colors[Math.floor(Math.random() * colors.length)];
+                if (Math.random() > 0.38) {
+                  const w = 6 + Math.random() * 10;
+                  const h = 3 + Math.random() * 5;
+                  g.roundRect(-w / 2, -h / 2, w, h, 1.5).fill(color);
+                } else {
+                  const r = 2.5 + Math.random() * 4.5;
+                  g.circle(0, 0, r).fill(color);
+                }
+                g.x = originX + (Math.random() - 0.5) * 36;
+                g.y = originY + (Math.random() - 0.5) * 28;
+                const angle = Math.random() * Math.PI * 2;
+                const speed = randomInRange(4.5, 14);
+                particles.push({
+                  g,
+                  vx: Math.cos(angle) * speed,
+                  vy: Math.sin(angle) * speed,
+                  rot: Math.random() * Math.PI * 2,
+                  vr: (Math.random() - 0.5) * 0.38,
+                  life: 0,
+                  maxLife: 72 + Math.floor(Math.random() * 56),
+                });
+                container.addChild(g);
+              }
+            };
+
+            const durationMs = 3 * 1000;
+            const animationEnd = Date.now() + durationMs;
+            let confettiInterval: ReturnType<typeof setInterval> | null = setInterval(() => {
+              if (!isMounted) {
+                if (confettiInterval != null) clearInterval(confettiInterval);
+                confettiInterval = null;
+                return;
+              }
+              const timeLeft = animationEnd - Date.now();
+              if (timeLeft <= 0) {
+                if (confettiInterval != null) clearInterval(confettiInterval);
+                confettiInterval = null;
+                return;
+              }
+              const w = app.screen.width;
+              const h = app.screen.height;
+              const particleCount = Math.max(10, Math.round(50 * (timeLeft / durationMs)));
+              const oxL = randomInRange(0.1, 0.3) * w;
+              const oyL = (Math.random() - 0.2) * h;
+              const oxR = randomInRange(0.7, 0.9) * w;
+              const oyR = (Math.random() - 0.2) * h;
+              spawnFromOrigin(oxL, oyL, particleCount);
+              spawnFromOrigin(oxR, oyR, particleCount);
+            }, 250);
+
+            app.stage.addChild(container);
+
+            const onTick = () => {
+              if (!isMounted) {
+                if (confettiInterval != null) {
+                  clearInterval(confettiInterval);
+                  confettiInterval = null;
+                }
+                app.ticker.remove(onTick);
+                try {
+                  app.stage.removeChild(container);
+                  container.destroy({ children: true });
+                } catch {
+                  /* noop */
+                }
+                return;
+              }
+              let anyAlive = false;
+              for (const p of particles) {
+                if (p.life >= p.maxLife) continue;
+                anyAlive = true;
+                p.life++;
+                p.vy += 0.22;
+                p.g.x += p.vx;
+                p.g.y += p.vy;
+                p.rot += p.vr;
+                p.g.rotation = p.rot;
+                const t = p.life / p.maxLife;
+                p.g.alpha = Math.min(1, t * 8) * (1 - t) * (1 - t);
+              }
+              const intervalDone = confettiInterval == null;
+              if (intervalDone && !anyAlive) {
+                app.ticker.remove(onTick);
+                try {
+                  app.stage.removeChild(container);
+                  container.destroy({ children: true });
+                } catch {
+                  /* noop */
+                }
+              }
+            };
+            app.ticker.add(onTick);
+          } catch {
+            /* WebView/Canvas 폴백 등에서 그래픽 실패 시 퍼즐 본편은 그대로 */
+          }
         };
 
         const SNAP_SOUND_URL =
@@ -3128,7 +3226,8 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
             }
             zoomToCompletedPuzzle(true);
             if (isTossMode) {
-              celebrateTossCompletion();
+              playShineEffect();
+              triggerPixiConfetti();
             } else {
               triggerFireworks();
               playShineEffect();
@@ -5870,7 +5969,8 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
           isCompletedRef.current = true;
           zoomToCompletedPuzzle(false);
           if (isTossMode) {
-            celebrateTossCompletion();
+            playShineEffect();
+            triggerPixiConfetti();
           } else {
             triggerFireworks();
             playShineEffect();
@@ -6793,10 +6893,10 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
 
   const boardFrameStyle = isTossMode
     ? {
-        // 토스 모드 퍼즐 배경: 와이드 모드는 가로 방향(90deg), 일반은 세로 방향(180deg)
+        // 토스: 상단·모서리 은은한 하이라이트(유리 느낌) + 기존 톤 그라데이션 (전부 CSS, WebGL과 무관)
         backgroundImage: isTossWideMode
-          ? `linear-gradient(90deg, #F4F8FF 0%, #F4F8FF 35%, ${bgColor} 100%)`
-          : `linear-gradient(180deg, #F4F8FF 0%, #F4F8FF 35%, ${bgColor} 100%)`,
+          ? `linear-gradient(118deg, rgba(255,255,255,0.58) 0%, rgba(255,255,255,0.12) 18%, transparent 38%), linear-gradient(90deg, #F4F8FF 0%, #F4F8FF 35%, ${bgColor} 100%)`
+          : `linear-gradient(168deg, rgba(255,255,255,0.52) 0%, rgba(255,255,255,0.1) 22%, transparent 40%), linear-gradient(180deg, #F4F8FF 0%, #F4F8FF 35%, ${bgColor} 100%)`,
         backgroundColor: "#F4F8FF",
       }
     : { backgroundColor: bgColor };
