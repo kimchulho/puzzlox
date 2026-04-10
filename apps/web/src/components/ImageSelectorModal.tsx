@@ -29,8 +29,11 @@ export const ImageSelectorModal: React.FC<ImageSelectorModalProps> = ({
   const [isDeleting, setIsDeleting] = useState(false);
 
   const categories = useMemo(() => {
-    const cats = new Set(images.map(img => img.category || 'Uncategorized'));
-    return ['All', ...Array.from(cats)].sort();
+    const cats = Array.from(new Set(images.map((img) => img.category || 'Uncategorized'))).sort();
+    const pinnedLast = new Set(["내가 올린 사진", "My uploads"]);
+    const normalCats = cats.filter((c) => !pinnedLast.has(c));
+    const myUploadCats = cats.filter((c) => pinnedLast.has(c));
+    return ['All', ...normalCats, ...myUploadCats];
   }, [images]);
 
   const filteredImages = useMemo(() => {
