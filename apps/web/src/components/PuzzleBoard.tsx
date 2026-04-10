@@ -26,7 +26,7 @@ import {
 } from "@contracts/realtime";
 import { REALTIME_CHANNEL_STATES } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabaseClient';
-import { encodeRoomId, roomPath } from '../lib/roomCode';
+import { encodeRoomId, roomPath, tossIntossRoomUrl } from '../lib/roomCode';
 import { recordUserRoomVisit } from '../lib/recordUserRoomVisit';
 import { canClusterLockOnBoard, canPieceLockOnBoard, normalizePuzzleDifficulty, type PuzzleDifficulty } from '../lib/puzzleDifficulty';
 import { createPuzzleHintLayer, type PuzzleHintLayer } from '../lib/puzzleHintLayer';
@@ -328,9 +328,12 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
     }
   };
 
+  const roomShareUrl = hostWebViewPadding
+    ? tossIntossRoomUrl(roomId)
+    : `${window.location.origin}${roomPath(roomId)}`;
+
   const copyRoomJoinLink = () => {
-    const url = `${window.location.origin}${roomPath(roomId)}`;
-    void navigator.clipboard.writeText(url).then(() => {
+    void navigator.clipboard.writeText(roomShareUrl).then(() => {
       setQrPanelLinkCopied(true);
       window.setTimeout(() => setQrPanelLinkCopied(false), 2500);
     });
@@ -340,15 +343,14 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
     typeof navigator !== "undefined" && typeof navigator.share === "function";
 
   const shareRoomInvite = () => {
-    const url = `${window.location.origin}${roomPath(roomId)}`;
     const text = isKo
-      ? `퍼즐록스에서 퍼즐 맞춰요! ${url}`
-      : `Let's puzzle together on Puzzlox! ${url}`;
+      ? `퍼즐록스에서 퍼즐 맞춰요! ${roomShareUrl}`
+      : `Let's puzzle together on Puzzlox! ${roomShareUrl}`;
     void navigator
       .share({
         title: isKo ? "퍼즐록스" : "Puzzlox",
         text,
-        url,
+        url: roomShareUrl,
       })
       .catch((err: unknown) => {
         const name = err instanceof Error ? err.name : "";
@@ -364,8 +366,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
       // Ignore transient reconnect errors and keep overlay visible.
     }
   };
-  const roomJoinUrl = `${window.location.origin}${roomPath(roomId)}`;
-  const roomQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(roomJoinUrl)}`;
+  const roomQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(roomShareUrl)}`;
 
   useEffect(() => {
     if (!showQrCode) return;

@@ -1,14 +1,13 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { AuthUser } from "@contracts/auth";
 import GameShell from "./GameShell";
-import TossLoginScreen from "./TossLoginScreen";
-import { loadStoredSession } from "./lib/tossSession";
+import { loadStoredSession, loginWithTossApp, persistSession } from "./lib/tossSession";
 import { useTossSafeAreaInsets } from "./useTossSafeAreaInsets";
 
 export default function App() {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [ready, setReady] = useState(false);
-  const [showTossLogin, setShowTossLogin] = useState(false);
+  const [tossLoginBusy, setTossLoginBusy] = useState(false);
   const tossSafe = useTossSafeAreaInsets();
 
   useEffect(() => {
@@ -16,6 +15,21 @@ export default function App() {
     if (s) setUser(s.user);
     setReady(true);
   }, []);
+
+  const handleRequestTossLogin = useCallback(async () => {
+    if (tossLoginBusy) return;
+    setTossLoginBusy(true);
+    try {
+      const auth = await loginWithTossApp();
+      persistSession(auth);
+      setUser(auth.user);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      window.alert(msg);
+    } finally {
+      setTossLoginBusy(false);
+    }
+  }, [tossLoginBusy]);
 
   if (!ready) {
     return (
@@ -33,24 +47,13 @@ export default function App() {
     );
   }
 
-  if (showTossLogin) {
-    return (
-      <TossLoginScreen
-        onAuthed={(u) => {
-          setUser(u);
-          setShowTossLogin(false);
-        }}
-        onCancel={() => setShowTossLogin(false)}
-      />
-    );
-  }
-
   return (
     <GameShell
       user={user}
       setUser={setUser}
       onLoggedOut={() => setUser(null)}
-      onRequestTossLogin={() => setShowTossLogin(true)}
+      onRequestTossLogin={handleRequestTossLogin}
+      tossLoginBusy={tossLoginBusy}
     />
   );
 }

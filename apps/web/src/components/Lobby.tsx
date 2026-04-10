@@ -1,5 +1,28 @@
-﻿import React, { useState, useEffect, useRef } from 'react';
-import { Trophy, RefreshCw, Users, Lock, Image as ImageIcon, Play, Plus, Grid, Clock, RotateCcw, Maximize, Minimize, LogOut, ShieldAlert, LogIn, ChevronDown, Languages, Filter, Camera } from 'lucide-react';
+﻿import React, { useState, useEffect, useRef, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
+import {
+  Trophy,
+  RefreshCw,
+  User,
+  Users,
+  Lock,
+  Image as ImageIcon,
+  Play,
+  Plus,
+  Grid,
+  Clock,
+  RotateCcw,
+  Maximize,
+  Minimize,
+  LogOut,
+  ShieldAlert,
+  LogIn,
+  ChevronDown,
+  Languages,
+  Filter,
+  Camera,
+  Loader2,
+} from "lucide-react";
 import type { JoinRoomMeta } from "@contracts/roomJoin";
 import { supabase } from '../lib/supabaseClient';
 import { motion } from 'motion/react';
@@ -9,7 +32,6 @@ import { apiUrl } from '../lib/apiBase';
 import { ImageSelectorModal } from './ImageSelectorModal';
 import { PuzzleShotModal } from './PuzzleShotModal';
 import {
-  DEFAULT_PUZZLE_DIFFICULTY,
   normalizePuzzleDifficulty,
   puzzleDifficultyLabel,
   PUZZLE_DIFFICULTIES,
@@ -21,10 +43,14 @@ import {
   TOSS_LOBBY_BANNER_VERTICAL_PAD,
 } from './TossLobbyBottomBanner';
 
-/** 토스 로비 고정 상단바: safeArea 아래 패딩+한 줄(약 36px)+하단 패딩 */
-const TOSS_LOBBY_TOP_BAR_BELOW_SAFE_PX = 52;
+/**
+ * 토스 파트너 WebView는 네이티브 내비 아래부터 그려지므로, `SafeAreaInsets.top`을 헤더에 또 넣으면
+ * 버튼 위에 빈 여백만 커집니다(이중 인셋). 상단 안전 영역은 호스트가 처리한다고 보고,
+ * 여기 값은 **커스텀 고정 헤더 본문 높이**(상·하 패딩 + 한 줄: 닉네임 입력 또는 버튼)만 반영합니다.
+ */
+const TOSS_LOBBY_TOP_BAR_INNER_HEIGHT_PX = 44;
 /** 상단바 아래 본문과의 간격 */
-const TOSS_LOBBY_TOP_BAR_GAP_PX = 10;
+const TOSS_LOBBY_TOP_BAR_GAP_PX = 8;
 import { hasTossRewardAdBeenSeenForRoom, runTossRewardedRoomEntry } from '../lib/tossRewardedAdGate';
 
 const formatPlayTime = (seconds: number) => {
@@ -39,6 +65,67 @@ const WEB_REWARDED_AD_UNIT_PATH = '/23346390161/web_puzzle_rewarded';
 const GPT_SCRIPT_ID = 'google-publisher-tag-script';
 const REWARDED_DEBUG_PREFIX = '[RewardedAd]';
 const ENABLE_WEB_REWARDED_GATE = false;
+
+/** 공개 퍼즐 이미지가 DB에 없을 때만 사용 (첫 화면에는 쓰지 않음) */
+const LOBBY_PUBLIC_IMAGE_FALLBACK_URL =
+  "https://ewbjogsolylcbfmpmyfa.supabase.co/storage/v1/object/public/checki/2.jpg";
+
+/** 토스 로비 직접 업로드 로그인 안내 — `apps/toss/LeavePuzzleConfirmDialog` 와 동일 톤 */
+const TOSS_UPLOAD_LOGIN_MODAL_Z = 300;
+const tossUploadLoginBackdropStyle: CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  zIndex: TOSS_UPLOAD_LOGIN_MODAL_Z,
+  backgroundColor: "rgba(0, 0, 0, 0.52)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 24,
+  boxSizing: "border-box",
+};
+const tossUploadLoginCardStyle: CSSProperties = {
+  width: "100%",
+  maxWidth: 340,
+  borderRadius: 20,
+  backgroundColor: "#ffffff",
+  boxShadow: "0 12px 40px rgba(0, 0, 0, 0.16)",
+  padding: "22px 20px 18px",
+  boxSizing: "border-box",
+};
+const tossUploadLoginTitleStyle: CSSProperties = {
+  margin: 0,
+  fontSize: 18,
+  fontWeight: 700,
+  lineHeight: 1.35,
+  color: "#191f28",
+  letterSpacing: "-0.02em",
+};
+const tossUploadLoginRowStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "row",
+  gap: 8,
+  marginTop: 20,
+};
+const tossUploadLoginBtnBase: CSSProperties = {
+  flex: 1,
+  border: "none",
+  cursor: "pointer",
+  padding: "14px 12px",
+  fontSize: 15,
+  fontWeight: 600,
+  borderRadius: 14,
+  minHeight: 48,
+};
+const tossUploadLoginBtnSecondary: CSSProperties = {
+  ...tossUploadLoginBtnBase,
+  backgroundColor: "#f2f4f6",
+  color: "#333d4b",
+};
+const tossUploadLoginBtnPrimary: CSSProperties = {
+  ...tossUploadLoginBtnBase,
+  backgroundColor: "#3182f6",
+  color: "#ffffff",
+};
 
 const LS_GUEST_CREATED_ROOMS = "puzzle_created_room_ids";
 
@@ -254,8 +341,8 @@ declare global {
 
 export type TossLobbyUi = {
   safeArea: { top: number; left: number; right: number; bottom: number };
-  brandTitle: string;
-  brandIconUrl: string;
+  /** 토스 앱 로그인 진행 중(버튼 비활성·문구) */
+  tossLoginBusy?: boolean;
 };
 
 const Lobby = ({
@@ -280,7 +367,7 @@ const Lobby = ({
   user?: any;
   onLogout: () => void;
   onAdmin: () => void;
-  onLoginClick: () => void;
+  onLoginClick: () => void | Promise<void>;
   onOpenTerms?: () => void;
   /** 로그인 시 헤더의 아이디 탭 → 개인 대시보드 */
   onOpenDashboard?: () => void;
@@ -298,12 +385,14 @@ const Lobby = ({
   const [isRoomsRefreshing, setIsRoomsRefreshing] = useState(false);
   const roomsRefreshDepthRef = useRef(0);
   const [pieceCount, setPieceCount] = useState(100);
-  const [difficulty, setDifficulty] = useState<PuzzleDifficulty>(DEFAULT_PUZZLE_DIFFICULTY);
-  const [imageUrl, setImageUrl] = useState('https://ewbjogsolylcbfmpmyfa.supabase.co/storage/v1/object/public/checki/2.jpg');
+  const [difficulty, setDifficulty] = useState<PuzzleDifficulty>("easy");
+  /** 공개 이미지: 목록 로드 후 랜덤 1장. 로드 전에는 빈 값(썸네일·생성 버튼 대기). */
+  const [imageUrl, setImageUrl] = useState("");
   const [imageSource, setImageSource] = useState<'public' | 'custom'>('public');
   const [publicImages, setPublicImages] = useState<any[]>([]);
   const [isImageModalOpen, setIsImageModalOpen] = useState(false);
   const [puzzleShotOpen, setPuzzleShotOpen] = useState(false);
+  const [showCustomUploadLoginModal, setShowCustomUploadLoginModal] = useState(false);
   const [showRoomFullModal, setShowRoomFullModal] = useState(false);
   const [roomFullInfo, setRoomFullInfo] = useState<{ roomCode: string; current: number; max: number } | null>(null);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(!!document.fullscreenElement);
@@ -316,16 +405,55 @@ const Lobby = ({
   const gptLoadPromiseRef = useRef<Promise<void> | null>(null);
   const gptServicesEnabledRef = useRef(false);
   const isKo = locale === 'ko';
+  /** 토스 로비 한국어: ~습니다/됩니다 등 → ~요 (웹은 기존 문체 유지) */
+  const koT = (formalKo: string, tossYoKo: string) => (tossUi ? tossYoKo : formalKo);
+
+  /** 토스·웹 공통: 서버에 연결된 로그인 사용자(토스/일반). `user`만 있고 `id`가 없으면 안내 유지 */
+  const hasLoggedInAccount =
+    user != null && user.id != null && String(user.id).trim() !== "";
 
   useEffect(() => {
-    const fetchPublicImages = async () => {
-      const { data } = await supabase.from('puzzle_images').select('*').eq('is_public', true);
-      if (data) setPublicImages(data);
+    if (!showCustomUploadLoginModal || !tossUi) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowCustomUploadLoginModal(false);
     };
-    fetchPublicImages();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showCustomUploadLoginModal, tossUi]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchPublicImages = async () => {
+      const { data, error } = await supabase.from("puzzle_images").select("*").eq("is_public", true);
+      if (cancelled) return;
+      if (error || !data) {
+        if (!cancelled) {
+          console.error("Failed to load public puzzle images:", error);
+          setImageUrl(LOBBY_PUBLIC_IMAGE_FALLBACK_URL);
+        }
+        return;
+      }
+      setPublicImages(data);
+      if (data.length === 0) {
+        setImageUrl(LOBBY_PUBLIC_IMAGE_FALLBACK_URL);
+        return;
+      }
+      const row = data[Math.floor(Math.random() * data.length)] as { url?: unknown };
+      const u = row?.url;
+      if (typeof u === "string" && u.trim() !== "") setImageUrl(u);
+      else setImageUrl(LOBBY_PUBLIC_IMAGE_FALLBACK_URL);
+    };
+    void fetchPublicImages();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!user) {
+      e.target.value = "";
+      return;
+    }
     if (!e.target.files || e.target.files.length === 0) return;
     const file = e.target.files[0];
     const fileExt = file.name.split('.').pop();
@@ -381,6 +509,21 @@ const Lobby = ({
       localStorage.setItem('puzzle_guest_name', guestName);
     }
   }, [guestName, user]);
+
+  /** 비로그인 상태에서 직접 업로드 탭이면 공개로 되돌림(로그아웃 등) */
+  useEffect(() => {
+    if (user) return;
+    if (imageSource !== "custom") return;
+    setImageSource("public");
+    if (publicImages.length > 0) {
+      const row = publicImages[Math.floor(Math.random() * publicImages.length)] as { url?: unknown };
+      const u = row?.url;
+      if (typeof u === "string" && u.trim() !== "") setImageUrl(u);
+      else setImageUrl(LOBBY_PUBLIC_IMAGE_FALLBACK_URL);
+    } else {
+      setImageUrl(LOBBY_PUBLIC_IMAGE_FALLBACK_URL);
+    }
+  }, [user, imageSource, publicImages]);
 
   useEffect(() => {
     const onFullscreenChange = () => setIsFullscreen(!!document.fullscreenElement);
@@ -539,6 +682,7 @@ const Lobby = ({
     console.log('Creating room with image URL:', currentImageUrl);
     const creatorName = user ? user.username : guestName.trim();
     if (!creatorName) return;
+    if (!currentImageUrl.trim()) return;
 
     setIsCreating(true);
 
@@ -594,7 +738,7 @@ const Lobby = ({
       }
     } else if (error) {
       console.error('Error creating room:', error);
-      alert("방 생성에 실패했습니다.");
+      alert(isKo ? koT("방 생성에 실패했습니다.", "방 만들기에 실패했어요.") : "Failed to create the room.");
     }
     setIsCreating(false);
   };
@@ -828,15 +972,18 @@ const Lobby = ({
     setRoomCodeError(null);
     const trimmed = roomCodeInput.trim();
     if (!trimmed) {
-      setRoomCodeError(isKo ? '방 번호를 입력해 주세요.' : 'Enter a room code.');
+      setRoomCodeError(isKo ? "방 번호를 입력해 주세요." : "Enter a room code.");
       return;
     }
     const id = parseRoomNumberOrCode(roomCodeInput);
     if (id == null) {
       setRoomCodeError(
         isKo
-          ? '방 번호 형식이 올바르지 않습니다. (6자 코드 또는 숫자 ID)'
-          : 'Invalid code. Use the 6-character code or a numeric room ID.'
+          ? koT(
+              "방 번호 형식이 올바르지 않습니다. (6자 코드 또는 숫자 ID)",
+              "방 번호 형식이 올바르지 않아요. (6자 코드 또는 숫자 ID)",
+            )
+          : "Invalid code. Use the 6-character code or a numeric room ID.",
       );
       return;
     }
@@ -847,11 +994,20 @@ const Lobby = ({
 
     if (error) {
       console.error('Join by room code:', error);
-      setRoomCodeError(isKo ? '방 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.' : 'Could not load the room. Please try again.');
+      setRoomCodeError(
+        isKo
+          ? koT(
+              "방 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.",
+              "방 정보를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.",
+            )
+          : "Could not load the room. Please try again.",
+      );
       return;
     }
     if (!data) {
-      setRoomCodeError(isKo ? '해당 번호의 방을 찾을 수 없습니다.' : 'No room found with that code.');
+      setRoomCodeError(
+        isKo ? koT("해당 번호의 방을 찾을 수 없습니다.", "해당 번호의 방을 찾을 수 없어요.") : "No room found with that code.",
+      );
       return;
     }
 
@@ -884,7 +1040,7 @@ const Lobby = ({
         body: "text-slate-600",
         label: "text-[#2F6FE4]",
         input:
-          "bg-[#F4F8FF] border-[#D9E8FF] text-slate-900 placeholder:text-slate-400 focus:border-[#2F6FE4] focus:ring-1 focus:ring-[#2F6FE4]/30",
+          "bg-[#F4F8FF] border border-solid border-[#9BB5DC] text-slate-900 placeholder:text-slate-400 focus:border-[#2F6FE4] focus:ring-1 focus:ring-[#2F6FE4]/25",
         segmentOn: "bg-[#2F6FE4] text-white",
         segmentOff: "bg-white border border-[#D9E8FF] text-slate-600 hover:bg-[#EAF2FF]",
         pillOn: "bg-[#2F6FE4] text-white",
@@ -1048,9 +1204,7 @@ const Lobby = ({
           tossUi
             ? {
                 paddingTop:
-                  tossUi.safeArea.top +
-                  TOSS_LOBBY_TOP_BAR_BELOW_SAFE_PX +
-                  TOSS_LOBBY_TOP_BAR_GAP_PX,
+                  TOSS_LOBBY_TOP_BAR_INNER_HEIGHT_PX + TOSS_LOBBY_TOP_BAR_GAP_PX,
                 paddingBottom:
                   tossUi.safeArea.bottom +
                   TOSS_LOBBY_BANNER_SLOT_H +
@@ -1061,38 +1215,43 @@ const Lobby = ({
       >
       {tossUi ? (
         <header
-          className="fixed left-0 right-0 top-0 z-50 flex items-center justify-between gap-2 border-b border-[#D9E8FF] bg-white/95 shadow-sm backdrop-blur-sm"
+          className="fixed left-0 right-0 top-0 z-50 flex w-full items-center justify-between gap-2 border-b border-[#D9E8FF] bg-white/95 shadow-sm backdrop-blur-sm"
           style={{
-            paddingTop: tossUi.safeArea.top + 8,
-            paddingBottom: 8,
+            paddingTop: 4,
+            paddingBottom: 4,
             paddingLeft: tossUi.safeArea.left + 12,
             paddingRight: tossUi.safeArea.right + 12,
           }}
         >
-          <div className="flex min-w-0 flex-1 items-center gap-2">
-            {tossUi.brandIconUrl ? (
-              <img
-                src={tossUi.brandIconUrl}
-                alt=""
-                className="h-9 w-9 shrink-0 rounded-lg object-cover"
-              />
+          <div className="min-w-0 flex-1 pr-1">
+            {!user ? (
+              <div className="flex max-w-[min(44vw,11rem)] items-center gap-1.5 min-w-0">
+                <User className="size-5 shrink-0 text-[#2F6FE4]" aria-hidden strokeWidth={2} />
+                <input
+                  type="text"
+                  placeholder={isKo ? "닉네임" : "Nickname"}
+                  value={guestName}
+                  onChange={(e) => setGuestName(e.target.value)}
+                  className={`box-border min-w-0 flex-1 rounded-md px-2 py-1.5 text-sm focus:outline-none ${tossSkin?.input ?? ""}`}
+                  autoComplete="username"
+                />
+              </div>
             ) : null}
-            <span className="truncate text-sm font-bold text-slate-900">{tossUi.brandTitle}</span>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 items-center gap-1.5">
             {user ? (
               <>
                 <button
                   type="button"
                   onClick={() => onOpenDashboard?.()}
-                  className="max-w-[42vw] truncate rounded-lg px-2 py-1.5 text-sm font-semibold text-[#2F6FE4] transition-colors hover:bg-[#EAF2FF] hover:text-[#2563EB]"
+                  className="max-w-[38vw] truncate rounded-md px-2 py-1 text-sm font-semibold text-[#2F6FE4] transition-colors hover:bg-[#EAF2FF] hover:text-[#2563EB]"
                 >
                   {user.username}
                 </button>
                 <button
                   type="button"
                   onClick={onLogout}
-                  className="shrink-0 rounded-lg border border-[#D9E8FF] bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-[#F4F8FF] active:opacity-90"
+                  className="shrink-0 rounded-md border border-[#D9E8FF] bg-white px-2 py-1 text-xs font-semibold text-slate-600 transition-colors hover:bg-[#F4F8FF] active:opacity-90"
                 >
                   {isKo ? "로그아웃" : "Log out"}
                 </button>
@@ -1100,10 +1259,17 @@ const Lobby = ({
             ) : (
               <button
                 type="button"
-                onClick={onLoginClick}
-                className="shrink-0 rounded-lg bg-[#3182F6] px-3 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#2563EB] active:opacity-90"
+                disabled={!!tossUi.tossLoginBusy}
+                onClick={() => void onLoginClick()}
+                className="shrink-0 rounded-md bg-[#3182F6] px-2.5 py-1.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#2563EB] active:opacity-90 disabled:pointer-events-none disabled:opacity-60"
               >
-                {isKo ? "토스로 로그인" : "Sign in with Toss"}
+                {tossUi.tossLoginBusy
+                  ? isKo
+                    ? "로그인 중…"
+                    : "Signing in…"
+                  : isKo
+                    ? "토스로 로그인"
+                    : "Sign in with Toss"}
               </button>
             )}
           </div>
@@ -1160,23 +1326,23 @@ const Lobby = ({
             </>
           )}
 
-          {tossUi ? (
+          {tossUi && !hasLoggedInAccount ? (
             <div
               className="mb-4 rounded-xl border border-[#D9E8FF] bg-[#EAF2FF]/90 px-3 py-2.5 text-left text-xs leading-relaxed text-slate-700"
               role="note"
             >
               <p className="mb-1 font-semibold text-slate-900">
-                {isKo ? "보상형 광고 안내" : "Rewarded video"}
+                {isKo ? "퍼즐 기록 안내" : "Puzzle history"}
               </p>
               <p>
                 {isKo
-                  ? "방을 처음 만들거나, 진행 중인 방을 이 기기에서 처음 열 때만 짧은 보상형 광고를 시청한 뒤 퍼즐방으로 이동해요. 완료된 퍼즐방은 광고 없이 바로 들어가요. 같은 방은 한 번 시청하면 이 기기에서는 다시 나오지 않아요."
-                  : "A short rewarded ad plays only when you create a room or open an active room for the first time on this device. Completed puzzles open with no ad. Each room only asks once on this device."}
+                  ? "맞춘 퍼즐 수·전적 등 기록을 계정에 안전하게 남기려면 토스로 로그인해 주세요. 상단의 「토스로 로그인」 버튼을 이용할 수 있어요."
+                  : "Sign in with Toss to save puzzle stats and history on your account. Use the “Sign in with Toss” button at the top."}
               </p>
             </div>
           ) : null}
 
-          {!user && (
+          {!user && !tossUi && (
             <div className="mb-4">
               <input
                 type="text"
@@ -1214,10 +1380,17 @@ const Lobby = ({
                         : "bg-slate-800 text-slate-400"
                   }`}
                 >
-                  {isKo ? "공개" : "Public"}
+                  {isKo ? "갤러리" : "Gallery"}
                 </button>
                 <button
-                  onClick={() => setImageSource("custom")}
+                  type="button"
+                  onClick={() => {
+                    if (!user) {
+                      setShowCustomUploadLoginModal(true);
+                      return;
+                    }
+                    setImageSource("custom");
+                  }}
                   className={`flex-1 py-2 rounded-lg text-sm font-medium ${
                     imageSource === "custom"
                       ? tossSkin
@@ -1246,17 +1419,34 @@ const Lobby = ({
                         tossSkin ? "bg-white border border-[#D9E8FF]" : "bg-slate-900"
                       }`}
                     >
-                      <img 
-                        src={imageUrl} 
-                        alt="Selected puzzle" 
-                        className="w-full h-full object-cover"
-                        referrerPolicy="no-referrer"
-                      />
+                      {imageUrl ? (
+                        <img
+                          src={imageUrl}
+                          alt=""
+                          className="h-full w-full object-cover"
+                          referrerPolicy="no-referrer"
+                        />
+                      ) : (
+                        <div
+                          className={`flex h-full w-full items-center justify-center ${
+                            tossSkin ? "bg-[#EAF2FF] text-[#2F6FE4]/60" : "bg-slate-800 text-slate-500"
+                          }`}
+                          aria-hidden
+                        >
+                          <Loader2 className="h-5 w-5 animate-spin" />
+                        </div>
+                      )}
                     </div>
                     <span className="text-sm font-medium truncate">
-                      {publicImages.find(img => img.url === imageUrl)?.title || 
-                       publicImages.find(img => img.url === imageUrl)?.category + ' - ' + publicImages.find(img => img.url === imageUrl)?.style || 
-                       (isKo ? '이미지를 선택하세요' : 'Select an image')}
+                      {!imageUrl
+                        ? isKo
+                          ? "이미지 불러오는 중…"
+                          : "Loading images…"
+                        : publicImages.find((img) => img.url === imageUrl)?.title ||
+                          publicImages.find((img) => img.url === imageUrl)?.category +
+                            " - " +
+                            publicImages.find((img) => img.url === imageUrl)?.style ||
+                          (isKo ? "이미지를 선택하세요" : "Select an image")}
                     </span>
                   </div>
                   <ChevronDown
@@ -1286,13 +1476,13 @@ const Lobby = ({
               >
                 <Grid className="w-4 h-4" /> {isKo ? "조각 수" : "Target Piece Count"}
               </label>
-              <div className="grid grid-cols-6 gap-2">
-                {[20, 100, 150, 300, 500, 1000].map((count) => (
+              <div className="grid grid-cols-4 gap-2 sm:grid-cols-7">
+                {[20, 50, 100, 150, 300, 500, 1000].map((count) => (
                   <button
                     key={count}
                     type="button"
                     onClick={() => setPieceCount(count)}
-                    className={`py-2 rounded-lg text-sm font-medium transition-colors ${
+                    className={`py-2 rounded-lg text-xs font-medium transition-colors sm:text-sm ${
                       pieceCount === count
                         ? tossSkin
                           ? tossSkin.pillOn
@@ -1308,8 +1498,16 @@ const Lobby = ({
               </div>
               <p className={`text-xs mt-2 ${tossSkin ? tossSkin.empty : "text-slate-500"}`}>
                 {isKo
-                  ? "이미지 비율에 맞춰 정사각형 조각을 유지하기 위해 실제 조각 수는 약간 달라질 수 있습니다."
+                  ? koT(
+                      "이미지 비율에 맞춰 정사각형 조각을 유지하기 위해 실제 조각 수는 약간 달라질 수 있습니다.",
+                      "이미지 비율에 맞춰 정사각형 조각을 유지하려고 해서 실제 조각 수는 약간 달라질 수 있어요.",
+                    )
                   : "Actual count may vary slightly to maintain square pieces based on image aspect ratio."}
+              </p>
+              <p className={`text-xs mt-1.5 ${tossSkin ? tossSkin.empty : "text-slate-500"}`}>
+                {isKo
+                  ? "참고: 100조각은 혼자 맞출 때 약 10분 정도 걸려요."
+                  : "Tip: 100 pieces often takes about 10 minutes for one person on average."}
               </p>
             </div>
 
@@ -1343,20 +1541,32 @@ const Lobby = ({
               </div>
               <p className={`text-xs mt-2 ${tossSkin ? tossSkin.empty : "text-slate-500"}`}>
                 {difficulty === "easy"
-                  ? (isKo
-                      ? "초급: 퍼즐판에 20% 투명 밑그림이 항상 표시됩니다."
-                      : "Easy: 20% transparent guide image is always visible.")
+                  ? isKo
+                    ? koT(
+                        "처음이신분: 퍼즐판에 20% 투명 밑그림이 항상 표시됩니다.",
+                        "처음이신분: 퍼즐판에 20% 투명 밑그림이 항상 보여요.",
+                      )
+                    : "Easy: 20% transparent guide image is always visible."
                   : difficulty === "medium"
-                  ? (isKo
-                      ? "중급: 전체 20% 밑그림이 보이며, 진행도 5%마다 투명도가 1%씩 감소합니다."
-                      : "Medium: full 20% guide is shown, and opacity drops by 1% every 5% progress.")
-                  : difficulty === "hard"
-                  ? (isKo
-                      ? "고급: 밑그림 없음. 내부 조각은 테두리/고정 체인과 연결될 때만 정위치 고정됩니다."
-                      : "Hard: no guide; inner pieces lock only when connected to border/locked chain.")
-                  : (isKo
-                      ? "악몽: 고급 규칙 + 조각 회전/앞면 뒤집기. 시작 시 일부 조각이 뒤집히고 회전됩니다."
-                      : "Nightmare: hard rules + piece rotation/front-side flip. Pieces start partially flipped and rotated.")}
+                    ? isKo
+                      ? koT(
+                          "한번 해보신분: 전체 20% 밑그림이 보이며, 진행도 5%마다 투명도가 1%씩 감소합니다.",
+                          "한번 해보신분: 전체 20% 밑그림이 보이고, 진행도 5%마다 투명도가 1%씩 줄어들어요.",
+                        )
+                      : "Medium: full 20% guide is shown, and opacity drops by 1% every 5% progress."
+                    : difficulty === "hard"
+                      ? isKo
+                        ? koT(
+                            "몰입이 필요한분: 밑그림 없음. 내부 조각은 테두리/고정 체인과 연결될 때만 정위치 고정됩니다.",
+                            "몰입이 필요한분: 밑그림 없어요. 안쪽 조각은 테두리·고정 체인과 이어질 때만 제자리에 고정돼요.",
+                          )
+                        : "Hard: no guide; inner pieces lock only when connected to border/locked chain."
+                      : isKo
+                        ? koT(
+                            "한계에 도전할분: 고급 규칙 + 조각 회전/앞면 뒤집기. 시작 시 일부 조각이 뒤집히고 회전됩니다.",
+                            "한계에 도전할분: 고급 규칙에 조각 회전·앞뒤 뒤집기가 더해져요. 시작할 때 일부 조각이 뒤집혀 있거나 돌아가 있을 수 있어요.",
+                          )
+                        : "Nightmare: hard rules + piece rotation/front-side flip. Pieces start partially flipped and rotated."}
               </p>
             </div>
 
@@ -1420,7 +1630,8 @@ const Lobby = ({
               isCreating ||
               (ENABLE_WEB_REWARDED_GATE && isRewardAdLoading) ||
               tossRewardGateBusy ||
-              (!user && !guestName.trim())
+              (!user && !guestName.trim()) ||
+              (imageSource === "public" && !imageUrl.trim())
             }
             className={`w-full font-medium py-4 px-6 rounded-xl flex items-center justify-center gap-2 transition-colors ${
               tossSkin
@@ -1435,8 +1646,8 @@ const Lobby = ({
                 ? (isKo ? "대기 중…" : "Please wait…")
                 : tossUi
                   ? isKo
-                    ? "광고 시청 후 방 만들기"
-                    : "Create room after ad"
+                    ? "광고 시청 후 퍼즐 맞추기"
+                    : "Solve puzzle after ad"
                     : isKo
                     ? "방 만들기"
                     : "Create room"}
@@ -1613,7 +1824,10 @@ const Lobby = ({
               </div>
               <p className={`text-[11px] leading-snug ${tossSkin ? "text-slate-500" : "text-slate-500"}`}>
                 {isKo
-                  ? "진행 중인 퍼즐방과 완료된 퍼즐방 목록 모두에 적용됩니다."
+                  ? koT(
+                      "진행 중인 퍼즐방과 완료된 퍼즐방 목록 모두에 적용됩니다.",
+                      "진행 중인 퍼즐방·완료된 퍼즐방 목록 둘 다에 적용돼요.",
+                    )
                   : "Applies to both active and completed room lists."}
               </p>
             </div>
@@ -1638,7 +1852,7 @@ const Lobby = ({
                 }`}
               >
                 <ImageIcon className={`w-12 h-12 mb-3 ${tossSkin ? "opacity-30 text-[#2F6FE4]" : "opacity-20"}`} />
-                <p>{isKo ? "아직 진행 중인 방이 없습니다." : "No active rooms yet."}</p>
+                <p>{isKo ? koT("아직 진행 중인 방이 없습니다.", "아직 진행 중인 방이 없어요.") : "No active rooms yet."}</p>
                 <p className="text-sm mt-1">{isKo ? "첫 번째 방을 만들어 보세요!" : "Be the first to create one!"}</p>
               </div>
             ) : (() => {
@@ -1676,7 +1890,7 @@ const Lobby = ({
                     <Filter className={`w-10 h-10 mb-2 opacity-25 ${tossSkin ? "text-[#2F6FE4]" : ""}`} />
                     <p className="text-sm">
                       {isKo
-                        ? "선택한 난이도의 진행 중인 방이 없습니다."
+                        ? koT("선택한 난이도의 진행 중인 방이 없습니다.", "선택한 난이도의 진행 중인 방이 없어요.")
                         : "No active rooms for this difficulty."}
                     </p>
                     <p className="text-xs mt-1 opacity-80">
@@ -1879,7 +2093,7 @@ const Lobby = ({
                 }`}
               >
                 <Trophy className={`w-12 h-12 mb-3 ${tossSkin ? "opacity-30 text-[#2F6FE4]" : "opacity-20"}`} />
-                <p>{isKo ? "아직 완료된 퍼즐방이 없습니다." : "No completed puzzles yet."}</p>
+                <p>{isKo ? koT("아직 완료된 퍼즐방이 없습니다.", "아직 완료된 퍼즐방이 없어요.") : "No completed puzzles yet."}</p>
               </div>
             ) : (() => {
               const filteredCompleted =
@@ -1898,7 +2112,7 @@ const Lobby = ({
                     <Filter className={`w-10 h-10 mb-2 opacity-25 ${tossSkin ? "text-[#2F6FE4]" : ""}`} />
                     <p className="text-sm">
                       {isKo
-                        ? "선택한 난이도의 완료된 방이 없습니다."
+                        ? koT("선택한 난이도의 완료된 방이 없습니다.", "선택한 난이도의 완료된 방이 없어요.")
                         : "No completed rooms for this difficulty."}
                     </p>
                     <p className="text-xs mt-1 opacity-80">
@@ -2030,6 +2244,92 @@ const Lobby = ({
 
       <PuzzleShotModal open={puzzleShotOpen} onClose={() => setPuzzleShotOpen(false)} isKo={isKo} />
 
+      {showCustomUploadLoginModal &&
+        (tossUi && typeof document !== "undefined"
+          ? createPortal(
+              <div
+                style={tossUploadLoginBackdropStyle}
+                role="presentation"
+                onClick={() => setShowCustomUploadLoginModal(false)}
+              >
+                <div
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="custom-upload-login-modal-title"
+                  style={tossUploadLoginCardStyle}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <h2 id="custom-upload-login-modal-title" style={tossUploadLoginTitleStyle}>
+                    {isKo
+                      ? "직접 업로드는 로그인이 필요해요"
+                      : "Sign in to upload your own image"}
+                  </h2>
+                  <div style={tossUploadLoginRowStyle}>
+                    <button
+                      type="button"
+                      style={tossUploadLoginBtnSecondary}
+                      onClick={() => setShowCustomUploadLoginModal(false)}
+                    >
+                      {isKo ? "닫기" : "Close"}
+                    </button>
+                    <button
+                      type="button"
+                      style={tossUploadLoginBtnPrimary}
+                      onClick={() => {
+                        setShowCustomUploadLoginModal(false);
+                        void onLoginClick();
+                      }}
+                    >
+                      {isKo ? "토스로 로그인" : "Sign in with Toss"}
+                    </button>
+                  </div>
+                </div>
+              </div>,
+              document.body,
+            )
+          : !tossUi ? (
+              <div
+                className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="custom-upload-login-modal-title-web"
+                onClick={() => setShowCustomUploadLoginModal(false)}
+              >
+                <div
+                  className="w-full max-w-sm rounded-2xl border border-slate-700 bg-slate-900 p-5 text-white shadow-2xl"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <h3 id="custom-upload-login-modal-title-web" className="mb-2 text-base font-bold">
+                    {isKo ? "로그인이 필요해요" : "Sign in required"}
+                  </h3>
+                  <p className="text-sm leading-relaxed text-slate-300">
+                    {isKo
+                      ? "업로드된 이미지 관리를 위해 로그인이 필요합니다."
+                      : "Please sign in to upload and manage your own images."}
+                  </p>
+                  <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end sm:gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowCustomUploadLoginModal(false)}
+                      className="rounded-lg border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-700"
+                    >
+                      {isKo ? "닫기" : "Close"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowCustomUploadLoginModal(false);
+                        void onLoginClick();
+                      }}
+                      className="rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-600"
+                    >
+                      {isKo ? "로그인" : "Sign in"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null)}
+
       {showRoomFullModal && roomFullInfo && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <div
@@ -2039,11 +2339,28 @@ const Lobby = ({
                 : "border-slate-700 bg-slate-900 text-white"
             }`}
           >
-            <h3 className="text-base font-bold mb-2">방 입장 불가</h3>
+            <h3 className="text-base font-bold mb-2">
+              {isKo ? koT("방 입장 불가", "방에 들어갈 수 없어요") : "Room is full"}
+            </h3>
             <p className={`text-sm leading-relaxed ${tossUi ? "text-slate-600" : "text-slate-300"}`}>
-              Room #{roomFullInfo.roomCode} 는 현재 정원이 가득 찼습니다.
-              <br />
-              ({roomFullInfo.current}/{roomFullInfo.max})
+              {isKo ? (
+                tossUi ? (
+                  <>
+                    #{roomFullInfo.roomCode} 방은 지금 정원이 가득 찼어요.
+                    <br />({roomFullInfo.current}/{roomFullInfo.max})
+                  </>
+                ) : (
+                  <>
+                    Room #{roomFullInfo.roomCode} 는 현재 정원이 가득 찼습니다.
+                    <br />({roomFullInfo.current}/{roomFullInfo.max})
+                  </>
+                )
+              ) : (
+                <>
+                  Room #{roomFullInfo.roomCode} is full.
+                  <br />({roomFullInfo.current}/{roomFullInfo.max})
+                </>
+              )}
             </p>
             <div className="mt-4 flex justify-end">
               <button

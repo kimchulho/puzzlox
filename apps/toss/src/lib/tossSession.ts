@@ -1,4 +1,5 @@
 import type { AuthMeResponse, AuthSuccessResponse, AuthUser } from "@contracts/auth";
+import { appLogin } from "@apps-in-toss/web-framework";
 import { apiUrl } from "./apiBase";
 
 const TOKEN_KEY = "puzzle_access_token";
@@ -25,6 +26,12 @@ export function persistSession(data: AuthSuccessResponse): void {
 export function clearSession(): void {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+}
+
+/** 토스 앱 로그인 → 서버 교환 → 세션 토큰 (전환 화면 없이 로비에서 호출). */
+export async function loginWithTossApp(): Promise<AuthSuccessResponse> {
+  const { authorizationCode, referrer } = await appLogin();
+  return postTossLogin({ authorizationCode, referrer });
 }
 
 export async function postTossLogin(body: {

@@ -39,6 +39,14 @@ export function roomPath(roomId: number): string {
   return `/room/${encodeRoomId(roomId)}`;
 }
 
+/** granite.config `appName` 과 동일해야 앱인토스 딥링크가 열립니다. */
+export const TOSS_INTOSS_APP_NAME = "puzzlox";
+
+/** 앱인토스 초대·공유용 URL (`intoss://앱이름/room/숫자방ID`). */
+export function tossIntossRoomUrl(roomId: number): string {
+  return `intoss://${TOSS_INTOSS_APP_NAME}/room/${roomId}`;
+}
+
 /** Reads encoded id or numeric id from pathname `/room/<code>`. */
 export function parseRoomCodeFromPathname(pathname: string): string | null {
   const m = pathname.trim().match(/^\/room\/([^/]+)\/?$/i);

@@ -1,12 +1,5 @@
-﻿import {
-  closeView,
-  graniteEvent,
-  partner,
-  setDeviceOrientation,
-  tdsEvent,
-} from "@apps-in-toss/web-framework";
+﻿import { closeView, graniteEvent, setDeviceOrientation } from "@apps-in-toss/web-framework";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Button, Modal, Text } from "@toss/tds-mobile";
 import type { AuthUser } from "@contracts/auth";
 import type { JoinRoomMeta } from "@contracts/roomJoin";
 import Admin from "@web/components/Admin";
@@ -24,11 +17,6 @@ import { normalizePuzzleDifficulty, type PuzzleDifficulty } from "@web/lib/puzzl
 import { supabase } from "@web/lib/supabaseClient";
 import { clearSession } from "./lib/tossSession";
 import { LeavePuzzleConfirmDialog } from "./LeavePuzzleConfirmDialog";
-import {
-  TOSS_APP_DISPLAY_NAME,
-  TOSS_BRAND_ICON_URL,
-  TOSS_LEADERBOARD_NAV_ACCESSORY_ID,
-} from "./tossNavAccessory";
 import { useTossHostChromePadding } from "./useTossHostChromePadding";
 import { useTossSafeAreaInsets } from "./useTossSafeAreaInsets";
 
@@ -46,11 +34,13 @@ export default function GameShell({
   setUser,
   onLoggedOut,
   onRequestTossLogin,
+  tossLoginBusy = false,
 }: {
   user: AuthUser | null;
   setUser: (u: AuthUser | null) => void;
   onLoggedOut: () => void;
-  onRequestTossLogin: () => void;
+  onRequestTossLogin: () => void | Promise<void>;
+  tossLoginBusy?: boolean;
 }) {
   const [pathname, setPathname] = useState(() => window.location.pathname);
   const [currentRoom, setCurrentRoom] = useState<{
@@ -65,7 +55,6 @@ export default function GameShell({
   const tossHostPadding = useTossHostChromePadding();
   const tossSafeArea = useTossSafeAreaInsets();
 
-  const [showNavLoginModal, setShowNavLoginModal] = useState(false);
   const [showLeavePuzzleModal, setShowLeavePuzzleModal] = useState(false);
   const currentRoomRef = useRef<typeof currentRoom>(null);
   const showAdminRef = useRef(false);
@@ -114,15 +103,6 @@ export default function GameShell({
     }
   }, []);
 
-  useEffect(() => {
-    const cleanup = tdsEvent.addEventListener("navigationAccessoryEvent", {
-      onEvent: ({ id }) => {
-        if (id === TOSS_LEADERBOARD_NAV_ACCESSORY_ID) setShowNavLoginModal(true);
-      },
-    });
-    return cleanup;
-  }, []);
-
   /**
    * 상단바 앱 이름(제목) 또는 홈 버튼 탭 시 기본 동작은 초기 화면으로 새로고침이에요.
    * 퍼즐 진행 중에는 뒤로가기와 동일하게 확인 모달을 띄웁니다. (구독 시 네이티브 기본 동작은 대체됨)
@@ -138,20 +118,6 @@ export default function GameShell({
     });
     return cleanup;
   }, [currentRoom]);
-
-  useEffect(() => {
-    // defineConfig 반영이 늦거나 누락되는 경우를 대비해 런타임에서도 액세서리 버튼을 보장합니다.
-    void partner
-      .addAccessoryButton({
-        id: TOSS_LEADERBOARD_NAV_ACCESSORY_ID,
-        title: "로그인",
-        icon: { name: "icon-heart-mono" },
-      })
-      .catch(() => {});
-    return () => {
-      void partner.removeAccessoryButton().catch(() => {});
-    };
-  }, []);
 
   const navigateToPath = (path: string) => {
     window.history.pushState({}, "", path);
@@ -304,31 +270,6 @@ export default function GameShell({
     />
   );
 
-  const navLoginModal = (
-    <Modal open={showNavLoginModal} onOpenChange={setShowNavLoginModal}>
-      <Modal.Overlay />
-      <Modal.Content title="로그인" onClick={() => setShowNavLoginModal(false)}>
-        <Text display="block" typography="t6" color="adaptive.grey800">
-          로그인하면 전적과 기록을 안전하게 저장할 수 있어요.
-        </Text>
-        <div style={{ marginTop: 20 }}>
-          <Button
-            color="primary"
-            variant="fill"
-            display="full"
-            size="large"
-            onClick={() => {
-              setShowNavLoginModal(false);
-              onRequestTossLogin();
-            }}
-          >
-            로그인
-          </Button>
-        </div>
-      </Modal.Content>
-    </Modal>
-  );
-
   if (loading) {
     return (
       <>
@@ -343,7 +284,6 @@ export default function GameShell({
         >
           <div className="text-2xl font-bold animate-pulse">Loading...</div>
         </div>
-        {navLoginModal}
       </>
     );
   }
@@ -366,7 +306,6 @@ export default function GameShell({
             }}
           />
         </div>
-        {navLoginModal}
       </>
     );
   }
@@ -375,7 +314,7 @@ export default function GameShell({
     return (
       <>
         <div
-          className="min-h-screen box-border bg-slate-950"
+          className="min-h-screen box-border bg-[#F4F8FF]"
           style={{
             paddingTop: tossSafeArea.top,
             paddingLeft: tossSafeArea.left,
@@ -385,6 +324,7 @@ export default function GameShell({
         >
           <UserDashboard
             mode="self"
+            visualVariant="toss"
             onBack={() => navigateToPath("/")}
             onJoinRoom={handleJoinRoom}
             locale="ko"
@@ -392,7 +332,6 @@ export default function GameShell({
             setUser={(u) => setUser(u as AuthUser)}
           />
         </div>
-        {navLoginModal}
       </>
     );
   }
@@ -403,7 +342,7 @@ export default function GameShell({
     return (
       <>
         <div
-          className="min-h-screen box-border bg-slate-950"
+          className="min-h-screen box-border bg-[#F4F8FF]"
           style={{
             paddingTop: tossSafeArea.top,
             paddingLeft: tossSafeArea.left,
@@ -413,13 +352,13 @@ export default function GameShell({
         >
           <UserDashboard
             mode="public"
+            visualVariant="toss"
             publicUsername={un}
             onBack={() => navigateToPath("/")}
             onJoinRoom={handleJoinRoom}
             locale="ko"
           />
         </div>
-        {navLoginModal}
       </>
     );
   }
@@ -438,7 +377,6 @@ export default function GameShell({
         >
           <Admin onBack={() => setShowAdmin(false)} />
         </div>
-        {navLoginModal}
       </>
     );
   }
@@ -462,7 +400,6 @@ export default function GameShell({
           />
         </div>
         {leavePuzzleModal}
-        {navLoginModal}
       </>
     );
   }
@@ -481,12 +418,10 @@ export default function GameShell({
         }}
         tossUi={{
           safeArea: tossSafeArea,
-          brandTitle: TOSS_APP_DISPLAY_NAME,
-          brandIconUrl: TOSS_BRAND_ICON_URL,
+          tossLoginBusy,
         }}
         locale="ko"
       />
-      {navLoginModal}
     </>
   );
 }

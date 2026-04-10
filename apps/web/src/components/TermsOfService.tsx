@@ -16,6 +16,8 @@ export default function TermsOfService({
   safeAreaTop?: number;
 }) {
   const isTossMode = safeAreaTop > 0;
+  /** 밝은 배경(토스)에서는 흰색 강조가 보이지 않아 본문·제목과 구분되는 진한색 사용 */
+  const strongEmphasisClass = isTossMode ? "font-semibold text-slate-900" : "text-white";
   return (
     <div className={isTossMode ? "min-h-screen bg-[#F4F8FF] text-slate-700" : "min-h-screen bg-slate-950 text-slate-200"}>
       <header
@@ -45,7 +47,7 @@ export default function TermsOfService({
           <h2 className={`text-lg font-bold mb-3 ${isTossMode ? "text-slate-900" : "text-white"}`}>제1조 (목적)</h2>
           <p>
             본 약관은 <strong>종이천하</strong>(이하 &quot;운영자&quot;)가 제공하는 온라인 직소 퍼즐 서비스
-            <strong className="text-white"> 「퍼즐록스」</strong>(이하 &quot;서비스&quot;)의 이용과 관련하여 운영자와
+            <strong className={strongEmphasisClass}> 「퍼즐록스」</strong>(이하 &quot;서비스&quot;)의 이용과 관련하여 운영자와
             이용자 간 권리·의무 및 책임사항, 기타 필요한 사항을 규정함을 목적으로 합니다.
           </p>
         </section>
@@ -83,7 +85,7 @@ export default function TermsOfService({
           <h2 className={`text-lg font-bold mb-3 ${isTossMode ? "text-slate-900" : "text-white"}`}>제5조 (이용자격 및 연령)</h2>
           <ol className={`list-decimal list-inside space-y-2 ${isTossMode ? "text-slate-700" : "text-slate-300"}`}>
             <li>
-              일부 이용 경로(모바일 앱 등)에는 <strong className="text-white">해당 플랫폼 정책 또는 운영자의 별도 고지</strong>에 따라
+              일부 이용 경로(모바일 앱 등)에는 <strong className={strongEmphasisClass}>해당 플랫폼 정책 또는 운영자의 별도 고지</strong>에 따라
               연령·자격 제한이 적용될 수 있습니다. 이용자는 적용되는 요건을 충족함을 보증합니다. 운영자는 관련 법령 또는
               제휴·배포 플랫폼 정책 변경에 따라 이용 제한 조건을 조정할 수 있습니다.
             </li>
@@ -98,7 +100,7 @@ export default function TermsOfService({
           <h2 className={`text-lg font-bold mb-3 ${isTossMode ? "text-slate-900" : "text-white"}`}>제6조 (회원가입·로그인 및 계정)</h2>
           <ol className={`list-decimal list-inside space-y-2 ${isTossMode ? "text-slate-700" : "text-slate-300"}`}>
             <li>
-              이용자는 운영자가 정한 절차에 따라 <strong className="text-white">사용자 아이디(user_name 형태의 계정 식별 정보)</strong> 등을
+              이용자는 운영자가 정한 절차에 따라 <strong className={strongEmphasisClass}>사용자 아이디(user_name 형태의 계정 식별 정보)</strong> 등을
               등록하고 서비스를 이용할 수 있습니다. 구체적 수집 항목은 개인정보처리방침에 따릅니다.
             </li>
             <li>이용자는 제3자의 정보를 도용하거나 허위 정보를 제공해서는 안 됩니다.</li>
@@ -110,8 +112,8 @@ export default function TermsOfService({
         <section>
           <h2 className={`text-lg font-bold mb-3 ${isTossMode ? "text-slate-900" : "text-white"}`}>제7조 (개인정보의 보호)</h2>
           <p>
-            운영자는 이용자의 개인정보를 중요시하며, 관련 법령 및 <strong className="text-white">개인정보처리방침</strong>에 따라
-            처리합니다. 본 서비스에서 수집하는 정보에는 이용 목적에 필요한 범위에서의 <strong className="text-white">사용자명(user_name)</strong> 등이
+            운영자는 이용자의 개인정보를 중요시하며, 관련 법령 및 <strong className={strongEmphasisClass}>개인정보처리방침</strong>에 따라
+            처리합니다. 본 서비스에서 수집하는 정보에는 이용 목적에 필요한 범위에서의 <strong className={strongEmphasisClass}>사용자명(user_name)</strong> 등이
             포함될 수 있습니다. 상세한 수집·이용·보관·파기 내용은 별도 게시하는 개인정보처리방침을 따릅니다.
           </p>
         </section>
@@ -120,15 +122,15 @@ export default function TermsOfService({
           <h2 className={`text-lg font-bold mb-3 ${isTossMode ? "text-slate-900" : "text-white"}`}>제8조 (유료 서비스 및 결제)</h2>
           <ol className={`list-decimal list-inside space-y-2 ${isTossMode ? "text-slate-700" : "text-slate-300"}`}>
             <li>
-              운영자는 서비스 내 일부 기능·콘텐츠·아이템 등을 <strong className="text-white">유료</strong>로 제공할 수 있으며,
+              운영자는 서비스 내 일부 기능·콘텐츠·아이템 등을 <strong className={strongEmphasisClass}>유료</strong>로 제공할 수 있으며,
               가격·과금 방식·환불 조건 등은 서비스 내 고지 또는 결제 화면에 명시합니다.
             </li>
             <li>
-              결제는 이동통신사·앱 마켓·전자결제(간편결제)·신용·체크카드 등 <strong className="text-white">제3자 결제대행사</strong>를 통해 이루어질 수 있으며,
+              결제는 이동통신사·앱 마켓·전자결제(간편결제)·신용·체크카드 등 <strong className={strongEmphasisClass}>제3자 결제대행사</strong>를 통해 이루어질 수 있으며,
               결제 관련 기술적 오류·승인 거절 등에 대해 운영자는 통상적으로 책임지지 않습니다(고의 또는 중과실이 있는 경우 등 법령상 달리 정함이 있는 경우 제외).
             </li>
             <li>
-              <strong className="text-white">청약철회·환불</strong>은 「전자상거래 등에서의 소비자보호에 관한 법률」 등 관련 법령 및
+              <strong className={strongEmphasisClass}>청약철회·환불</strong>은 「전자상거래 등에서의 소비자보호에 관한 법률」 등 관련 법령 및
               결제 수단별 정책에 따릅니다. 디지털 콘텐츠 특성상 철회가 제한될 수 있는 경우 법령이 허용하는 범위 내에서 별도 고지합니다.
             </li>
           </ol>
@@ -137,7 +139,7 @@ export default function TermsOfService({
         <section>
           <h2 className={`text-lg font-bold mb-3 ${isTossMode ? "text-slate-900" : "text-white"}`}>제9조 (광고)</h2>
           <ol className={`list-decimal list-inside space-y-2 ${isTossMode ? "text-slate-700" : "text-slate-300"}`}>
-            <li>운영자는 서비스 운영과 관련하여 서비스 화면 또는 제휴 채널에 <strong className="text-white">광고</strong>를 게재할 수 있습니다.</li>
+            <li>운영자는 서비스 운영과 관련하여 서비스 화면 또는 제휴 채널에 <strong className={strongEmphasisClass}>광고</strong>를 게재할 수 있습니다.</li>
             <li>이용자가 광고주가 제공하는 재화·용역을 이용할 때의 책임은 해당 거래 당사자 간에 있으며, 운영자는 이에 대해 보증·중재 의무를 부담하지 않습니다(법령상 달리 정함이 있는 경우 제외).</li>
           </ol>
         </section>
@@ -183,10 +185,10 @@ export default function TermsOfService({
         <section>
           <h2 className={`text-lg font-bold mb-3 ${isTossMode ? "text-slate-900" : "text-white"}`}>제14조 (운영자 정보 및 문의)</h2>
           <ul className={`space-y-1 ${isTossMode ? "text-slate-700" : "text-slate-300"}`}>
-            <li><strong className={isTossMode ? "text-slate-900" : "text-white"}>서비스명:</strong> 퍼즐록스</li>
-            <li><strong className={isTossMode ? "text-slate-900" : "text-white"}>상호:</strong> 종이천하(개인사업자)</li>
-            <li><strong className={isTossMode ? "text-slate-900" : "text-white"}>대표자:</strong> 김철호</li>
-            <li><strong className={isTossMode ? "text-slate-900" : "text-white"}>문의(이메일):</strong>{' '}
+            <li><strong className={strongEmphasisClass}>서비스명:</strong> 퍼즐록스</li>
+            <li><strong className={strongEmphasisClass}>상호:</strong> 종이천하(개인사업자)</li>
+            <li><strong className={strongEmphasisClass}>대표자:</strong> 김철호</li>
+            <li><strong className={strongEmphasisClass}>문의(이메일):</strong>{' '}
               <a href="mailto:seeker7263@gmail.com" className={isTossMode ? "text-[#2F6FE4] hover:underline" : "text-indigo-400 hover:underline"}>seeker7263@gmail.com</a>
             </li>
           </ul>

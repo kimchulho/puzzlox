@@ -1,10 +1,5 @@
 import { defineConfig } from "@apps-in-toss/web-framework/config";
-import {
-  TOSS_APP_DISPLAY_NAME,
-  TOSS_BRAND_ICON_URL,
-  TOSS_LEADERBOARD_NAV_ACCESSORY_ICON,
-  TOSS_LEADERBOARD_NAV_ACCESSORY_ID,
-} from "./apps/toss/src/tossNavAccessory";
+import { TOSS_APP_DISPLAY_NAME, TOSS_BRAND_ICON_URL } from "./apps/toss/src/tossNavAccessory";
 
 const graniteWebHost = process.env.TOSS_GRANITE_WEB_HOST ?? "localhost";
 const graniteWebPort = Number(process.env.TOSS_GRANITE_WEB_PORT ?? "5174");
@@ -47,18 +42,10 @@ export default defineConfig({
   webViewProps: {
     type: "partner",
   },
-  /**
-   * 비게임: `withHomeButton`으로 첫 화면 복귀.
-   * 액세서리(더보기 왼쪽)는 모노톤 아이콘 1개만.
-   */
+  /** 비게임: `withHomeButton`으로 첫 화면 복귀. */
   navigationBar: {
     withBackButton: true,
     withHomeButton: true,
-    initialAccessoryButton: {
-      id: TOSS_LEADERBOARD_NAV_ACCESSORY_ID,
-      title: "로그인",
-      icon: { name: TOSS_LEADERBOARD_NAV_ACCESSORY_ICON },
-    },
   },
   outdir: "apps/toss/dist",
   permissions: [],
