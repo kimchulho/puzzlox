@@ -667,7 +667,7 @@ const Lobby = ({
     });
     const j = (await res.json().catch(() => ({}))) as {
       message?: string;
-      deletedRoomCount?: number;
+      blankedRoomCount?: number;
     };
     if (!res.ok) {
       throw new Error(j?.message || `HTTP ${res.status}`);
@@ -685,8 +685,8 @@ const Lobby = ({
     void fetchRooms({ background: true });
     alert(
       isKo
-        ? `사진을 삭제했습니다. 관련 퍼즐방 ${Number(j.deletedRoomCount ?? 0)}개도 함께 삭제됐어요.`
-        : `Image deleted. ${Number(j.deletedRoomCount ?? 0)} related puzzle rooms were also removed.`
+        ? `사진을 삭제했습니다. 관련 퍼즐방 ${Number(j.blankedRoomCount ?? 0)}개는 백지 이미지로 유지됩니다.`
+        : `Image deleted. ${Number(j.blankedRoomCount ?? 0)} related puzzle rooms were kept with blank images.`
     );
   };
 

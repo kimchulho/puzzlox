@@ -742,22 +742,13 @@ async function startServer() {
       return res.status(403).json({ message: "Only your uploaded image can be deleted." });
     }
 
-    if (ownedRoomIds.length > 0) {
-      const { error: piecesDelErr } = await authSupabase.from("pieces").delete().in("room_id", ownedRoomIds);
-      if (piecesDelErr) return res.status(500).json({ message: piecesDelErr.message });
-
-      const { error: scoresDelErr } = await authSupabase.from("scores").delete().in("room_id", ownedRoomIds);
-      if (scoresDelErr) return res.status(500).json({ message: scoresDelErr.message });
-
-      const { error: visitsDelErr } = await authSupabase
-        .from("user_room_visits")
-        .delete()
-        .in("room_id", ownedRoomIds);
-      if (visitsDelErr) return res.status(500).json({ message: visitsDelErr.message });
-
-      const { error: roomsDelErr } = await authSupabase.from("rooms").delete().in("id", ownedRoomIds);
-      if (roomsDelErr) return res.status(500).json({ message: roomsDelErr.message });
-    }
+    const BLANK_ROOM_IMAGE_DATA_URL =
+      "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%221280%22%20height%3D%22720%22%20viewBox%3D%220%200%201280%20720%22%3E%3Crect%20width%3D%221280%22%20height%3D%22720%22%20fill%3D%22%23ffffff%22/%3E%3C/svg%3E";
+    const { error: roomBlankErr } = await authSupabase
+      .from("rooms")
+      .update({ image_url: BLANK_ROOM_IMAGE_DATA_URL })
+      .in("id", ownedRoomIds);
+    if (roomBlankErr) return res.status(500).json({ message: roomBlankErr.message });
 
     let imageDeleteQuery = authSupabase.from("puzzle_images").delete().eq("url", targetUrl).neq("is_public", true);
     if (Number.isFinite(imageId) && imageId > 0) {
@@ -768,7 +759,7 @@ async function startServer() {
       return res.status(500).json({ message: imageDelErr.message });
     }
 
-    return res.json({ ok: true, deletedRoomCount: ownedRoomIds.length, deletedImageId: imageRow?.id ?? null });
+    return res.json({ ok: true, blankedRoomCount: ownedRoomIds.length, deletedImageId: imageRow?.id ?? null });
   });
 
   app.get("/api/user/dashboard", authRequired, async (req: AuthedRequest, res) => {

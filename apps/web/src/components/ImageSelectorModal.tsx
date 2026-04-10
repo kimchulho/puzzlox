@@ -195,8 +195,8 @@ export const ImageSelectorModal: React.FC<ImageSelectorModalProps> = ({
                 </h4>
                 <p className={`mt-2 text-sm leading-relaxed ${tossStyling ? "text-slate-600" : "text-slate-300"}`}>
                   {isKo
-                    ? "삭제하면 이 사진으로 만든 퍼즐방도 함께 사라집니다. 이 작업은 되돌릴 수 없습니다."
-                    : "Deleting this image also removes puzzle rooms created with it. This cannot be undone."}
+                    ? "삭제하면 이 사진으로 만든 퍼즐방은 유지되지만, 이미지가 백지 상태로 바뀝니다. 이 작업은 되돌릴 수 없습니다."
+                    : "Deleting this image keeps puzzle rooms, but their image becomes blank. This cannot be undone."}
                 </p>
                 <div className="mt-4 flex justify-end gap-2">
                   <button
