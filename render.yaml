@@ -1,0 +1,13 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+#
+# 단일 Web Service: `server.ts`가 API(Socket.io)와 Vite 정적 파일(apps/web/dist)을 함께 제공합니다.
+# Blueprint를 쓰지 않는다면 대시보드의 Build/Start를 아래와 동일하게 맞추면 됩니다.
+# 이미 만든 서비스 이름과 다르면 `name`만 바꾸세요(중복 생성 방지).
+
+services:
+  - type: web
+    name: puzzlox
+    runtime: node
+    buildCommand: npm ci && npm run build:web
+    startCommand: NODE_ENV=production npx tsx server.ts
+    healthCheckPath: /api/health

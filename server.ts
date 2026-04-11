@@ -2410,6 +2410,18 @@ async function startServer() {
     const distPath = path.join(__dirname, "apps/web/dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
+      /**
+       * Vite 빌드 청크(`/assets/*.js` 등)가 없을 때 SPA 폴백으로 `index.html`을 주면
+       * 브라우저는 ES 모듈 MIME 검사에서 `text/html` 오류를 냅니다. 정적 자산 경로는
+       * HTML 폴백하지 않고 404로 끝냅니다.
+       */
+      const p = req.path || "";
+      if (p.startsWith("/assets/") || p.startsWith("/_app/")) {
+        return res.status(404).type("text/plain").send("Not found");
+      }
+      if (/\.[a-z0-9]+$/i.test(p) && !p.endsWith(".html")) {
+        return res.status(404).type("text/plain").send("Not found");
+      }
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
