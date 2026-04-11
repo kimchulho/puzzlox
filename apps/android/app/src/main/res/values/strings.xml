@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">퍼즐록스</string>
+    <!-- TWA: Digital Asset Links의 웹 쪽과 짝 (site는 실제 서비스 도메인과 동일해야 함) -->
+    <string name="asset_statements" translatable="false">[{&quot;relation&quot;:[&quot;delegate_permission/common.handle_all_urls&quot;],&quot;target&quot;:{&quot;namespace&quot;:&quot;web&quot;,&quot;site&quot;:&quot;https://puzzlox.com&quot;}}]</string>
+</resources>

@@ -10,6 +10,13 @@ coverage/
 .env*
 !.env.example
 
+# Android (TWA) — 로컬 빌드·기기 전용
+apps/android/.gradle/
+apps/android/**/build/
+apps/android/local.properties
+apps/android/*.iml
+apps/android/.idea/
+
 # 로컬 전용 (인증서·터널·바이너리 — 저장소에 올리지 않음)
 cert/
 cloudflared.exe

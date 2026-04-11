@@ -2386,6 +2386,37 @@ async function startServer() {
     void flushUserPlaySeconds();
   }, 30000);
 
+  /**
+   * Android TWA(Trusted Web Activity)용 Digital Asset Links.
+   * Play Console 업로드 키(또는 업로드용 인증서)의 SHA-256을 넣어야 스토어 빌드에서 주소창이 숨겨집니다.
+   * @see https://developer.chrome.com/docs/android/trusted-web-activity/relation-manager
+   */
+  app.get("/.well-known/assetlinks.json", (_req, res) => {
+    const packageName = String(process.env.ANDROID_TWA_PACKAGE_NAME ?? "").trim();
+    const fpsRaw = String(process.env.ANDROID_TWA_SHA256_CERT_FINGERPRINTS ?? "").trim();
+    if (!packageName || !fpsRaw) {
+      return res.status(404).type("text/plain").send("Not configured");
+    }
+    const sha256_cert_fingerprints = fpsRaw
+      .split(/[\s,]+/)
+      .map((s) => s.replace(/^SHA256:/i, "").trim())
+      .filter(Boolean);
+    if (sha256_cert_fingerprints.length === 0) {
+      return res.status(404).type("text/plain").send("Not configured");
+    }
+    const body = [
+      {
+        relation: ["delegate_permission/common.handle_all_urls"],
+        target: {
+          namespace: "android_app",
+          package_name: packageName,
+          sha256_cert_fingerprints,
+        },
+      },
+    ];
+    res.type("application/json").send(JSON.stringify(body));
+  });
+
   // ==========================================
   // Vite Middleware (Frontend Serving)
   // ==========================================
