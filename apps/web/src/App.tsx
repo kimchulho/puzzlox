@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import PuzzleBoard from './components/PuzzleBoard';
 import Lobby from './components/Lobby';
 import Auth from './components/Auth';
@@ -44,6 +44,10 @@ export default function App() {
   const [user, setUser] = useState<any>(() => readStoredPuzzleUser());
   const [showAdmin, setShowAdmin] = useState(false);
   const [showAuth, setShowAuth] = useState(false);
+
+  /** `setUser`만 바뀌는 경우(예: 퍼즐 완료 후 completed_puzzles 동기화)에는 URL 동기화 effect가 돌지 않게 해 전체 로딩·보드 언마운트를 막습니다. */
+  const userRef = useRef(user);
+  userRef.current = user;
 
   const navigateToPath = (path: string) => {
     window.history.pushState({}, '', path);
@@ -91,13 +95,14 @@ export default function App() {
             created_by?: unknown;
             creator_name?: string | null;
           };
+          const gateUser = userRef.current;
           const allowed = await ensureRoomPasswordVerified(decodedId, hasPw, isKo, {
             room: {
               id: Number(row.id),
               created_by: row.created_by,
               creator_name: row.creator_name ?? null,
             },
-            user: user ? { id: user.id, username: user.username } : null,
+            user: gateUser ? { id: gateUser.id, username: gateUser.username } : null,
           });
           if (cancelled) return;
           if (!allowed) {
@@ -128,7 +133,7 @@ export default function App() {
       cancelled = true;
       window.removeEventListener('popstate', syncFromLocation);
     };
-  }, [locale, user]);
+  }, [locale]);
 
   const handleJoinRoom = (
     roomId: number,
