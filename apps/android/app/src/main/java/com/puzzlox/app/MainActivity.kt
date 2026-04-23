@@ -1,6 +1,8 @@
 package com.puzzlox.app
 
 import android.net.Uri
+import android.content.res.Configuration
+import android.content.pm.ActivityInfo
 import android.os.Build
 import android.os.Bundle
 import android.webkit.CookieManager
@@ -158,6 +160,16 @@ class MainActivity : AppCompatActivity() {
                 }
             },
         )
+    }
+
+    fun toggleOrientationFromWeb() {
+        val current = resources.configuration.orientation
+        requestedOrientation =
+            if (current == Configuration.ORIENTATION_LANDSCAPE) {
+                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            } else {
+                ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            }
     }
 
     private fun notifyJsEarned(requestId: String) {

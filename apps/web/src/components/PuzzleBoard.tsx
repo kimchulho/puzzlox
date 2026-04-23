@@ -531,6 +531,10 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
 
   const activeUsersRef = useRef<Set<string>>(new Set());
   const isTossMode = Boolean(hostWebViewPadding);
+  const isAndroidNativeClient =
+    typeof window !== "undefined" &&
+    typeof (window as unknown as { PuzzloxAndroid?: { toggleOrientation?: () => void } }).PuzzloxAndroid
+      ?.toggleOrientation === "function";
   useEffect(() => {
     if (isTossMode) return;
     if (typeof window === "undefined") return;
@@ -789,6 +793,14 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
   const handleOrientationButton = async () => {
     if (onToggleOrientation) {
       await onToggleOrientation();
+      return;
+    }
+    if (isAndroidNativeClient) {
+      try {
+        (window as unknown as { PuzzloxAndroid?: { toggleOrientation?: () => void } }).PuzzloxAndroid?.toggleOrientation?.();
+      } catch (err) {
+        console.error("Error attempting Android native orientation toggle:", err);
+      }
       return;
     }
     await toggleOrientation();
@@ -3235,7 +3247,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
         };
 
         /**
-         * 토스 WebView: `canvas-confetti`는 별도 2D 캔버스를 올려 WebGL과 겹치며 깜빡일 수 있음.
+         * 토스/Android WebView: `canvas-confetti`는 별도 2D 캔버스를 올려 WebGL과 겹치며 깜빡일 수 있음.
          * 웹 `triggerFireworks`와 동일한 리듬(3초, 250ms 간격, 좌·우 origin, 시간에 따른 입자 수)으로
          * PIXI만 써서 스테이지(화면) 좌표에 폭죽을 그림 — 퍼즐 월드 줌과 무관하게 화면 전체 규모.
          */
@@ -3451,7 +3463,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
               }, 700);
             }
             zoomToCompletedPuzzle(true);
-            if (isTossMode) {
+            if (isTossMode || isAndroidNativeClient) {
               playShineEffect();
               triggerPixiConfetti();
             } else {
@@ -8213,7 +8225,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
             <RotateCcw size={14} />
           </button>
 
-          {!isTossMode ? (
+          {!isTossMode && !isAndroidNativeClient ? (
             <button 
               onClick={toggleFullscreen}
               className="flex items-center justify-center w-7 h-7 bg-slate-800/50 hover:bg-slate-700 rounded-md transition-colors border border-slate-700/50 text-slate-400 hover:text-white shrink-0"

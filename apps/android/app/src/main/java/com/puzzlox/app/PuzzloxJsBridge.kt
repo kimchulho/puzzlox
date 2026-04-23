@@ -13,4 +13,11 @@ class PuzzloxJsBridge(private val activity: MainActivity) {
             activity.beginRewardedAdFlow(requestId)
         }
     }
+
+    @JavascriptInterface
+    fun toggleOrientation() {
+        activity.runOnUiThread {
+            activity.toggleOrientationFromWeb()
+        }
+    }
 }
