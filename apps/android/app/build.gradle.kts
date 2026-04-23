@@ -30,7 +30,7 @@ android {
 
     buildTypes {
         debug {
-            buildConfigField("String", "REWARDED_AD_UNIT_ID", "\"ca-app-pub-3940256099942544/5224354917\"")
+            buildConfigField("String", "REWARDED_AD_UNIT_ID", "\"ca-app-pub-9880062103386476/9681650177\"")
         }
         release {
             isMinifyEnabled = false

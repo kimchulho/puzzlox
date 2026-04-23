@@ -13,8 +13,7 @@ ADMOB_APP_ID=ca-app-pub-퍼블리셔숫자~앱접미사
 ```
 
 `local.properties`를 두지 않으면 Gradle이 **Google 샘플 앱 ID**(`ca-app-pub-3940256099942544~3347511713`)로 빌드됩니다. **스토어용 릴리스**에서는 반드시 AdMob 콘솔에 나온 **앱 ID**로 바꾸는 것이 좋습니다.  
-- **debug** 빌드: 테스트용 보상형 **단위** ID(Gradle `debug` `buildConfigField`)  
-- **release** 빌드: 본 광고 단위 `ca-app-pub-9880062103386476/9681650177`
+- **debug / release** 보상형 **단위** ID: `ca-app-pub-9880062103386476/9681650177`
 
 ## 빌드
 
