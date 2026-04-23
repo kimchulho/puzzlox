@@ -748,6 +748,17 @@ const Lobby = ({
   }, [tossUi]);
 
   const toggleOrientation = async () => {
+    const androidBridge = (window as unknown as {
+      PuzzloxAndroid?: { toggleOrientation?: () => void };
+    }).PuzzloxAndroid;
+    if (isAndroidNativeClient && typeof androidBridge?.toggleOrientation === "function") {
+      try {
+        androidBridge.toggleOrientation();
+      } catch (err) {
+        console.error("Error attempting Android native orientation toggle:", err);
+      }
+      return;
+    }
     try {
       if (!document.fullscreenElement) {
         await document.documentElement.requestFullscreen();
@@ -1479,7 +1490,7 @@ const Lobby = ({
               <RotateCcw size={18} />
             </button>
           ) : null}
-          {!tossUi ? (
+          {!tossUi && !isAndroidNativeClient ? (
             <button
               type="button"
               onClick={toggleFullscreen}
