@@ -57,6 +57,11 @@ const TOSS_LOBBY_TOP_BAR_INNER_HEIGHT_PX = 44;
 /** 상단바 아래 본문과의 간격 */
 const TOSS_LOBBY_TOP_BAR_GAP_PX = 8;
 import { hasTossRewardAdBeenSeenForRoom, runTossRewardedRoomEntry } from '../lib/tossRewardedAdGate';
+import {
+  hasAndroidNativeRewardAdBeenSeenForRoom,
+  isPuzzloxAndroidWithNativeReward,
+  runAndroidNativeRewardedRoomEntry,
+} from '../lib/androidNativeRewardedAdGate';
 
 const formatPlayTime = (seconds: number) => {
   if (!seconds) return '00:00:00';
@@ -434,6 +439,8 @@ const Lobby = ({
   const [roomFullInfo, setRoomFullInfo] = useState<{ roomCode: string; current: number; max: number } | null>(null);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(!!document.fullscreenElement);
   const [isRewardAdLoading, setIsRewardAdLoading] = useState(false);
+  /** Puzzlox Android WebView(네이티브 AdMob 브리지) — document 준비 후 1회 판별 */
+  const [isAndroidNativeClient, setIsAndroidNativeClient] = useState(false);
   const [roomCodeInput, setRoomCodeInput] = useState('');
   const [roomCodeError, setRoomCodeError] = useState<string | null>(null);
   const [isJoiningByCode, setIsJoiningByCode] = useState(false);
@@ -456,6 +463,10 @@ const Lobby = ({
   /** 토스·웹 공통: 서버에 연결된 로그인 사용자(토스/일반). `user`만 있고 `id`가 없으면 안내 유지 */
   const hasLoggedInAccount =
     user != null && user.id != null && String(user.id).trim() !== "";
+
+  useEffect(() => {
+    setIsAndroidNativeClient(isPuzzloxAndroidWithNativeReward());
+  }, []);
 
   useEffect(() => {
     if (!showCustomUploadLoginModal || !tossUi) return;
@@ -921,6 +932,15 @@ const Lobby = ({
               : 'Watch the rewarded ad through to enter your puzzle room.'
           );
         }
+      } else if (isAndroidNativeClient) {
+        const ok = await runAndroidNativeRewardedRoomEntry(roomId, doEnter);
+        if (!ok) {
+          alert(
+            isKo
+              ? '보상형 광고를 끝까지 시청하면 퍼즐방으로 이동할 수 있어요.'
+              : 'Watch the rewarded ad through to enter your puzzle room.'
+          );
+        }
       } else {
         doEnter();
       }
@@ -1061,7 +1081,7 @@ const Lobby = ({
   };
 
   const handleCreateRoomWithReward = async () => {
-    if (tossUi) {
+    if (tossUi || isAndroidNativeClient) {
       await handleCreateRoom();
       return;
     }
@@ -1084,7 +1104,7 @@ const Lobby = ({
   };
 
   const handleCreateRoomClick = async () => {
-    if (!tossUi && ENABLE_WEB_REWARDED_GATE) {
+    if (!tossUi && !isAndroidNativeClient && ENABLE_WEB_REWARDED_GATE) {
       await handleCreateRoomWithReward();
       return;
     }
@@ -1122,6 +1142,20 @@ const Lobby = ({
       setIsRewardAdLoading(true);
       try {
         const ok = await runTossRewardedRoomEntry(room.id, enter);
+        if (!ok) {
+          alert(
+            isKo
+              ? '보상형 광고를 끝까지 시청하면 입장할 수 있어요.'
+              : 'Watch the rewarded ad through to join the room.'
+          );
+        }
+      } finally {
+        setIsRewardAdLoading(false);
+      }
+    } else if (isAndroidNativeClient && !skipAd) {
+      setIsRewardAdLoading(true);
+      try {
+        const ok = await runAndroidNativeRewardedRoomEntry(room.id, enter);
         if (!ok) {
           alert(
             isKo
@@ -1207,7 +1241,7 @@ const Lobby = ({
 
   const tossLight = !!tossUi;
   /** 토스 보상형 광고 게이트 진행 중(다른 입장·코드 입력과 겹치지 않게 버튼 비활성화) */
-  const tossRewardGateBusy = !!tossUi && isRewardAdLoading;
+  const tossRewardGateBusy = (!!tossUi || isAndroidNativeClient) && isRewardAdLoading;
 
   const showActiveRoomsLoading =
     activeRooms.length === 0 && (isRoomsLoading || isRoomsRefreshing);
@@ -1298,6 +1332,10 @@ const Lobby = ({
 
   const tossJoinCtaLabel = (roomId: number) => {
     if (tossRewardGateBusy) return isKo ? "대기 중…" : "Wait…";
+    if (isAndroidNativeClient) {
+      if (hasAndroidNativeRewardAdBeenSeenForRoom(roomId)) return isKo ? "입장" : "Join";
+      return isKo ? "광고 시청 후 입장" : "Join after ad";
+    }
     if (!tossUi) return isKo ? "입장" : "Join";
     if (hasTossRewardAdBeenSeenForRoom(roomId)) return isKo ? "입장" : "Join";
     return isKo ? "광고 시청 후 입장" : "Join after ad";
