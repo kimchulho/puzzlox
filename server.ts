@@ -819,7 +819,14 @@ async function startServer() {
         is_public: isPublic,
         created_by: userId,
       };
-      const { error: pErr } = await authSupabase.from("puzzle_images").insert([imgRow]);
+      let { error: pErr } = await authSupabase.from("puzzle_images").insert([imgRow]);
+      if (pErr) {
+        // Some DB variants define puzzle_images.created_by as UUID (legacy/auth.users style).
+        // Retry without created_by so custom-image room creation is not blocked by type mismatch.
+        const fallbackRow: Record<string, unknown> = { url: pUrl, is_public: isPublic };
+        const retry = await authSupabase.from("puzzle_images").insert([fallbackRow]);
+        pErr = retry.error;
+      }
       if (pErr) {
         return res.status(500).json({ message: pErr.message });
       }
