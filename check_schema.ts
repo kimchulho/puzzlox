@@ -1,14 +1,15 @@
 ﻿import { createClient } from '@supabase/supabase-js';
 import * as dotenv from 'dotenv';
+import { getSupabasePublishableKey, getSupabaseUrl } from './supabaseEnv';
 dotenv.config();
 
-const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || '';
+const supabaseUrl = getSupabaseUrl();
+const supabasePublishableKey = getSupabasePublishableKey();
 
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+const supabase = createClient(supabaseUrl, supabasePublishableKey);
 
 supabase.from('rooms').select('*').limit(1).then(() => {});
-fetch(`${supabaseUrl}/rest/v1/rooms?limit=1`, { headers: { apikey: supabaseAnonKey } })
+fetch(`${supabaseUrl}/rest/v1/rooms?limit=1`, { headers: { apikey: supabasePublishableKey } })
   .then(res => res.json())
   .then(data => {
     if (data && data.length > 0) {

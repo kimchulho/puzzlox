@@ -2,16 +2,16 @@ import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import { readFileSync } from "fs";
 import path from "path";
+import { getSupabaseMigrationKey, getSupabaseUrl } from "./supabaseEnv";
 
 dotenv.config();
 
-const supabaseUrl = process.env.VITE_SUPABASE_URL;
-const supabaseKey =
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+const supabaseUrl = getSupabaseUrl();
+const supabaseKey = getSupabaseMigrationKey();
 
 if (!supabaseUrl || !supabaseKey) {
   console.error(
-    "Missing env: VITE_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or VITE_SUPABASE_ANON_KEY fallback)."
+    "Missing env: VITE_SUPABASE_URL and (SUPABASE_SECRET_KEY or VITE_SUPABASE_PUBLISHABLE_KEY / SUPABASE_PUBLISHABLE_KEY)."
   );
   process.exit(1);
 }

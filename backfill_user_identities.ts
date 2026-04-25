@@ -1,18 +1,19 @@
 ﻿import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import bcrypt from "bcryptjs";
+import { getSupabaseSecretKey, getSupabaseUrl } from "./supabaseEnv";
 
 dotenv.config();
 
-const supabaseUrl = process.env.VITE_SUPABASE_URL;
-const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseUrl = getSupabaseUrl();
+const supabaseSecretKey = getSupabaseSecretKey();
 
-if (!supabaseUrl || !supabaseServiceRoleKey) {
-  console.error("Missing env: VITE_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required.");
+if (!supabaseUrl || !supabaseSecretKey) {
+  console.error("Missing env: VITE_SUPABASE_URL and SUPABASE_SECRET_KEY are required.");
   process.exit(1);
 }
 
-const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
+const supabase = createClient(supabaseUrl, supabaseSecretKey);
 
 const isBcryptHash = (value: string) => /^\$2[aby]\$\d{2}\$/.test(value);
 

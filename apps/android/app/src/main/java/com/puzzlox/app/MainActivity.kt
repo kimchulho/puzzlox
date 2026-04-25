@@ -5,6 +5,7 @@ import android.content.res.Configuration
 import android.content.pm.ActivityInfo
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
@@ -15,9 +16,11 @@ import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.activity.addCallback
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import java.util.Locale
 import com.google.android.gms.ads.AdError
 import com.google.android.gms.ads.AdRequest
 import com.google.android.gms.ads.FullScreenContentCallback
@@ -55,14 +58,24 @@ class MainActivity : AppCompatActivity() {
         }
         setContentView(webView)
 
-        onBackPressedDispatcher.addCallback(this) {
-            if (webView.canGoBack()) {
-                webView.goBack()
-            } else {
-                isEnabled = false
-                onBackPressedDispatcher.onBackPressed()
-            }
-        }
+        onBackPressedDispatcher.addCallback(
+            this,
+            object : OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() {
+                    if (webView.canGoBack()) {
+                        webView.goBack()
+                        return
+                    }
+                    if (isWebAtRootLobby()) {
+                        showExitAppDialog()
+                    } else {
+                        isEnabled = false
+                        onBackPressedDispatcher.onBackPressed()
+                        isEnabled = true
+                    }
+                }
+            },
+        )
 
         with(webView.settings) {
             javaScriptEnabled = true
@@ -134,6 +147,35 @@ class MainActivity : AppCompatActivity() {
         return BASE_URL
     }
 
+    /** Web SPA 로비: `https://puzzlox.com/` (경로 `/` 또는 비어 있음) */
+    private fun isWebAtRootLobby(): Boolean {
+        if (!::webView.isInitialized) return false
+        val urlStr = webView.url
+        if (urlStr.isNullOrBlank()) return true
+        val uri = runCatching { Uri.parse(urlStr) }.getOrNull() ?: return false
+        val h = uri.host?.lowercase(Locale.US) ?: return false
+        if (h != "puzzlox.com" && !h.endsWith(".puzzlox.com")) {
+            return false
+        }
+        val path = uri.path
+        if (path.isNullOrEmpty() || path == "/") {
+            return true
+        }
+        return path.trimEnd('/').isEmpty()
+    }
+
+    private fun showExitAppDialog() {
+        if (isFinishing || isDestroyed) {
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.exit_app_title)
+            .setMessage(R.string.exit_app_message)
+            .setPositiveButton(R.string.exit_app_confirm) { _, _ -> finish() }
+            .setNegativeButton(R.string.exit_app_cancel, null)
+            .show()
+    }
+
     fun beginRewardedAdFlow(requestId: String) {
         val previous = currentRewardRequestId
         if (previous != null && previous != requestId) {
@@ -142,6 +184,10 @@ class MainActivity : AppCompatActivity() {
         currentRewardRequestId = requestId
         userEarnedThisShow = false
 
+        Log.d(
+            TAG,
+            "Rewarded load start requestId=$requestId adUnitId=${BuildConfig.REWARDED_AD_UNIT_ID}",
+        )
         val adRequest = AdRequest.Builder().build()
         RewardedAd.load(
             this,
@@ -149,6 +195,12 @@ class MainActivity : AppCompatActivity() {
             adRequest,
             object : RewardedAdLoadCallback() {
                 override fun onAdFailedToLoad(error: LoadAdError) {
+                    Log.e(
+                        TAG,
+                        "Rewarded onAdFailedToLoad requestId=$requestId " +
+                            "code=${error.code} domain=${error.domain} message=${error.message} " +
+                            "cause=${error.cause} responseInfo=${error.responseInfo}",
+                    )
                     if (currentRewardRequestId == requestId) {
                         notifyJsDismissed(requestId, false)
                     }
@@ -158,16 +210,34 @@ class MainActivity : AppCompatActivity() {
                     if (currentRewardRequestId != requestId) {
                         return
                     }
+                    Log.d(TAG, "Rewarded onAdLoaded requestId=$requestId")
                     ad.fullScreenContentCallback = object : FullScreenContentCallback() {
                         override fun onAdDismissedFullScreenContent() {
                             ad.fullScreenContentCallback = null
                             if (currentRewardRequestId == requestId) {
                                 val earned = userEarnedThisShow
+                                if (!earned) {
+                                    Log.w(
+                                        TAG,
+                                        "Rewarded dismissed without userEarned (closed early or not shown) requestId=$requestId",
+                                    )
+                                } else {
+                                    Log.d(
+                                        TAG,
+                                        "Rewarded onAdDismissedFullScreenContent with reward requestId=$requestId",
+                                    )
+                                }
                                 notifyJsDismissed(requestId, earned)
                             }
                         }
 
                         override fun onAdFailedToShowFullScreenContent(adError: AdError) {
+                            Log.e(
+                                TAG,
+                                "Rewarded onAdFailedToShow requestId=$requestId " +
+                                    "code=${adError.code} domain=${adError.domain} message=${adError.message} " +
+                                    "cause=${adError.cause}",
+                            )
                             if (currentRewardRequestId == requestId) {
                                 notifyJsDismissed(requestId, false)
                             }
@@ -175,9 +245,13 @@ class MainActivity : AppCompatActivity() {
                     }
                     ad.show(
                         this@MainActivity,
-                        OnUserEarnedRewardListener {
+                        OnUserEarnedRewardListener { rewardItem ->
                             userEarnedThisShow = true
                             if (currentRewardRequestId == requestId) {
+                                Log.d(
+                                    TAG,
+                                    "Rewarded onUserEarned type=${rewardItem.type} amount=${rewardItem.amount} requestId=$requestId",
+                                )
                                 notifyJsEarned(requestId)
                             }
                         },
@@ -234,5 +308,6 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val BASE_URL = "https://puzzlox.com/"
+        private const val TAG = "PuzzloxRewardedAd"
     }
 }

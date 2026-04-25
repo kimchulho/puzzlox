@@ -937,20 +937,20 @@ const Lobby = ({
       if (tossUi) {
         const ok = await runTossRewardedRoomEntry(roomId, doEnter);
         if (!ok) {
-          alert(
-            isKo
-              ? '보상형 광고를 끝까지 시청하면 퍼즐방으로 이동할 수 있어요.'
-              : 'Watch the rewarded ad through to enter your puzzle room.'
-          );
+          // Fail-open for room creator: if rewarded ad is unavailable/failed,
+          // allow entering the newly created room instead of dead-ending UX.
+          console.warn('[RewardedAd] create-room entry gate failed; entering anyway', { roomId, tossUi: true });
+          doEnter();
         }
       } else if (isAndroidNativeClient) {
         const ok = await runAndroidNativeRewardedRoomEntry(roomId, doEnter);
         if (!ok) {
-          alert(
-            isKo
-              ? '보상형 광고를 끝까지 시청하면 퍼즐방으로 이동할 수 있어요.'
-              : 'Watch the rewarded ad through to enter your puzzle room.'
-          );
+          // Same fail-open behavior on Android native rewarded flow.
+          console.warn('[RewardedAd] create-room entry gate failed; entering anyway', {
+            roomId,
+            isAndroidNativeClient: true,
+          });
+          doEnter();
         }
       } else {
         doEnter();

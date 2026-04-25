@@ -28,6 +28,7 @@ import {
 import { HealthResponse } from "./packages/contracts/api";
 import { AuthSuccessResponse, TossLoginRequest } from "./packages/contracts/auth";
 import { tossPartnerRequest, TossPartnerRequestError } from "./tossPartnerClient";
+import { getSupabasePublishableKey, getSupabaseSecretKey, getSupabaseUrl } from "./supabaseEnv";
 
 dotenv.config();
 
@@ -38,13 +39,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Supabase 클라이언트 초기화 (서버용)
-const supabaseUrl = process.env.VITE_SUPABASE_URL || "";
-const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || "";
-const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
-const authSupabase = supabaseServiceRoleKey
-  ? createClient(supabaseUrl, supabaseServiceRoleKey)
-  : null;
+const supabaseUrl = getSupabaseUrl();
+const supabasePublishableKey = getSupabasePublishableKey();
+const supabaseSecretKey = getSupabaseSecretKey();
+const supabase = createClient(supabaseUrl, supabasePublishableKey);
+const authSupabase = supabaseSecretKey ? createClient(supabaseUrl, supabaseSecretKey) : null;
 /** Piece x/y/orientation upserts must bypass RLS; anon often cannot update these rows/columns. */
 const pieceStateSupabase = authSupabase ?? supabase;
 const jwtSecret = process.env.JWT_SECRET || "dev-jwt-secret-change-me";
@@ -166,7 +165,7 @@ async function startServer() {
 
   if (!authSupabase) {
     console.warn(
-      "SUPABASE_SERVICE_ROLE_KEY is missing. /api/auth/web/* endpoints will return 503."
+      "SUPABASE_SECRET_KEY is missing. /api/auth/web/* endpoints will return 503."
     );
   }
 
@@ -198,7 +197,7 @@ async function startServer() {
   app.post("/api/rooms/verify-password", async (req, res) => {
     if (!authSupabase) {
       return res.status(503).json({
-        message: "Auth server misconfigured. Set SUPABASE_SERVICE_ROLE_KEY in .env.",
+        message: "Auth server misconfigured. Set SUPABASE_SECRET_KEY in .env.",
       });
     }
     const roomId = Number((req.body ?? {}).roomId);
@@ -262,7 +261,7 @@ async function startServer() {
   app.post("/api/auth/web/signup", async (req, res) => {
     if (!authSupabase) {
       return res.status(503).json({
-        message: "Auth server misconfigured. Set SUPABASE_SERVICE_ROLE_KEY in .env.",
+        message: "Auth server misconfigured. Set SUPABASE_SECRET_KEY in .env.",
       });
     }
     const { username, password } = req.body ?? {};
@@ -347,7 +346,7 @@ async function startServer() {
   app.post("/api/auth/web/login", async (req, res) => {
     if (!authSupabase) {
       return res.status(503).json({
-        message: "Auth server misconfigured. Set SUPABASE_SERVICE_ROLE_KEY in .env.",
+        message: "Auth server misconfigured. Set SUPABASE_SECRET_KEY in .env.",
       });
     }
     const { username, password } = req.body ?? {};
@@ -417,7 +416,7 @@ async function startServer() {
   app.post("/api/auth/toss/login", async (req, res) => {
     if (!authSupabase) {
       return res.status(503).json({
-        message: "Auth server misconfigured. Set SUPABASE_SERVICE_ROLE_KEY in .env.",
+        message: "Auth server misconfigured. Set SUPABASE_SECRET_KEY in .env.",
       });
     }
 
@@ -617,7 +616,7 @@ async function startServer() {
   app.get("/api/auth/me", authRequired, async (req: AuthedRequest, res) => {
     if (!authSupabase) {
       return res.status(503).json({
-        message: "Auth server misconfigured. Set SUPABASE_SERVICE_ROLE_KEY in .env.",
+        message: "Auth server misconfigured. Set SUPABASE_SECRET_KEY in .env.",
       });
     }
     const userId = Number(req.user?.sub);
@@ -644,7 +643,7 @@ async function startServer() {
   app.patch("/api/user/profile", authRequired, async (req: AuthedRequest, res) => {
     if (!authSupabase) {
       return res.status(503).json({
-        message: "Auth server misconfigured. Set SUPABASE_SERVICE_ROLE_KEY in .env.",
+        message: "Auth server misconfigured. Set SUPABASE_SECRET_KEY in .env.",
       });
     }
     const userId = Number(req.user?.sub);
@@ -691,7 +690,7 @@ async function startServer() {
   app.delete("/api/user/uploaded-image", authRequired, async (req: AuthedRequest, res) => {
     if (!authSupabase) {
       return res.status(503).json({
-        message: "Auth server misconfigured. Set SUPABASE_SERVICE_ROLE_KEY in .env.",
+        message: "Auth server misconfigured. Set SUPABASE_SECRET_KEY in .env.",
       });
     }
     const userId = Number(req.user?.sub);
@@ -776,7 +775,7 @@ async function startServer() {
   app.get("/api/user/dashboard", authRequired, async (req: AuthedRequest, res) => {
     if (!authSupabase) {
       return res.status(503).json({
-        message: "Auth server misconfigured. Set SUPABASE_SERVICE_ROLE_KEY in .env.",
+        message: "Auth server misconfigured. Set SUPABASE_SECRET_KEY in .env.",
       });
     }
     const userId = Number(req.user?.sub);
@@ -936,7 +935,7 @@ async function startServer() {
   app.get("/api/profile/:username", async (req, res) => {
     if (!authSupabase) {
       return res.status(503).json({
-        message: "Auth server misconfigured. Set SUPABASE_SERVICE_ROLE_KEY in .env.",
+        message: "Auth server misconfigured. Set SUPABASE_SECRET_KEY in .env.",
       });
     }
     const raw = (req.params.username ?? "").toString().trim().toLowerCase();
@@ -1094,7 +1093,7 @@ async function startServer() {
   app.get("/api/user/room-visits", authRequired, async (req: AuthedRequest, res) => {
     if (!authSupabase) {
       return res.status(503).json({
-        message: "Auth server misconfigured. Set SUPABASE_SERVICE_ROLE_KEY in .env.",
+        message: "Auth server misconfigured. Set SUPABASE_SECRET_KEY in .env.",
       });
     }
     const userId = Number(req.user?.sub);
@@ -1120,7 +1119,7 @@ async function startServer() {
   app.post("/api/user/room-visit", authRequired, async (req: AuthedRequest, res) => {
     if (!authSupabase) {
       return res.status(503).json({
-        message: "Auth server misconfigured. Set SUPABASE_SERVICE_ROLE_KEY in .env.",
+        message: "Auth server misconfigured. Set SUPABASE_SECRET_KEY in .env.",
       });
     }
     const userId = Number(req.user?.sub);
@@ -1458,7 +1457,7 @@ async function startServer() {
           usingServiceRole: Boolean(authSupabase),
           hint: authSupabase
             ? undefined
-            : "Set SUPABASE_SERVICE_ROLE_KEY on the server so piece orientation can persist under RLS.",
+            : "Set SUPABASE_SECRET_KEY on the server so piece orientation can persist under RLS.",
         });
         for (const u of entries) pending.set(u.piece_index, u);
       } else if (LOG_PIECE_PERSIST) {
@@ -2207,7 +2206,7 @@ async function startServer() {
   const adminRequired = async (req: Request, res: Response, next: NextFunction) => {
     if (!authSupabase) {
       return res.status(503).json({
-        message: "Auth server misconfigured. Set SUPABASE_SERVICE_ROLE_KEY in .env.",
+        message: "Auth server misconfigured. Set SUPABASE_SECRET_KEY in .env.",
       });
     }
     const token = parseBearerToken(req.headers.authorization);

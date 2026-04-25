@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">퍼즐록스</string>
+    <string name="exit_app_title">앱 종료</string>
+    <string name="exit_app_message">퍼즐록스를 종료할까요?</string>
+    <string name="exit_app_confirm">종료</string>
+    <string name="exit_app_cancel">취소</string>
     <!-- gma_app_id: app/build.gradle.kts defaultConfig resValue(AdMob 앱 ID). TWA·asset_statements 는 WebView 래퍼로 전환하면서 제거. -->
 </resources>

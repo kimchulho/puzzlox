@@ -14,6 +14,6 @@ CREATE INDEX IF NOT EXISTS idx_pixi_user_room_visits_user_time
 
 COMMENT ON TABLE user_room_visits IS 'Last time a logged-in user entered a room; used for Continue (이어하기) across devices.';
 
--- Reads/writes from the browser use the app API (Bearer JWT + SUPABASE_SERVICE_ROLE_KEY on the server), not the anon Supabase client.
+-- Reads/writes from the browser use the app API (Bearer JWT + Supabase secret key on the server), not the public publishable client.
 -- If RLS is enabled, you can deny anon/authenticated direct access; the service role used only on the server bypasses RLS.
 
