@@ -30,7 +30,7 @@ import { REALTIME_CHANNEL_STATES } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabaseClient';
 import { encodeRoomId, roomPath, tossIntossRoomUrl } from '../lib/roomCode';
 import { recordUserRoomVisit } from '../lib/recordUserRoomVisit';
-import { apiUrl } from '../lib/apiBase';
+import { apiUrl, fetchRoomScores } from '../lib/apiBase';
 import { canClusterLockOnBoard, canPieceLockOnBoard, normalizePuzzleDifficulty, type PuzzleDifficulty } from '../lib/puzzleDifficulty';
 import { createPuzzleHintLayer, type PuzzleHintLayer } from '../lib/puzzleHintLayer';
 
@@ -874,11 +874,9 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
         }
       }
 
-      const { data: scoreData } = await supabase.from('scores').select('*').eq('room_id', roomId).order('score', { ascending: false });
+      const scoreData = await fetchRoomScores(roomId);
       if (cancelled) return;
-      if (scoreData) {
-        setScores(scoreData);
-      }
+      setScores(scoreData);
     };
     void fetchRoomData();
     return () => {
@@ -964,13 +962,11 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
     };
     const refreshStateAfterReconnect = async () => {
       try {
-        const [{ data: scoreData }, { data: pieceData }] = await Promise.all([
-          supabase.from("scores").select("*").eq("room_id", roomId).order("score", { ascending: false }),
+        const [scoreData, { data: pieceData }] = await Promise.all([
+          fetchRoomScores(roomId),
           supabase.from("pieces").select("piece_index, x, y, is_locked, rotation_quarter, is_back_face").eq("room_id", roomId),
         ]);
-        if (Array.isArray(scoreData)) {
-          setScores(scoreData);
-        }
+        setScores(scoreData);
         if (Array.isArray(pieceData)) {
           boardLockedPieceIdsRef.current.clear();
           for (const row of pieceData) {

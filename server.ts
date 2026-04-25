@@ -1308,6 +1308,27 @@ async function startServer() {
     return res.json(payload);
   });
 
+  /**
+   * Room leaderboard — use server-side Supabase (secret when set) so the browser is not
+   * blocked by RLS/GRANT on direct PostgREST access to public.scores.
+   */
+  app.get("/api/rooms/:roomId/scores", async (req, res) => {
+    const roomId = Number(req.params.roomId);
+    if (!Number.isFinite(roomId) || roomId <= 0) {
+      return res.status(400).json({ message: "Invalid room id." });
+    }
+    const client = authSupabase ?? supabase;
+    const { data, error } = await client
+      .from("scores")
+      .select("room_id, username, score")
+      .eq("room_id", roomId)
+      .order("score", { ascending: false });
+    if (error) {
+      return res.status(500).json({ message: error.message });
+    }
+    return res.json({ scores: data ?? [] });
+  });
+
   // ==========================================
   // Socket.io & Playtime Logic
   // ==========================================

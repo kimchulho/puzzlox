@@ -18,3 +18,29 @@ export function apiUrl(path: string): string {
   const p = path.startsWith("/") ? path : `/${path}`;
   return base ? `${base}${p}` : p;
 }
+
+/** Leaderboard rows for a room (served from API with service-level DB access, not browser RLS). */
+export type RoomScoreRow = { room_id: number; username: string; score: number };
+
+export async function fetchRoomScores(roomId: number): Promise<RoomScoreRow[]> {
+  try {
+    const res = await fetch(apiUrl(`/api/rooms/${roomId}/scores`));
+    if (!res.ok) return [];
+    const j = (await res.json()) as { scores?: unknown };
+    if (!Array.isArray(j.scores)) return [];
+    return j.scores
+      .map((r) => {
+        const row = r as { room_id?: unknown; username?: unknown; score?: unknown };
+        const uname = String(row.username ?? "").trim();
+        if (!uname) return null;
+        return {
+          room_id: Number.isFinite(Number(row.room_id)) ? Number(row.room_id) : roomId,
+          username: uname,
+          score: Number.isFinite(Number(row.score)) ? Number(row.score) : 0,
+        };
+      })
+      .filter((x): x is RoomScoreRow => x != null);
+  } catch {
+    return [];
+  }
+}
