@@ -20,7 +20,12 @@ export function apiUrl(path: string): string {
 }
 
 /** Leaderboard rows for a room (served from API with service-level DB access, not browser RLS). */
-export type RoomScoreRow = { room_id: number; username: string; score: number };
+export type RoomScoreRow = {
+  room_id: number;
+  username: string;
+  score: number;
+  nickname?: string | null;
+};
 
 export async function fetchRoomScores(roomId: number): Promise<RoomScoreRow[]> {
   try {
@@ -30,13 +35,15 @@ export async function fetchRoomScores(roomId: number): Promise<RoomScoreRow[]> {
     if (!Array.isArray(j.scores)) return [];
     return j.scores
       .map((r) => {
-        const row = r as { room_id?: unknown; username?: unknown; score?: unknown };
+        const row = r as { room_id?: unknown; username?: unknown; score?: unknown; nickname?: unknown };
         const uname = String(row.username ?? "").trim();
         if (!uname) return null;
+        const nicknameRaw = String(row.nickname ?? "").trim();
         return {
           room_id: Number.isFinite(Number(row.room_id)) ? Number(row.room_id) : roomId,
           username: uname,
           score: Number.isFinite(Number(row.score)) ? Number(row.score) : 0,
+          nickname: nicknameRaw !== "" ? nicknameRaw : null,
         };
       })
       .filter((x): x is RoomScoreRow => x != null);

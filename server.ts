@@ -1417,7 +1417,36 @@ async function startServer() {
     if (error) {
       return res.status(500).json({ message: error.message });
     }
-    return res.json({ scores: data ?? [] });
+    const rows = (data ?? []) as Array<{ room_id?: unknown; username?: unknown; score?: unknown }>;
+    const usernames = [...new Set(rows.map((r) => String(r.username ?? "").trim()).filter(Boolean))];
+    let nicknameByUsername = new Map<string, string>();
+    if (usernames.length > 0) {
+      const { data: usersData, error: usersErr } = await client
+        .from("users")
+        .select("username, nickname")
+        .in("username", usernames);
+      if (usersErr) {
+        console.warn("[rooms-scores/users]", usersErr.message);
+      } else {
+        nicknameByUsername = new Map(
+          ((usersData ?? []) as Array<{ username?: unknown; nickname?: unknown }>).map((u) => [
+            String(u.username ?? "").trim(),
+            String(u.nickname ?? "").trim(),
+          ])
+        );
+      }
+    }
+    const merged = rows.map((r) => {
+      const username = String(r.username ?? "").trim();
+      const nickname = nicknameByUsername.get(username) ?? "";
+      return {
+        room_id: Number(r.room_id ?? roomId),
+        username,
+        score: Number(r.score ?? 0),
+        nickname: nickname || null,
+      };
+    });
+    return res.json({ scores: merged });
   });
 
   // ==========================================

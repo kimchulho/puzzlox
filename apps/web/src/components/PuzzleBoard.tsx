@@ -231,7 +231,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
   const [loadProgress, setLoadProgress] = useState(0);
   const [imageLoadError, setImageLoadError] = useState<string | null>(null);
   const [isColorBotLoading, setIsColorBotLoading] = useState(false);
-  const [scores, setScores] = useState<{username: string, score: number}[]>([]);
+  const [scores, setScores] = useState<{username: string, score: number, nickname?: string | null}[]>([]);
   /** 로그인 username → 표시용 닉네임(게스트·미가입은 맵에 없음 → username 그대로) */
   const [scoreDisplayNames, setScoreDisplayNames] = useState<Record<string, string>>({});
   const [activeUsers, setActiveUsers] = useState<Set<string>>(new Set());
@@ -8298,7 +8298,9 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
                   const rankLabel =
                     isMe
                       ? currentPlayerLabel
-                      : (scoreDisplayNames[score.username] ?? score.username);
+                      : ((score.nickname && score.nickname.trim() !== "")
+                          ? score.nickname
+                          : (scoreDisplayNames[score.username] ?? score.username));
                   return (
                   <div key={idx} className={`flex items-center justify-between p-1 rounded-lg transition-colors ${
                     isMe
