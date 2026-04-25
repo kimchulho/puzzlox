@@ -353,7 +353,11 @@ export default function GameShell({
             onJoinRoom={handleJoinRoom}
             locale="ko"
             user={user ?? undefined}
-            setUser={(u) => setUser(u as AuthUser)}
+            setUser={setUser}
+            onSessionInvalid={() => {
+              onLoggedOut();
+              navigateToPath("/");
+            }}
           />
         </div>
       </>

@@ -91,6 +91,15 @@ function participatedFilterLabel(v: ParticipatedRoomFilter, isKo: boolean): stri
   }
 }
 
+function clearPuzzleWebSession() {
+  try {
+    localStorage.removeItem("puzzle_access_token");
+    localStorage.removeItem("puzzle_user");
+  } catch {
+    /* noop */
+  }
+}
+
 export default function UserDashboard({
   mode,
   publicUsername,
@@ -99,6 +108,8 @@ export default function UserDashboard({
   locale,
   user,
   setUser,
+  /** 토큰이 더 이상 유효하지 않을 때(401). 로그인으로 보내기 위한 콜백(선택). */
+  onSessionInvalid,
   visualVariant = "web",
   /** 앱인토스: 상단 안전 영역(px). 래퍼 `paddingTop` 대신 헤더에만 적용해 이중 여백을 줄입니다. */
   safeAreaTop = 0,
@@ -115,7 +126,8 @@ export default function UserDashboard({
   ) => void;
   locale: "ko" | "en";
   user?: DashboardUser | null;
-  setUser?: (u: DashboardUser) => void;
+  setUser?: (u: DashboardUser | null) => void;
+  onSessionInvalid?: () => void;
   /** 앱인토스: 로비와 맞춘 밝은 톤 */
   visualVariant?: "web" | "toss";
   safeAreaTop?: number;
@@ -159,6 +171,20 @@ export default function UserDashboard({
           myUploads?: UploadRow[];
         };
         if (!res.ok) {
+          if (res.status === 401) {
+            clearPuzzleWebSession();
+            setUser?.(null);
+            onSessionInvalid?.();
+            if (!onSessionInvalid) {
+              setError(
+                isKo
+                  ? "로그인이 만료되었습니다. 뒤로 가서 다시 로그인해 주세요."
+                  : "Your session has expired. Go back and sign in again."
+              );
+            }
+            setLoading(false);
+            return;
+          }
           setError(j?.message || `HTTP ${res.status}`);
           setLoading(false);
           return;
@@ -246,7 +272,7 @@ export default function UserDashboard({
     } finally {
       setLoading(false);
     }
-  }, [mode, publicUsername, isKo]);
+  }, [mode, publicUsername, isKo, setUser, onSessionInvalid]);
 
   useEffect(() => {
     const next = (dashUser?.nickname ?? dashUser?.username ?? "").toString();
@@ -317,6 +343,19 @@ export default function UserDashboard({
         body: JSON.stringify({ profilePublic: next }),
       });
       const j = (await res.json().catch(() => ({}))) as { user?: DashboardUser; message?: string };
+      if (res.status === 401) {
+        clearPuzzleWebSession();
+        setUser?.(null);
+        onSessionInvalid?.();
+        if (!onSessionInvalid) {
+          setError(
+            isKo
+              ? "로그인이 만료되었습니다. 뒤로 가서 다시 로그인해 주세요."
+              : "Your session has expired. Go back and sign in again."
+          );
+        }
+        return;
+      }
       if (!res.ok || !j.user) {
         setError(j?.message || `HTTP ${res.status}`);
         return;
@@ -351,6 +390,19 @@ export default function UserDashboard({
         body: JSON.stringify({ nickname: nextNickname }),
       });
       const j = (await res.json().catch(() => ({}))) as { user?: DashboardUser; message?: string };
+      if (res.status === 401) {
+        clearPuzzleWebSession();
+        setUser?.(null);
+        onSessionInvalid?.();
+        if (!onSessionInvalid) {
+          setError(
+            isKo
+              ? "로그인이 만료되었습니다. 뒤로 가서 다시 로그인해 주세요."
+              : "Your session has expired. Go back and sign in again."
+          );
+        }
+        return;
+      }
       if (!res.ok || !j.user) {
         setError(j?.message || `HTTP ${res.status}`);
         return;

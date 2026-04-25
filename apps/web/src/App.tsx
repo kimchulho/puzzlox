@@ -198,6 +198,10 @@ export default function App() {
         locale={locale}
         user={user}
         setUser={setUser}
+        onSessionInvalid={() => {
+          navigateToPath('/');
+          setShowAuth(true);
+        }}
       />
     );
   }
