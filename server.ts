@@ -1348,6 +1348,8 @@ async function startServer() {
   const socketUserPlaySessions = new Map<string, { userId: number; startedAt: number; roomId: number }>();
   const pendingUserPlaySeconds = new Map<number, number>();
   let flushingUserPlaySeconds = false;
+  let userPlaytimeSecretWarned = false;
+  let scorePersistenceSecretWarned = false;
 
   // 현재까지의 정확한 플레이 타임 계산 (초 단위)
   const getCurrentPlayTime = (room: any) => {
@@ -1364,13 +1366,23 @@ async function startServer() {
   };
   const flushUserPlaySeconds = async () => {
     if (flushingUserPlaySeconds || pendingUserPlaySeconds.size === 0) return;
+    // `users`는 RLS/GRANT로 publishable(anon)이 막히는 경우가 많아 secret 전용으로만 갱신
+    if (!authSupabase) {
+      if (!userPlaytimeSecretWarned) {
+        userPlaytimeSecretWarned = true;
+        console.warn(
+          "[user-playtime] Set SUPABASE_SECRET_KEY on the server. Without it, per-user play time is not saved (publishable key cannot access public.users on many setups)."
+        );
+      }
+      return;
+    }
     flushingUserPlaySeconds = true;
     const entries = [...pendingUserPlaySeconds.entries()];
     pendingUserPlaySeconds.clear();
     try {
       await Promise.all(
         entries.map(async ([userId, delta]) => {
-          const { data, error } = await supabase
+          const { data, error } = await authSupabase
             .from("users")
             .select("total_play_time")
             .eq("id", userId)
@@ -1380,7 +1392,7 @@ async function startServer() {
             return;
           }
           const next = Number(data.total_play_time ?? 0) + delta;
-          const { error: updateError } = await supabase
+          const { error: updateError } = await authSupabase
             .from("users")
             .update({ total_play_time: next, last_active_at: new Date().toISOString() })
             .eq("id", userId);
@@ -1768,7 +1780,12 @@ async function startServer() {
     const getRoomScoreMap = async (roomId: number): Promise<Map<string, number>> => {
       const cached = roomScoreCache.get(roomId);
       if (cached) return cached;
-      const { data, error } = await supabase
+      if (!authSupabase) {
+        const empty = new Map<string, number>();
+        roomScoreCache.set(roomId, empty);
+        return empty;
+      }
+      const { data, error } = await authSupabase
         .from("scores")
         .select("username, score")
         .eq("room_id", roomId);
@@ -1789,13 +1806,14 @@ async function startServer() {
       return m;
     };
     const distributeCompletionRewards = async (roomId: number) => {
+      if (!authSupabase) return;
       const scoreMap = await getRoomScoreMap(roomId);
       const roomScores = [...scoreMap.entries()]
         .map(([username, score]) => ({ username, score: Number.isFinite(score) ? score : 0 }))
         .filter((x) => x.username && x.score > 0);
       if (roomScores.length === 0) return;
       const usernames = roomScores.map((x) => x.username);
-      const { data: users, error: usersError } = await supabase
+      const { data: users, error: usersError } = await authSupabase
         .from("users")
         .select("id, username, completed_puzzles, placed_pieces, profile_public")
         .in("username", usernames);
@@ -1812,7 +1830,7 @@ async function startServer() {
           if (!u) return;
           const completed = Number(u.completed_puzzles ?? 0) + 1;
           const placed = Number(u.placed_pieces ?? 0) + score;
-          const { error } = await supabase
+          const { error } = await authSupabase
             .from("users")
             .update({ completed_puzzles: completed, placed_pieces: placed })
             .eq("id", u.id);
@@ -1863,9 +1881,13 @@ async function startServer() {
             oldRoom.accumulatedTime += (Date.now() - oldRoom.lastResumeTime) / 1000;
             oldRoom.lastResumeTime = null;
             
-            supabase.from("rooms").update({ 
-              total_play_time_seconds: Math.floor(oldRoom.accumulatedTime)
-            }).eq("id", currentRoomId).then();
+            pieceStateSupabase
+              .from("rooms")
+              .update({
+                total_play_time_seconds: Math.floor(oldRoom.accumulatedTime),
+              })
+              .eq("id", currentRoomId)
+              .then();
           }
         }
       }
@@ -1874,7 +1896,7 @@ async function startServer() {
       socket.join(roomId.toString());
 
       if (!roomStates.has(roomId)) {
-        const { data } = await supabase
+        const { data } = await pieceStateSupabase
           .from("rooms")
           .select("total_play_time_seconds, status")
           .eq("id", roomId)
@@ -2114,7 +2136,16 @@ async function startServer() {
       scoreMap.set(username, nextScore);
       const payload: ScoreSyncPayload = { roomId, username, score: nextScore };
       io.to(roomId.toString()).emit(ROOM_EVENTS.ScoreSync, payload);
-      const { error } = await supabase
+      if (!authSupabase) {
+        if (!scorePersistenceSecretWarned) {
+          scorePersistenceSecretWarned = true;
+          console.warn(
+            "[score-delta] Set SUPABASE_SECRET_KEY on the server to persist scores (publishable key cannot upsert public.scores on many setups)."
+          );
+        }
+        return;
+      }
+      const { error } = await authSupabase
         .from("scores")
         .upsert({ room_id: roomId, username, score: nextScore }, { onConflict: "room_id,username" });
       if (error) {
@@ -2134,7 +2165,7 @@ async function startServer() {
         const finalTime = Math.floor(room.accumulatedTime);
 
         const completedAtIso = new Date().toISOString();
-        const { error: completeUpdateError } = await supabase
+        const { error: completeUpdateError } = await pieceStateSupabase
           .from("rooms")
           .update({
             total_play_time_seconds: finalTime,
@@ -2144,7 +2175,7 @@ async function startServer() {
           .eq("id", roomId);
         if (completeUpdateError) {
           // Backward compatibility: if DB column is not migrated yet, retry without completed_at.
-          const retry = await supabase
+          const retry = await pieceStateSupabase
             .from("rooms")
             .update({
               total_play_time_seconds: finalTime,
@@ -2186,10 +2217,10 @@ async function startServer() {
             room.lastResumeTime = null;
           }
           
-          supabase
+          pieceStateSupabase
             .from("rooms")
-            .update({ 
-              total_play_time_seconds: Math.floor(room.accumulatedTime)
+            .update({
+              total_play_time_seconds: Math.floor(room.accumulatedTime),
             })
             .eq("id", currentRoomId)
             .then(({ error }) => {
@@ -2343,7 +2374,7 @@ async function startServer() {
       };
       io.to(roomId.toString()).emit(ROOM_EVENTS.SyncTime, syncPayload);
     } else {
-      const { data: row } = await supabase
+      const { data: row } = await pieceStateSupabase
         .from("rooms")
         .select("total_play_time_seconds")
         .eq("id", roomId)
@@ -2365,16 +2396,17 @@ async function startServer() {
     return res.json({ ok: true, status });
   });
 
-  // 30초 주기의 느린 타이머 루프 (DB 백업용, 네트워크 통신 없음)
+  // 30초 주기: 재생 중인 방의 total_play_time_seconds 를 DB에 동기화.
+  // publishable(anon) 키는 RLS/GRANT에 막힐 수 있으므로 pieceStateSupabase(우선 secret)를 사용.
   setInterval(() => {
     roomStates.forEach((room, roomId) => {
       // 진행 중인 방만 30초마다 DB에 안전하게 백업
       if (room.users.size > 0 && !room.isCompleted) {
         const currentPlayTime = Math.floor(getCurrentPlayTime(room));
-        supabase
+        pieceStateSupabase
           .from("rooms")
-          .update({ 
-            total_play_time_seconds: currentPlayTime
+          .update({
+            total_play_time_seconds: currentPlayTime,
           })
           .eq("id", roomId)
           .then(({ error }) => {
