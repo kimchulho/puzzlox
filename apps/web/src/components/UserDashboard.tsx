@@ -22,7 +22,6 @@ import {
   ensureRoomPasswordVerified,
   profileParticipatedRowHasPassword,
   roomRowHasPasswordLobby,
-  ROOM_PUBLIC_COLUMNS,
 } from "../lib/roomAccess";
 import { tossIntossProfileUrl } from "../lib/roomCode";
 import {
@@ -418,35 +417,41 @@ export default function UserDashboard({
     }
   };
 
-  const enterRoom = async (roomId: number) => {
-    const { data, error: qErr } = await supabase
-      .from("rooms")
-      .select(ROOM_PUBLIC_COLUMNS)
-      .eq("id", roomId)
-      .maybeSingle();
-    if (qErr || !data) {
+  const enterRoom = async (
+    roomId: number,
+    roomHint?: {
+      imageUrl?: string | null;
+      pieceCount?: number;
+      difficulty?: string | null;
+      hasPassword?: boolean;
+      creatorName?: string | null;
+      iAmCreator?: boolean;
+    }
+  ) => {
+    // Dashboard already has room metadata. Prefer it over direct Supabase reads,
+    // because private rooms can be blocked by RLS on client-side PostgREST.
+    const imageUrl = (roomHint?.imageUrl ?? "").toString().trim();
+    const pieceCount = Number(roomHint?.pieceCount ?? 0);
+    if (!imageUrl || !Number.isFinite(pieceCount) || pieceCount <= 0) {
       setError(isKo ? "방 정보를 불러올 수 없습니다." : "Could not load room.");
       return;
     }
-    const row = data as {
-      id: number;
-      image_url: string;
-      piece_count: number;
-      difficulty?: string;
-      has_password?: boolean;
-      created_by?: unknown;
-      creator_name?: string | null;
-    };
-    const ok = await ensureRoomPasswordVerified(row.id, row.has_password === true, isKo, {
+    const hasPassword = roomHint?.hasPassword === true;
+    const ok = await ensureRoomPasswordVerified(roomId, hasPassword, isKo, {
       room: {
-        id: row.id,
-        created_by: row.created_by,
-        creator_name: row.creator_name ?? null,
+        id: roomId,
+        created_by: roomHint?.iAmCreator ? user?.id : undefined,
+        creator_name: roomHint?.creatorName ?? null,
       },
       user: user ? { id: user.id, username: user.username } : null,
     });
     if (!ok) return;
-    onJoinRoom(row.id, row.image_url, row.piece_count, normalizePuzzleDifficulty(row.difficulty));
+    onJoinRoom(
+      roomId,
+      imageUrl,
+      pieceCount,
+      normalizePuzzleDifficulty(roomHint?.difficulty ?? "medium")
+    );
   };
 
   const copyProfileLink = () => {
@@ -833,7 +838,19 @@ export default function UserDashboard({
                             {isKo ? "만든 날" : "Created"}: {new Date(r.createdAt).toLocaleString()}
                           </p>
                         ) : null}
-                        <button type="button" onClick={() => void enterRoom(r.roomId)} className={skin.btnSmall}>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void enterRoom(r.roomId, {
+                              imageUrl: r.imageUrl,
+                              pieceCount: r.pieceCount,
+                              difficulty: r.difficulty,
+                              creatorName: dashUser?.username ?? null,
+                              iAmCreator: true,
+                            })
+                          }
+                          className={skin.btnSmall}
+                        >
                           {isKo ? "입장" : "Enter"}
                         </button>
                       </div>
@@ -1019,7 +1036,18 @@ export default function UserDashboard({
                           ) : null}
                           <button
                             type="button"
-                            onClick={() => void enterRoom(r.roomId)}
+                            onClick={() =>
+                              void enterRoom(r.roomId, {
+                                imageUrl: r.imageUrl,
+                                pieceCount: r.pieceCount,
+                                difficulty: r.difficulty,
+                                hasPassword: profileParticipatedRowHasPassword(
+                                  r as { hasPassword?: unknown; has_password?: unknown }
+                                ),
+                                creatorName: r.creatorName ?? null,
+                                iAmCreator: r.iAmCreator === true,
+                              })
+                            }
                             className={`${skin.btnEnter} w-full`}
                           >
                             {isKo ? "입장" : "Enter"}
