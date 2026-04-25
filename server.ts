@@ -772,6 +772,90 @@ async function startServer() {
     return res.json({ ok: true, blankedRoomCount: ownedRoomIds.length, deletedImageId: imageRow?.id ?? null });
   });
 
+  /**
+   * Logged-in room create (bypasses PostgREST RLS on `insert().select` for e.g. `is_private` rooms).
+   * Optional `savePuzzleImage` inserts `public.puzzle_images` with the same storage URL.
+   */
+  app.post("/api/rooms", authRequired, async (req: AuthedRequest, res) => {
+    if (!authSupabase) {
+      return res.status(503).json({
+        message: "Auth server misconfigured. Set SUPABASE_SECRET_KEY in .env.",
+      });
+    }
+    const userId = Number(req.user?.sub);
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return res.status(401).json({ message: "Invalid token subject." });
+    }
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const creatorName = (b.creator_name ?? "").toString().trim();
+    const imageUrl = (b.image_url ?? "").toString().trim();
+    const pieceCount = Math.floor(Number(b.piece_count));
+    const maxPlayers = Math.floor(Number(b.max_players));
+    const difficulty = (b.difficulty ?? "medium").toString().toLowerCase().trim() || "medium";
+    const hasPassword = b.has_password === true || b.has_password === "true" || b.has_password === 1;
+    const isPrivate = b.is_private === true || b.is_private === "true" || b.is_private === 1;
+    const passwordRaw = (b.password ?? b.room_password ?? "").toString().trim();
+    const savePuzzleImage = b.savePuzzleImage as { url?: unknown; is_public?: unknown } | null | undefined;
+
+    if (!creatorName || !imageUrl) {
+      return res.status(400).json({ message: "creator_name and image_url are required." });
+    }
+    if (!Number.isFinite(pieceCount) || pieceCount < 1) {
+      return res.status(400).json({ message: "Invalid piece_count." });
+    }
+    if (!Number.isFinite(maxPlayers) || maxPlayers < 1) {
+      return res.status(400).json({ message: "Invalid max_players." });
+    }
+    const diffs = new Set(["easy", "medium", "hard", "nightmare"]);
+    if (!diffs.has(difficulty)) {
+      return res.status(400).json({ message: "Invalid difficulty." });
+    }
+
+    if (savePuzzleImage && typeof savePuzzleImage === "object") {
+      const pUrl = (savePuzzleImage.url != null ? String(savePuzzleImage.url) : imageUrl).trim() || imageUrl;
+      const isPublic = savePuzzleImage.is_public === true;
+      const imgRow: Record<string, unknown> = {
+        url: pUrl,
+        is_public: isPublic,
+        created_by: userId,
+      };
+      const { error: pErr } = await authSupabase.from("puzzle_images").insert([imgRow]);
+      if (pErr) {
+        return res.status(500).json({ message: pErr.message });
+      }
+    }
+
+    const insertRow: Record<string, unknown> = {
+      creator_name: creatorName,
+      image_url: imageUrl,
+      piece_count: pieceCount,
+      max_players: maxPlayers,
+      difficulty,
+      status: "active",
+      has_password: hasPassword,
+      is_private: isPrivate,
+      created_by: userId,
+    };
+    if (hasPassword && passwordRaw) {
+      insertRow.password = passwordRaw;
+      insertRow.room_password = passwordRaw;
+    }
+
+    const { data, error } = await authSupabase
+      .from("rooms")
+      .insert([insertRow])
+      .select("id, creator_name, image_url, piece_count, max_players, status, created_at, completed_at, difficulty, has_password, total_play_time_seconds, is_private, room_code, created_by")
+      .maybeSingle();
+
+    if (error) {
+      return res.status(500).json({ message: error.message });
+    }
+    if (!data) {
+      return res.status(500).json({ message: "Failed to create room (no data)." });
+    }
+    return res.status(201).json({ room: omitRoomPassword(data as Record<string, unknown>) });
+  });
+
   app.get("/api/user/dashboard", authRequired, async (req: AuthedRequest, res) => {
     if (!authSupabase) {
       return res.status(503).json({

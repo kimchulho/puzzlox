@@ -891,62 +891,81 @@ const Lobby = ({
 
     setIsCreating(true);
 
-    // If custom image, save it to puzzle_images
     const isPrivate = imageSource === 'custom';
-    if (imageSource === 'custom') {
-        const insertData: any = { url: currentImageUrl, is_public: false };
-        if (user) insertData.created_by = user.id;
-        
-        await supabase.from('puzzle_images').insert([insertData]);
-    }
-
     const resolvedPieceCount = await resolvePieceCountFromImage(currentImageUrl, pieceCount);
-    const insertRow: Record<string, unknown> = {
-      creator_name: creatorName,
-      image_url: currentImageUrl,
-      piece_count: resolvedPieceCount,
-      difficulty,
-      max_players: maxPlayers,
-      status: 'active',
-      has_password: !!password.trim(),
-      is_private: isPrivate,
-    };
-    if (user?.id) insertRow.created_by = user.id;
     const pwTrim = password.trim();
-    if (pwTrim) {
-      insertRow.room_password = pwTrim;
-      insertRow.password = pwTrim;
-    }
 
-    const { data, error } = await supabase.from('rooms').insert([insertRow]).select(ROOM_PUBLIC_COLUMNS);
-
-    if (data && data.length > 0) {
-      const roomId = data[0].id;
-      if (!user?.id) pushGuestCreatedRoomId(roomId);
-      if (user?.id) void recordUserRoomVisit(roomId);
-      const recentRooms = JSON.parse(localStorage.getItem('puzzle_recent_rooms') || '[]');
+    /** Logged-in: create via API (server uses secret) so RLS does not break insert+select for private rooms. */
+    if (user?.id) {
+      const token = localStorage.getItem("puzzle_access_token");
+      if (!token) {
+        alert(isKo ? koT("로그인이 필요합니다.", "You need to be signed in.") : "You need to be signed in.");
+        setIsCreating(false);
+        return;
+      }
+      const body: Record<string, unknown> = {
+        creator_name: creatorName,
+        image_url: currentImageUrl,
+        piece_count: resolvedPieceCount,
+        difficulty,
+        max_players: maxPlayers,
+        has_password: !!pwTrim,
+        is_private: isPrivate,
+      };
+      if (isPrivate) {
+        body.savePuzzleImage = { url: currentImageUrl, is_public: false };
+      }
+      if (pwTrim) {
+        body.password = pwTrim;
+        body.room_password = pwTrim;
+      }
+      const res = await fetch(apiUrl("/api/rooms"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      });
+      const j = (await res.json().catch(() => ({}))) as { message?: string; room?: Record<string, unknown> };
+      if (!res.ok) {
+        console.error("Error creating room (API):", j);
+        alert(
+          (j?.message && String(j.message).trim() !== "" ? String(j.message) : null) ??
+            (isKo ? koT("방 생성에 실패했습니다.", "방 만들기에 실패했어요.") : "Failed to create the room.")
+        );
+        setIsCreating(false);
+        return;
+      }
+      const row = j.room;
+      if (!row || row.id == null) {
+        console.error("Error creating room: empty room in response", j);
+        alert(isKo ? koT("방 생성에 실패했습니다.", "방 만들기에 실패했어요.") : "Failed to create the room.");
+        setIsCreating(false);
+        return;
+      }
+      const roomId = Number((row as { id?: unknown }).id);
+      void recordUserRoomVisit(roomId);
+      const recentRooms = JSON.parse(localStorage.getItem("puzzle_recent_rooms") || "[]");
       const newRecent = [roomId, ...recentRooms.filter((id: number) => id !== roomId)].slice(0, 10);
-      localStorage.setItem('puzzle_recent_rooms', JSON.stringify(newRecent));
+      localStorage.setItem("puzzle_recent_rooms", JSON.stringify(newRecent));
+      const roomImageUrl = String((row as { image_url?: unknown }).image_url ?? currentImageUrl);
       const doEnter = () =>
         onJoinRoom(
           roomId,
-          data[0].image_url,
+          roomImageUrl,
           resolvedPieceCount,
-          normalizePuzzleDifficulty((data[0] as any).difficulty ?? difficulty),
+          normalizePuzzleDifficulty(
+            (row as { difficulty?: string | null }).difficulty ?? difficulty
+          ),
         );
       if (tossUi) {
         const ok = await runTossRewardedRoomEntry(roomId, doEnter);
         if (!ok) {
-          // Fail-open for room creator: if rewarded ad is unavailable/failed,
-          // allow entering the newly created room instead of dead-ending UX.
-          console.warn('[RewardedAd] create-room entry gate failed; entering anyway', { roomId, tossUi: true });
+          console.warn("[RewardedAd] create-room entry gate failed; entering anyway", { roomId, tossUi: true });
           doEnter();
         }
       } else if (isAndroidNativeClient) {
         const ok = await runAndroidNativeRewardedRoomEntry(roomId, doEnter);
         if (!ok) {
-          // Same fail-open behavior on Android native rewarded flow.
-          console.warn('[RewardedAd] create-room entry gate failed; entering anyway', {
+          console.warn("[RewardedAd] create-room entry gate failed; entering anyway", {
             roomId,
             isAndroidNativeClient: true,
           });
@@ -955,9 +974,80 @@ const Lobby = ({
       } else {
         doEnter();
       }
-    } else if (error) {
-      console.error('Error creating room:', error);
-      alert(isKo ? koT("방 생성에 실패했습니다.", "방 만들기에 실패했어요.") : "Failed to create the room.");
+    } else {
+      if (imageSource === "custom") {
+        const insertData: { url: string; is_public: boolean } = {
+          url: currentImageUrl,
+          is_public: false,
+        };
+        const { error: imgErr } = await supabase.from("puzzle_images").insert([insertData]);
+        if (imgErr) {
+          console.error("Error saving puzzle image row:", imgErr);
+          alert(
+            (imgErr as { message?: string }).message?.trim() ||
+              (isKo
+                ? koT("이미지 정보 저장에 실패했습니다. 방을 만들 수 없습니다.", "Could not save image info.")
+                : "Could not save image info.")
+          );
+          setIsCreating(false);
+          return;
+        }
+      }
+
+      const insertRow: Record<string, unknown> = {
+        creator_name: creatorName,
+        image_url: currentImageUrl,
+        piece_count: resolvedPieceCount,
+        difficulty,
+        max_players: maxPlayers,
+        status: "active",
+        has_password: !!pwTrim,
+        is_private: isPrivate,
+      };
+      if (pwTrim) {
+        insertRow.room_password = pwTrim;
+        insertRow.password = pwTrim;
+      }
+
+      const { data, error } = await supabase.from("rooms").insert([insertRow]).select(ROOM_PUBLIC_COLUMNS);
+      if (data && data.length > 0) {
+        const roomId = (data[0] as { id: number }).id;
+        pushGuestCreatedRoomId(roomId);
+        const recentRooms = JSON.parse(localStorage.getItem("puzzle_recent_rooms") || "[]");
+        const newRecent = [roomId, ...recentRooms.filter((id: number) => id !== roomId)].slice(0, 10);
+        localStorage.setItem("puzzle_recent_rooms", JSON.stringify(newRecent));
+        const doEnter = () =>
+          onJoinRoom(
+            roomId,
+            (data[0] as { image_url: string }).image_url,
+            resolvedPieceCount,
+            normalizePuzzleDifficulty((data[0] as { difficulty?: string }).difficulty ?? difficulty),
+          );
+        if (tossUi) {
+          const ok = await runTossRewardedRoomEntry(roomId, doEnter);
+          if (!ok) {
+            console.warn("[RewardedAd] create-room entry gate failed; entering anyway", { roomId, tossUi: true });
+            doEnter();
+          }
+        } else if (isAndroidNativeClient) {
+          const ok = await runAndroidNativeRewardedRoomEntry(roomId, doEnter);
+          if (!ok) {
+            console.warn("[RewardedAd] create-room entry gate failed; entering anyway", {
+              roomId,
+              isAndroidNativeClient: true,
+            });
+            doEnter();
+          }
+        } else {
+          doEnter();
+        }
+      } else if (error) {
+        console.error("Error creating room:", error);
+        alert(isKo ? koT("방 생성에 실패했습니다.", "방 만들기에 실패했어요.") : "Failed to create the room.");
+      } else {
+        console.error("Error creating room: no data from Supabase");
+        alert(isKo ? koT("방 생성에 실패했습니다.", "방 만들기에 실패했어요.") : "Failed to create the room.");
+      }
     }
     setIsCreating(false);
   };
