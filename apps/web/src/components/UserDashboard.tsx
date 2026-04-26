@@ -113,7 +113,7 @@ export default function UserDashboard({
    * 앱인토스: JWT가 서버에 거절될 때(만료/불일치) 한 번 `appLogin`으로 세션을 갱신한 뒤 대시보드 요청을 재시도.
    * `GameShell`의 토스 로그인(`loginWithTossApp` + `persistSession`)과 동일한 핸들러를 넣습니다.
    */
-  onReauthWithToss?: () => void | Promise<void>,
+  onReauthWithToss,
   visualVariant = "web",
   /** 앱인토스: 상단 안전 영역(px). 래퍼 `paddingTop` 대신 헤더에만 적용해 이중 여백을 줄입니다. */
   safeAreaTop = 0,
