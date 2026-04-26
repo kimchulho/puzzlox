@@ -1,0 +1,8 @@
+# Copy to `local.properties` in this folder (local.properties is gitignored).
+
+# [필수] 운영(실) 광고: AdMob 콘솔 [앱] > 앱 설정 > 앱 ID (ca-app-pub-...~... 전체, 보상형 "단" ID와는 다른 값)
+# 미설정 시 샘플 테스트 앱 ID로 빌드되어 테스트 광고만 나옵니다.
+# ADMOB_APP_ID=ca-app-pub-9880062103386476~콘솔에서_복사한_접미
+
+# Puzzlox 보상형 단 — 기본은 app/build.gradle.kts 의 `puzzloxAdMobRewardedUnitId` 와 같음. 다른 단을 쓸 때만 덮어쓰기.
+# ADMOB_REWARDED_AD_UNIT_ID=ca-app-pub-9880062103386476/9681650177

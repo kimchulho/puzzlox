@@ -14,8 +14,10 @@ val localProps = Properties().apply {
 // (test app id + live rewarded unit = failed loads / no fill)
 val adMobTestAppId = "ca-app-pub-3940256099942544~3347511713"
 val adMobTestRewardedUnitId = "ca-app-pub-3940256099942544/5224354917"
-// Production rewarded unit; pair with ADMOB_APP_ID=ca-app-pub-9880062103386476~... in local.properties
-val adMobDefaultProdRewardedUnitId = "ca-app-pub-9880062103386476/9681650177"
+
+// Puzzlox AdMob — rewarded (운영) 단 ID (AdMob 콘솔 > 보상형)
+val puzzloxAdMobRewardedUnitId = "ca-app-pub-9880062103386476/9681650177"
+val adMobDefaultProdRewardedUnitId = puzzloxAdMobRewardedUnitId
 
 // local.properties: ADMOB_APP_ID=ca-app-pub-xxx~yyy (콘솔 "앱" 메뉴, 단 ID와 별도)
 // 선택: ADMOB_REWARDED_AD_UNIT_ID=… (운영에서 단만 바꿀 때)
