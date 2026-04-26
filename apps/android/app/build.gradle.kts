@@ -10,10 +10,25 @@ val localProps = Properties().apply {
     if (f.exists()) f.inputStream().use { load(it) }
 }
 
-// AdMob "앱" ID(콘솔 → 앱 → 앱 설정, 단위 ID와 별도). local.properties: ADMOB_APP_ID=ca-app-pub-xxx~yyy
-// 미설정 시 Google 샘플 ID(개발/테스트 광고용).
-val admobAppId: String = localProps.getProperty("ADMOB_APP_ID")?.trim()
-    ?: "ca-app-pub-3940256099942544~3347511713"
+// Google test ids — app id and rewarded unit must be the same (test) pair, or a matching prod pair
+// (test app id + live rewarded unit = failed loads / no fill)
+val adMobTestAppId = "ca-app-pub-3940256099942544~3347511713"
+val adMobTestRewardedUnitId = "ca-app-pub-3940256099942544/5224354917"
+// Production rewarded unit; pair with ADMOB_APP_ID=ca-app-pub-9880062103386476~... in local.properties
+val adMobDefaultProdRewardedUnitId = "ca-app-pub-9880062103386476/9681650177"
+
+// local.properties: ADMOB_APP_ID=ca-app-pub-xxx~yyy (콘솔 "앱" 메뉴, 단 ID와 별도)
+// 선택: ADMOB_REWARDED_AD_UNIT_ID=… (운영에서 단만 바꿀 때)
+// 미지정 ADMOB_APP_ID → 테스트 앱 + 테스트 보상형(샘플 광고)으로 빌드
+val admobAppId: String = localProps.getProperty("ADMOB_APP_ID")?.trim() ?: adMobTestAppId
+
+val rewardedAdUnitId: String =
+    if (admobAppId == adMobTestAppId) {
+        adMobTestRewardedUnitId
+    } else {
+        localProps.getProperty("ADMOB_REWARDED_AD_UNIT_ID")?.trim()
+            ?: adMobDefaultProdRewardedUnitId
+    }
 
 android {
     namespace = "com.puzzlox.app"
@@ -26,22 +41,15 @@ android {
         versionCode = 1
         versionName = "1.0.0"
         resValue("string", "gma_app_id", admobAppId)
+        buildConfigField("String", "REWARDED_AD_UNIT_ID", "\"$rewardedAdUnitId\"")
     }
 
     buildTypes {
-        debug {
-            buildConfigField("String", "REWARDED_AD_UNIT_ID", "\"ca-app-pub-9880062103386476/9681650177\"")
-        }
         release {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
-            )
-            buildConfigField(
-                "String",
-                "REWARDED_AD_UNIT_ID",
-                "\"ca-app-pub-9880062103386476/9681650177\"",
             )
         }
     }

@@ -6,14 +6,14 @@
 
 1. **Android Studio** 최신 안정판, **JDK 17**.
 2. **Google AdMob** 앱에 보상형 광고 단위가 등록돼 있어야 합니다.  
-3. (선택) 루트 `apps/android/local.properties`에 **앱(애플리케이션) ID**를 넣을 수 있습니다. (단위 ID `ca-app-pub-…/…`가 아닙니다.)
+3. (권장) `apps/android/local.properties`에 **AdMob 앱(애플리케이션) ID**를 넣습니다(콘솔 “앱” 메뉴, `~`가 들어가는 값). **보상형 단 ID**(`…/…`)와는 별도입니다. 운영 단만 쓰려면(선택):
 
 ```properties
-ADMOB_APP_ID=ca-app-pub-퍼블리셔숫자~앱접미사
+ADMOB_APP_ID=ca-app-pub-9880062103386476~콘솔의앱접미
+ADMOB_REWARDED_AD_UNIT_ID=ca-app-pub-9880062103386476/9681650177
 ```
 
-`local.properties`를 두지 않으면 Gradle이 **Google 샘플 앱 ID**(`ca-app-pub-3940256099942544~3347511713`)로 빌드됩니다. **스토어용 릴리스**에서는 반드시 AdMob 콘솔에 나온 **앱 ID**로 바꾸는 것이 좋습니다.  
-- **debug / release** 보상형 **단위** ID: `ca-app-pub-9880062103386476/9681650177`
+`ADMOB_APP_ID`를 **빼 두면** 빌드는 **Google 테스트 앱 ID + 테스트 보상형 단**으로 묶이며(샘플 광고), 운영 앱/단과 섞이면 `onAdFailedToLoad`로 광고가 나오지 않을 수 있으므로, 스토어/실서비스 빌드에서는 콘솔 **앱 ID**를 반드시 맞춥니다. 테스트 전용 키(샘플 앱)일 때는 보상형 단도 테스트용(`…/5224354917`)으로 맞출 필요가 있으며, Gradle이 그렇게 골라줍니다.
 
 ## 빌드
 

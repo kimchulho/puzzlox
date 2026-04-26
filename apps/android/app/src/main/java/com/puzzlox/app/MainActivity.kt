@@ -6,10 +6,14 @@ import android.content.pm.ActivityInfo
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.view.Gravity
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
+import android.widget.FrameLayout
+import android.widget.ScrollView
+import android.widget.TextView
 import android.webkit.CookieManager
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -48,15 +52,41 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         hideStatusBar()
 
-        MobileAds.initialize(this) { }
-
-        webView = WebView(this).apply {
-            layoutParams = android.widget.FrameLayout.LayoutParams(
-                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-            )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val prov = WebView.getCurrentWebViewPackage()
+            if (prov == null) {
+                Log.e(TAG, "No WebView provider (install/update Android System WebView)")
+                setContentView(
+                    fatalErrorView(
+                        "Android System WebView가 없어 앱을 열 수 없어요. Play 스토어에서 " +
+                            "\"Android System WebView\"(또는 \"Chrome\")를 설치·업데이트해 주세요.",
+                    ),
+                )
+                return
+            }
         }
-        setContentView(webView)
+
+        val wv = try {
+            WebView(this).apply {
+                layoutParams = FrameLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                )
+            }
+        } catch (e: Throwable) {
+            Log.e(TAG, "WebView() failed", e)
+            setContentView(fatalErrorView("WebView를 시작할 수 없어요.\n\n${e.javaClass.simpleName}: ${e.message}\n\nAndroid System WebView를 최신으로 업데이트해 주세요."))
+            return
+        }
+        webView = wv
+        setContentView(wv)
+
+        // RewardedAd.load 전에 SDK가 먹도록, WebView post 이후가 아닌 이 시점에서 초기화(순서 경쟁 방지)
+        runCatching {
+            MobileAds.initialize(this) { Log.d(TAG, "MobileAds SDK onInitializationComplete") }
+        }.onFailure { e ->
+            Log.e(TAG, "MobileAds.initialize failed (rewarded ads will not load)", e)
+        }
 
         onBackPressedDispatcher.addCallback(
             this,
@@ -174,6 +204,25 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton(R.string.exit_app_confirm) { _, _ -> finish() }
             .setNegativeButton(R.string.exit_app_cancel, null)
             .show()
+    }
+
+    private fun fatalErrorView(message: String): View {
+        val pad = (48 * resources.displayMetrics.density).toInt()
+        val text = TextView(this).apply {
+            text = message
+            setPadding(pad, pad, pad, pad)
+            textSize = 16f
+        }
+        return ScrollView(this).apply {
+            isFillViewport = true
+            addView(
+                text,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { gravity = Gravity.CENTER_VERTICAL },
+            )
+        }
     }
 
     fun beginRewardedAdFlow(requestId: String) {
