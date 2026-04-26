@@ -10,6 +10,7 @@
 
 - 기본 **운영 보상형 단**은 `app/build.gradle.kts`의 `puzzloxAdMobRewardedUnitId`(`ca-app-pub-9880062103386476/9681650177`)로 고정돼 있습니다. 바꾸지 않는 한 동일 ID가 빌드에 들어갑니다.
 - `ADMOB_APP_ID`를 **빼 두면** **Google 테스트 앱 + 테스트 보상형**로 묶여 샘플 광고가 나옵니다. 운영 앱/단이 섞이면 `onAdFailedToLoad`가 날 수 있어, Gradle이 앱 ID에 따라 테스트/운영 묶음을 골랍니다.
+- APK에 **운영 ID가 들어갔는데도** “Test ad”·테스트 광고가 나오면, [AdMob 콘솔 → 설정 → 테스트 기기]에 폰이 등록돼 있을 수 있으니 **해제**하세요(등록 기기는 실제 단 ID로도 테스트 광고로 나올 수 있음). 앱 기동 시 logcat `PuzzloxRewardedAd`에 빌드에 심은 앱/단 ID가 출력됩니다.
 
 ## 빌드
 

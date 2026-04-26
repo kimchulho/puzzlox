@@ -88,6 +88,13 @@ class MainActivity : AppCompatActivity() {
             Log.e(TAG, "MobileAds.initialize failed (rewarded ads will not load)", e)
         }
 
+        Log.i(
+            TAG,
+            "AdMob in APK: gma_app_id=${getString(R.string.gma_app_id)} " +
+                "REWARDED=${BuildConfig.REWARDED_AD_UNIT_ID} " +
+                "(ID가 콘솔과 같은데도 'Test'면: AdMob 콘솔 '설정'의 테스트 기기에서 이 기기 제거)",
+        )
+
         onBackPressedDispatcher.addCallback(
             this,
             object : OnBackPressedCallback(true) {

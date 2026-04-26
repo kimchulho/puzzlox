@@ -1,13 +1,15 @@
 import java.util.Properties
+import kotlin.text.Charsets
 
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
 
+// UTF-8 (BOM 포함)로 읽어야 ADMOB_* 키가 누락·깨짐 없이 로드됨
 val localProps = Properties().apply {
     val f = rootProject.file("local.properties")
-    if (f.exists()) f.inputStream().use { load(it) }
+    if (f.exists()) f.reader(Charsets.UTF_8).use { load(it) }
 }
 
 // Google test ids — app id and rewarded unit must be the same (test) pair, or a matching prod pair

@@ -354,6 +354,7 @@ export default function GameShell({
             locale="ko"
             user={user ?? undefined}
             setUser={setUser}
+            onReauthWithToss={onRequestTossLogin}
             onSessionInvalid={() => {
               onLoggedOut();
               navigateToPath("/");

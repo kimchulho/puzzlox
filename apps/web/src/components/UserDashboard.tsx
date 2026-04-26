@@ -109,6 +109,11 @@ export default function UserDashboard({
   setUser,
   /** 토큰이 더 이상 유효하지 않을 때(401). 로그인으로 보내기 위한 콜백(선택). */
   onSessionInvalid,
+  /**
+   * 앱인토스: JWT가 서버에 거절될 때(만료/불일치) 한 번 `appLogin`으로 세션을 갱신한 뒤 대시보드 요청을 재시도.
+   * `GameShell`의 토스 로그인(`loginWithTossApp` + `persistSession`)과 동일한 핸들러를 넣습니다.
+   */
+  onReauthWithToss?: () => void | Promise<void>,
   visualVariant = "web",
   /** 앱인토스: 상단 안전 영역(px). 래퍼 `paddingTop` 대신 헤더에만 적용해 이중 여백을 줄입니다. */
   safeAreaTop = 0,
@@ -127,6 +132,7 @@ export default function UserDashboard({
   user?: DashboardUser | null;
   setUser?: (u: DashboardUser | null) => void;
   onSessionInvalid?: () => void;
+  onReauthWithToss?: () => void | Promise<void>;
   /** 앱인토스: 로비와 맞춘 밝은 톤 */
   visualVariant?: "web" | "toss";
   safeAreaTop?: number;
@@ -149,28 +155,71 @@ export default function UserDashboard({
   const participatedFilterRef = useRef<HTMLDivElement>(null);
   const [participatedListPage, setParticipatedListPage] = useState(1);
 
+  const tossReauthTried = useRef(false);
+  useEffect(() => {
+    tossReauthTried.current = false;
+  }, [mode, visualVariant, onReauthWithToss]);
+
+  const isAuthErrorResponse = (status: number, message: string | undefined) => {
+    if (status === 401) return true;
+    if (typeof message === "string") {
+      return /Invalid or expired access token|Missing access token/i.test(message.trim());
+    }
+    return false;
+  };
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       if (mode === "self") {
-        const token = localStorage.getItem("puzzle_access_token");
+        const getToken = () => localStorage.getItem("puzzle_access_token");
+        let token = getToken();
         if (!token) {
           setError(isKo ? "로그인이 필요합니다." : "Please sign in.");
           setLoading(false);
           return;
         }
-        const res = await fetch(apiUrl("/api/user/dashboard"), {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const j = (await res.json().catch(() => ({}))) as {
+        const fetchDash = (t: string) =>
+          fetch(apiUrl("/api/user/dashboard"), {
+            headers: { Authorization: `Bearer ${t}` },
+          });
+
+        let res = await fetchDash(token);
+        let j = (await res.json().catch(() => ({}))) as {
           message?: string;
           user?: DashboardUser;
           participatedRooms?: RoomRow[];
           myUploads?: UploadRow[];
         };
+
+        if (
+          !res.ok &&
+          isAuthErrorResponse(res.status, j?.message) &&
+          visualVariant === "toss" &&
+          onReauthWithToss &&
+          !tossReauthTried.current
+        ) {
+          tossReauthTried.current = true;
+          try {
+            await onReauthWithToss();
+          } catch {
+            /* 사용자가 로그인 취소 */
+          }
+          token = getToken() ?? "";
+          if (token) {
+            res = await fetchDash(token);
+            j = (await res.json().catch(() => ({}))) as {
+              message?: string;
+              user?: DashboardUser;
+              participatedRooms?: RoomRow[];
+              myUploads?: UploadRow[];
+            };
+          }
+        }
+
         if (!res.ok) {
-          if (res.status === 401) {
+          if (isAuthErrorResponse(res.status, j?.message)) {
             clearPuzzleWebSession();
             setUser?.(null);
             onSessionInvalid?.();
@@ -191,6 +240,7 @@ export default function UserDashboard({
         setDashUser(j.user ?? null);
         setParticipated(Array.isArray(j.participatedRooms) ? j.participatedRooms : []);
         setMyUploads(Array.isArray(j.myUploads) ? j.myUploads : []);
+        tossReauthTried.current = false;
       } else {
         const u = (publicUsername ?? "").trim().toLowerCase();
         if (!u) {
@@ -271,7 +321,7 @@ export default function UserDashboard({
     } finally {
       setLoading(false);
     }
-  }, [mode, publicUsername, isKo, setUser, onSessionInvalid]);
+  }, [mode, publicUsername, isKo, setUser, onSessionInvalid, visualVariant, onReauthWithToss]);
 
   useEffect(() => {
     const next = (dashUser?.nickname ?? dashUser?.username ?? "").toString();

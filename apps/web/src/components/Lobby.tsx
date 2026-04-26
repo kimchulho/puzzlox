@@ -2053,11 +2053,11 @@ const Lobby = ({
               ? (isKo ? "생성 중…" : "Creating…")
               : tossRewardGateBusy
                 ? (isKo ? "대기 중…" : "Please wait…")
-                : tossUi
+                : tossUi || isAndroidNativeClient
                   ? isKo
                     ? "광고 시청 후 퍼즐 맞추기"
                     : "Solve puzzle after ad"
-                    : isKo
+                  : isKo
                     ? "방 만들기"
                     : "Create room"}
           </button>
