@@ -4970,7 +4970,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
             if (getConnectedCluster(i).size > 1) continue;
             allSingles.push(i);
           }
-          if (allSingles.length < 7) {
+          if (allSingles.length < 9) {
             alert(isKo ? "어시스트 가능한 흩어진 조각이 부족합니다." : "Not enough scattered pieces for assist.");
             return;
           }
@@ -5017,37 +5017,25 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
           }
 
           const connectedSet = new Set(connectedFive);
-          const isAdjacentByIndex = (a: number, b: number) => {
-            const ac = a % GRID_COLS;
-            const ar = Math.floor(a / GRID_COLS);
-            const bc = b % GRID_COLS;
-            const br = Math.floor(b / GRID_COLS);
-            return (Math.abs(ac - bc) === 1 && ar === br) || (Math.abs(ar - br) === 1 && ac === bc);
-          };
-          const rest = allSingles.filter((id) => !connectedSet.has(id));
-          const decoyCandidates = rest.filter((id) => !connectedFive!.some((g) => isAdjacentByIndex(id, g)));
-          const decoys: number[] = [];
-          for (const id of decoyCandidates.sort(() => Math.random() - 0.5)) {
-            if (decoys.length >= 2) break;
-            if (decoys.every((d) => !isAdjacentByIndex(d, id))) decoys.push(id);
+          const rest = allSingles.filter((id) => !connectedSet.has(id)).sort(() => Math.random() - 0.5);
+          const fillers: number[] = [];
+          for (const id of rest) {
+            if (fillers.length >= 4) break;
+            fillers.push(id);
           }
-          if (decoys.length < 2) {
-            for (const id of rest.sort(() => Math.random() - 0.5)) {
-              if (decoys.includes(id)) continue;
-              decoys.push(id);
-              if (decoys.length >= 2) break;
-            }
-          }
-          if (decoys.length < 2) {
-            alert(isKo ? "어시스트용 분리 조각 2개를 찾지 못했습니다." : "Could not find two decoy pieces.");
+          if (fillers.length < 4) {
+            alert(isKo ? "어시스트용 추가 조각 4개를 찾지 못했습니다." : "Could not find 4 filler pieces.");
             return;
           }
+          const selectedNine = [...connectedFive, ...fillers];
+          const selectedSet = new Set(selectedNine);
 
           const anchorId = connectedFive[0];
           const anchorCol = anchorId % GRID_COLS;
           const anchorRow = Math.floor(anchorId / GRID_COLS);
-          const nearGapX = pieceWidth + Math.max(SNAP_THRESHOLD + 8, pieceWidth * 0.16);
-          const nearGapY = pieceHeight + Math.max(SNAP_THRESHOLD + 8, pieceHeight * 0.16);
+          // Keep enough separation so gathered pieces do not auto-snap.
+          const nearGapX = pieceWidth + Math.max(SNAP_THRESHOLD + 26, pieceWidth * 0.28);
+          const nearGapY = pieceHeight + Math.max(SNAP_THRESHOLD + 26, pieceHeight * 0.28);
           const outsideGap = Math.max(pieceWidth, pieceHeight) * 0.35;
 
           const isRectOutsideBoard = (minX: number, minY: number, maxX: number, maxY: number) => {
@@ -5059,7 +5047,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
             );
           };
 
-          const clusterBoundsByCenter = (cx: number, cy: number) => {
+          const connectedBoundsByCenter = (cx: number, cy: number) => {
             let minX = Infinity;
             let minY = Infinity;
             let maxX = -Infinity;
@@ -5087,32 +5075,50 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
                 y: cy + (row - anchorRow) * nearGapY,
               });
             }
-            const clusterBox = clusterBoundsByCenter(cx, cy);
-            const decoyTargets = new Map<number, { x: number; y: number }>();
-            decoys.forEach((id, idx) => {
-              const lane = idx % 2 === 0 ? -1 : 1;
-              decoyTargets.set(id, {
-                x: clusterBox.maxX + nearGapX * (1.35 + idx * 0.2),
-                y: cy + lane * nearGapY * (0.8 + idx * 0.08),
-              });
+            const connectedBox = connectedBoundsByCenter(cx, cy);
+            const fillerTargets = new Map<number, { x: number; y: number }>();
+
+            // Build 3x3 slots around the connected group's center.
+            const gridSlots: { x: number; y: number }[] = [];
+            for (let gy = -1; gy <= 1; gy++) {
+              for (let gx = -1; gx <= 1; gx++) {
+                gridSlots.push({
+                  x: cx + gx * nearGapX,
+                  y: cy + gy * nearGapY,
+                });
+              }
+            }
+            // Avoid overlapping with connected piece target points.
+            const occupied = Array.from(connectedTargets.values());
+            const freeSlots = gridSlots.filter((slot) => {
+              return occupied.every(
+                (p) => Math.hypot(p.x - slot.x, p.y - slot.y) > Math.min(nearGapX, nearGapY) * 0.45
+              );
             });
-            let minX = clusterBox.minX;
-            let minY = clusterBox.minY;
-            let maxX = clusterBox.maxX;
-            let maxY = clusterBox.maxY;
-            decoyTargets.forEach((p) => {
+            fillers.forEach((id, idx) => {
+              const slot = freeSlots[idx % freeSlots.length] ?? {
+                x: connectedBox.maxX + nearGapX * (1.2 + idx * 0.2),
+                y: cy + ((idx % 2 === 0 ? -1 : 1) * nearGapY * (0.8 + idx * 0.05)),
+              };
+              fillerTargets.set(id, slot);
+            });
+            let minX = connectedBox.minX;
+            let minY = connectedBox.minY;
+            let maxX = connectedBox.maxX;
+            let maxY = connectedBox.maxY;
+            fillerTargets.forEach((p) => {
               minX = Math.min(minX, p.x);
               minY = Math.min(minY, p.y);
               maxX = Math.max(maxX, p.x + pieceWidth);
               maxY = Math.max(maxY, p.y + pieceHeight);
             });
-            return { connectedTargets, decoyTargets, bounds: { minX, minY, maxX, maxY } };
+            return { connectedTargets, fillerTargets, bounds: { minX, minY, maxX, maxY } };
           };
 
           const isRegionClear = (minX: number, minY: number, maxX: number, maxY: number) => {
             const margin = Math.max(pieceWidth, pieceHeight) * 0.9;
             for (let i = 0; i < PIECE_COUNT; i++) {
-              if (connectedSet.has(i) || decoys.includes(i)) continue;
+              if (selectedSet.has(i)) continue;
               const p = pieces.current.get(i);
               if (!p) continue;
               const px1 = p.x;
@@ -5175,8 +5181,8 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
             if (!p) continue;
             const target = chosenLayout.connectedTargets.get(id);
             if (!target) continue;
-            const jitterX = (Math.random() - 0.5) * Math.min(SNAP_THRESHOLD * 0.45, pieceWidth * 0.08);
-            const jitterY = (Math.random() - 0.5) * Math.min(SNAP_THRESHOLD * 0.45, pieceHeight * 0.08);
+            const jitterX = (Math.random() - 0.5) * Math.min(8, pieceWidth * 0.03);
+            const jitterY = (Math.random() - 0.5) * Math.min(8, pieceHeight * 0.03);
             const tx = target.x + jitterX;
             const ty = target.y + jitterY;
             p.x = tx;
@@ -5199,13 +5205,13 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
             });
           }
 
-          decoys.forEach((id, idx) => {
+          fillers.forEach((id) => {
             const p = pieces.current.get(id);
             if (!p) return;
-            const target = chosenLayout.decoyTargets.get(id);
+            const target = chosenLayout.fillerTargets.get(id);
             if (!target) return;
-            const jitterX = (Math.random() - 0.5) * Math.min(SNAP_THRESHOLD * 0.4, pieceWidth * 0.08);
-            const jitterY = (Math.random() - 0.5) * Math.min(SNAP_THRESHOLD * 0.4, pieceHeight * 0.08);
+            const jitterX = (Math.random() - 0.5) * Math.min(8, pieceWidth * 0.03);
+            const jitterY = (Math.random() - 0.5) * Math.min(8, pieceHeight * 0.03);
             const tx = target.x + jitterX;
             const ty = target.y + jitterY;
             p.x = tx;
@@ -5221,7 +5227,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
             await savePiecesState(dbUpdates, { immediate: true });
           }
 
-          const focusIds = [...connectedFive, ...decoys];
+          const focusIds = selectedNine;
           let minX = Infinity;
           let minY = Infinity;
           let maxX = -Infinity;
@@ -8137,11 +8143,11 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
                 ? "h-8 px-3 rounded-lg bg-[#F4F8FF] text-[#2F6FE4]"
                 : "h-7 px-2 border bg-slate-800/50 border-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white"
             }`}
-            title={isKo ? "인접 조각 모으기 (5+2)" : "Gather adjacent pieces (5+2)"}
+            title={isKo ? "인접 조각 모으기 (9개 중 5개 연결 가능)" : "Gather 9 pieces (5 connectable)"}
           >
             <Zap size={12} />
             <span className={`font-semibold whitespace-nowrap ${isTossMode ? "text-xs" : "text-[11px]"}`}>
-              {isKo ? "모으기 5+2" : "Gather 5+2"}
+              {isKo ? "모으기 9(5연결)" : "Gather 9 (5-link)"}
             </span>
           </button>
 
