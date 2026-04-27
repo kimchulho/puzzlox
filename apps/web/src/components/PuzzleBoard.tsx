@@ -30,7 +30,7 @@ import { REALTIME_CHANNEL_STATES } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabaseClient';
 import { encodeRoomId, roomPath, tossIntossRoomUrl } from '../lib/roomCode';
 import { recordUserRoomVisit } from '../lib/recordUserRoomVisit';
-import { apiUrl, fetchRoomScores } from '../lib/apiBase';
+import { apiUrl, fetchRoomScores, getApiBase } from '../lib/apiBase';
 import { canClusterLockOnBoard, canPieceLockOnBoard, normalizePuzzleDifficulty, type PuzzleDifficulty } from '../lib/puzzleDifficulty';
 import { createPuzzleHintLayer, type PuzzleHintLayer } from '../lib/puzzleHintLayer';
 import {
@@ -214,6 +214,8 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
   const socketLockReleasedRef = useRef<((payload: LockReleasedPayload) => void) | null>(null);
   const socketLockDeniedRef = useRef<((payload: LockDeniedPayload) => void) | null>(null);
   const socketScoreSyncRef = useRef<((payload: ScoreSyncPayload) => void) | null>(null);
+  /** ScoreSync 는 닉네임이 없을 수 있어, REST 순위 API로 짧게 재동기화(토스 등 정적 오리진+소켓 URL 불일치 대비). */
+  const scoreLeaderboardDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const socketMoveBatchRef = useRef<((payload: MoveBatchPayload) => void) | null>(null);
   const socketCursorMoveRef = useRef<((payload: CursorMovePayload) => void) | null>(null);
   const socketAdminMaintenanceRef = useRef<((payload: AdminRoomMaintenancePayload) => void) | null>(null);
@@ -1031,9 +1033,14 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
   }, [roomId]);
 
   useEffect(() => {
-    // Socket.io 연결 및 플레이 타임 동기화 (기준 시간만 받음)
-    const backendUrl = import.meta.env.VITE_BACKEND_URL;
-    const socket = backendUrl ? io(backendUrl) : io();
+    // Socket.io: API와 동일한 오리진을 우선 (모바일/토스 빌드는 VITE_API_BASE_URL만 있고 VITE_BACKEND_URL 이 비는 경우가 많음)
+    const apiBase = getApiBase();
+    const envBackend =
+      typeof import.meta.env.VITE_BACKEND_URL === "string"
+        ? import.meta.env.VITE_BACKEND_URL.replace(/\/$/, "")
+        : "";
+    const socketOrigin = apiBase || envBackend;
+    const socket = socketOrigin ? io(socketOrigin) : io();
     socketRef.current = socket;
     const joinRoomOnSocket = () => {
       const localUsername = user?.username ?? localStorage.getItem("puzzle_guest_name");
@@ -1138,6 +1145,13 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
     });
     socket.on(ROOM_EVENTS.ScoreSync, (payload: ScoreSyncPayload) => {
       socketScoreSyncRef.current?.(payload);
+      if (scoreLeaderboardDebounceRef.current) clearTimeout(scoreLeaderboardDebounceRef.current);
+      scoreLeaderboardDebounceRef.current = setTimeout(() => {
+        scoreLeaderboardDebounceRef.current = null;
+        void fetchRoomScores(roomId).then((rows) => {
+          setScores(rows);
+        });
+      }, 400);
     });
     socket.on(ROOM_EVENTS.MoveBatch, (payload: MoveBatchPayload) => {
       socketMoveBatchRef.current?.(payload);
@@ -1155,6 +1169,10 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
     }
 
     return () => {
+      if (scoreLeaderboardDebounceRef.current) {
+        clearTimeout(scoreLeaderboardDebounceRef.current);
+        scoreLeaderboardDebounceRef.current = null;
+      }
       socket.disconnect();
       socketRef.current = null;
       setIsGameSocketConnected(false);
@@ -3096,7 +3114,8 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
                 .map((s) => (s.username === username ? { ...s, score } : s))
                 .sort((a, b) => b.score - a.score);
             }
-            return [...prev, { username, score }].sort((a, b) => b.score - a.score);
+            // REST `/scores`에 없던 유저(닉 없음) — 상위 ScoreSync + 디바운스된 fetchRoomScores로 곧 보강됨
+            return [...prev, { username, score, nickname: null }].sort((a, b) => b.score - a.score);
           });
         };
 
