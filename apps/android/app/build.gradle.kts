@@ -19,7 +19,9 @@ val adMobTestRewardedUnitId = "ca-app-pub-3940256099942544/5224354917"
 
 // Puzzlox AdMob — rewarded (운영) 단 ID (AdMob 콘솔 > 보상형)
 val puzzloxAdMobRewardedUnitId = "ca-app-pub-9880062103386476/9681650177"
+val puzzloxAdMobAssistRewardedUnitId = "ca-app-pub-9880062103386476/7993225021"
 val adMobDefaultProdRewardedUnitId = puzzloxAdMobRewardedUnitId
+val adMobDefaultProdAssistRewardedUnitId = puzzloxAdMobAssistRewardedUnitId
 
 // local.properties: ADMOB_APP_ID=ca-app-pub-xxx~yyy (콘솔 "앱" 메뉴, 단 ID와 별도)
 // 선택: ADMOB_REWARDED_AD_UNIT_ID=… (운영에서 단만 바꿀 때)
@@ -34,6 +36,14 @@ val rewardedAdUnitId: String =
             ?: adMobDefaultProdRewardedUnitId
     }
 
+val assistRewardedAdUnitId: String =
+    if (admobAppId == adMobTestAppId) {
+        adMobTestRewardedUnitId
+    } else {
+        localProps.getProperty("ADMOB_ASSIST_REWARDED_AD_UNIT_ID")?.trim()
+            ?: adMobDefaultProdAssistRewardedUnitId
+    }
+
 android {
     namespace = "com.puzzlox.app"
     compileSdk = 35
@@ -46,6 +56,7 @@ android {
         versionName = "1.0.0"
         resValue("string", "gma_app_id", admobAppId)
         buildConfigField("String", "REWARDED_AD_UNIT_ID", "\"$rewardedAdUnitId\"")
+        buildConfigField("String", "ASSIST_REWARDED_AD_UNIT_ID", "\"$assistRewardedAdUnitId\"")
     }
 
     buildTypes {

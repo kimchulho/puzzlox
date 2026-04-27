@@ -6,6 +6,7 @@ export interface AuthUser {
   role: string;
   completed_puzzles: number;
   placed_pieces: number;
+  assist_points?: number;
   /** Default true: `GET /api/profile/:username` works; set false for private. Uploaded room images stay private. */
   profile_public?: boolean;
   created_at: string;

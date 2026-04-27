@@ -33,6 +33,17 @@ import { recordUserRoomVisit } from '../lib/recordUserRoomVisit';
 import { apiUrl, fetchRoomScores } from '../lib/apiBase';
 import { canClusterLockOnBoard, canPieceLockOnBoard, normalizePuzzleDifficulty, type PuzzleDifficulty } from '../lib/puzzleDifficulty';
 import { createPuzzleHintLayer, type PuzzleHintLayer } from '../lib/puzzleHintLayer';
+import {
+  earnGuestAssistPoints,
+  earnUserAssistPoints,
+  fetchUserAssistPoints,
+  getGuestAssistPoints,
+  spendGuestAssistPoints,
+  spendUserAssistPoints,
+} from '../lib/assistPoints';
+import { runTossRewardedAd } from '../lib/tossRewardedAdGate';
+import { runAndroidNativeRewardedAssistPointsAd } from '../lib/androidNativeRewardedAdGate';
+import { runWebRewardedAd } from '../lib/webRewardedAdGate';
 
 const SNAP_THRESHOLD = 30;
 /** 와이드 툴바–퍼즐 사이 빈 줄(측정·라운딩·DP) 보정: 퍼즐 inset 을 살짝 줄임 */
@@ -212,7 +223,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
   const puzzleBackObjectUrlRef = useRef<string | null>(null);
   const gatherBordersRef = useRef<(() => void) | null>(null);
   const gatherByColorRef = useRef<((quick?: boolean) => void) | null>(null);
-  const gatherAdjacentAssistRef = useRef<(() => Promise<void>) | null>(null);
+  const gatherAdjacentAssistRef = useRef<(() => Promise<boolean>) | null>(null);
   const createMosaicFromImageRef = useRef<((imageUrl: string, quick?: boolean, gapMultiplier?: number) => Promise<void>) | null>(null);
   const rotateFlipSelectionRef = useRef<(() => void) | null>(null);
   const initialPositionsRef = useRef<{x: number, y: number}[]>([]);
@@ -284,6 +295,8 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
   const [mosaicQuick, setMosaicQuick] = useState(false);
   const [mosaicGap, setMosaicGap] = useState(1.6);
   const [bgColor, setBgColor] = useState('#1e293b'); // default slate-800
+  const [assistPoints, setAssistPoints] = useState(10);
+  const [assistPointBusy, setAssistPointBusy] = useState(false);
   /** 초급: 배경 가이드 이미지(힌트) 투명도 0~100 */
   const [easyBgOpacityPct, setEasyBgOpacityPct] = useState(20);
   const [maxPlayers, setMaxPlayers] = useState(8);
@@ -536,6 +549,79 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
     typeof window !== "undefined" &&
     typeof (window as unknown as { PuzzloxAndroid?: { toggleOrientation?: () => void } }).PuzzloxAndroid
       ?.toggleOrientation === "function";
+  useEffect(() => {
+    let cancelled = false;
+    const token = localStorage.getItem("puzzle_access_token") || "";
+    if (user?.id && token) {
+      void fetchUserAssistPoints(token)
+        .then((pts) => {
+          if (!cancelled) setAssistPoints(pts);
+        })
+        .catch(() => {
+          if (!cancelled) setAssistPoints(10);
+        });
+    } else {
+      setAssistPoints(getGuestAssistPoints());
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
+
+  const spendAssistPointForAction = useCallback(async (cost: number) => {
+    const token = localStorage.getItem("puzzle_access_token") || "";
+    if (user?.id && token) {
+      const next = await spendUserAssistPoints(token, cost).catch(() => -1);
+      if (next === null) {
+        alert(isKo ? "어시스트 포인트가 부족해요." : "Not enough assist points.");
+        return false;
+      }
+      if (next < 0) {
+        alert(isKo ? "포인트 사용 중 오류가 발생했어요." : "Failed to spend points.");
+        return false;
+      }
+      setAssistPoints(next);
+      return true;
+    }
+    const guest = spendGuestAssistPoints(cost);
+    if (!guest.ok) {
+      alert(isKo ? "어시스트 포인트가 부족해요." : "Not enough assist points.");
+      return false;
+    }
+    setAssistPoints(guest.balance);
+    return true;
+  }, [isKo, user?.id]);
+
+  const rewardAssistPointsFromAd = useCallback(async () => {
+    if (assistPointBusy) return;
+    setAssistPointBusy(true);
+    try {
+      let rewarded = false;
+      if (isAndroidNativeClient) {
+        rewarded = await runAndroidNativeRewardedAssistPointsAd();
+      } else if (isTossMode) {
+        rewarded = await runTossRewardedAd();
+      } else {
+        rewarded = await runWebRewardedAd().catch(() => false);
+      }
+      if (!rewarded) {
+        alert(
+          isKo ? "광고를 끝까지 시청하면 포인트를 받을 수 있어요." : "Finish watching the ad to earn points."
+        );
+        return;
+      }
+      const token = localStorage.getItem("puzzle_access_token") || "";
+      if (user?.id && token) {
+        const next = await earnUserAssistPoints(token, 10).catch(() => -1);
+        if (next >= 0) setAssistPoints(next);
+      } else {
+        setAssistPoints(earnGuestAssistPoints(10));
+      }
+      alert(isKo ? "어시스트 포인트 +10 지급!" : "Assist points +10 granted!");
+    } finally {
+      setAssistPointBusy(false);
+    }
+  }, [assistPointBusy, isAndroidNativeClient, isKo, isTossMode, user?.id]);
   useEffect(() => {
     if (isTossMode) return;
     if (typeof window === "undefined") return;
@@ -4935,8 +5021,8 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
           await executeBotMoves(botTargets, quick);
         };
 
-        const gatherAdjacentAssist = async () => {
-          if (isColorBotRunningRef.current || isBotRunningRef.current) return;
+        const gatherAdjacentAssist = async (): Promise<boolean> => {
+          if (isColorBotRunningRef.current || isBotRunningRef.current) return false;
 
           // Reset current local interactions so assist can move pieces deterministically.
           if (selectedCluster && selectedCluster.size > 0) {
@@ -4982,7 +5068,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
           }
           if (allSingles.length < 9) {
             alert(isKo ? "어시스트 가능한 흩어진 조각이 부족합니다." : "Not enough scattered pieces for assist.");
-            return;
+            return false;
           }
 
           const singleSet = new Set(allSingles);
@@ -5023,7 +5109,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
                 ? "서로 맞출 수 있는 조각 5개를 찾지 못했습니다. 잠시 후 다시 시도해 주세요."
                 : "Could not find 5 connectable pieces. Please try again."
             );
-            return;
+            return false;
           }
 
           const connectedSet = new Set(connectedFive);
@@ -5035,7 +5121,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
           }
           if (fillers.length < 4) {
             alert(isKo ? "어시스트용 추가 조각 4개를 찾지 못했습니다." : "Could not find 4 filler pieces.");
-            return;
+            return false;
           }
           const selectedNine = [...connectedFive, ...fillers];
           const selectedSet = new Set(selectedNine);
@@ -5145,7 +5231,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
                 ? "겹치지 않는 빈 공간을 찾지 못했습니다. 잠시 후 다시 시도해 주세요."
                 : "Could not find an empty non-overlapping area. Please try again."
             );
-            return;
+            return false;
           }
 
           const slotList = slotsByCenter(chosenCenter.x, chosenCenter.y);
@@ -5247,6 +5333,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
             world.x += app.screen.width / 2 - anchorGlobal.x;
             world.y += app.screen.height / 2 - anchorGlobal.y;
           }
+          return true;
         };
 
         const createMosaicFromImage = async (targetImageUrl: string, quick: boolean = false, gapMultiplier: number = 1.6) => {
@@ -8127,18 +8214,59 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
 
           <button
             onClick={() => {
-              void gatherAdjacentAssistRef.current?.();
+              if (assistPointBusy) return;
+              void (async () => {
+                const ok = await spendAssistPointForAction(1);
+                if (!ok) return;
+                const applied = await gatherAdjacentAssistRef.current?.();
+                if (applied) return;
+                const token = localStorage.getItem("puzzle_access_token") || "";
+                if (user?.id && token) {
+                  const rolledBack = await earnUserAssistPoints(token, 1).catch(() => -1);
+                  if (rolledBack >= 0) setAssistPoints(rolledBack);
+                } else {
+                  setAssistPoints(earnGuestAssistPoints(1));
+                }
+              })();
             }}
+            disabled={assistPointBusy}
             className={`flex items-center justify-center gap-1 rounded-md transition-colors shrink-0 ${
               isTossMode
                 ? "h-8 px-3 rounded-lg bg-[#F4F8FF] text-[#2F6FE4]"
-                : "h-7 px-2 border bg-slate-800/50 border-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white"
+                : "h-7 px-2 border bg-slate-800/50 border-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-50"
             }`}
             title={isKo ? "인접 조각 모으기 (9개 중 5개 연결 가능)" : "Gather 9 pieces (5 connectable)"}
           >
             <Zap size={12} />
             <span className={`font-semibold whitespace-nowrap ${isTossMode ? "text-xs" : "text-[11px]"}`}>
               {isKo ? "모으기 9(5연결)" : "Gather 9 (5-link)"}
+            </span>
+          </button>
+          <div
+            className={`flex items-center justify-center gap-1 rounded-md shrink-0 ${
+              isTossMode
+                ? "h-8 px-2 rounded-lg bg-[#F4F8FF] text-[#2F6FE4]"
+                : "h-7 px-2 border bg-slate-800/50 border-slate-700/50 text-slate-300"
+            }`}
+            title={isKo ? "어시스트 포인트" : "Assist points"}
+          >
+            <span className={`font-bold tabular-nums ${isTossMode ? "text-xs" : "text-[11px]"}`}>P {assistPoints}</span>
+          </div>
+          <button
+            onClick={() => {
+              void rewardAssistPointsFromAd();
+            }}
+            disabled={assistPointBusy}
+            className={`flex items-center justify-center gap-1 rounded-md transition-colors shrink-0 ${
+              isTossMode
+                ? "h-8 px-3 rounded-lg bg-[#EAF2FF] text-[#2F6FE4] disabled:opacity-50"
+                : "h-7 px-2 border bg-indigo-600/70 border-indigo-500/70 text-white hover:bg-indigo-500 disabled:opacity-50"
+            }`}
+            title={isKo ? "광고 시청 후 +10 포인트" : "Watch ad for +10 points"}
+          >
+            <Plus size={12} />
+            <span className={`font-semibold whitespace-nowrap ${isTossMode ? "text-xs" : "text-[11px]"}`}>
+              {assistPointBusy ? (isKo ? "처리 중..." : "Loading...") : (isKo ? "광고 +10P" : "Ad +10P")}
             </span>
           </button>
 

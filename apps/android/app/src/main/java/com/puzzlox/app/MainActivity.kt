@@ -50,7 +50,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        hideStatusBar()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val prov = WebView.getCurrentWebViewPackage()
@@ -79,6 +78,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         webView = wv
+        applySystemBarInsets(webView)
         setContentView(wv)
 
         // RewardedAd.load 전에 SDK가 먹도록, WebView post 이후가 아닌 이 시점에서 초기화(순서 경쟁 방지)
@@ -155,11 +155,25 @@ class MainActivity : AppCompatActivity() {
 
     private fun hideStatusBar() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Full immersive mode: hide both status and navigation bars.
+            // This prevents bottom/side navigation area from overlapping puzzle UI.
             window.setDecorFitsSystemWindows(false)
-            window.insetsController?.let { controller ->
-                controller.hide(WindowInsets.Type.statusBars())
-                controller.systemBarsBehavior =
-                    WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            // Some devices can have a null insets controller very early in onCreate.
+            // Try immediately first, then retry once on decorView post.
+            val hideBars: () -> Unit = {
+                val controller = window.decorView.windowInsetsController
+                if (controller != null) {
+                    controller.hide(WindowInsets.Type.systemBars())
+                    controller.systemBarsBehavior =
+                        WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                }
+            }
+            runCatching {
+                hideBars()
+            }.onFailure {
+                window.decorView.post {
+                    runCatching { hideBars() }
+                }
             }
         } else {
             @Suppress("DEPRECATION")
@@ -169,8 +183,28 @@ class MainActivity : AppCompatActivity() {
             )
             @Suppress("DEPRECATION")
             window.decorView.systemUiVisibility =
-                View.SYSTEM_UI_FLAG_LAYOUT_STABLE or View.SYSTEM_UI_FLAG_FULLSCREEN
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                    View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                    View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                    View.SYSTEM_UI_FLAG_FULLSCREEN or
+                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         }
+    }
+
+    private fun applySystemBarInsets(target: View) {
+        target.setOnApplyWindowInsetsListener { v, insets ->
+            val systemBarInsets = insets.getInsets(WindowInsets.Type.systemBars())
+            val cutoutInsets = insets.getInsets(WindowInsets.Type.displayCutout())
+            v.setPadding(
+                maxOf(systemBarInsets.left, cutoutInsets.left),
+                0,
+                maxOf(systemBarInsets.right, cutoutInsets.right),
+                maxOf(systemBarInsets.bottom, cutoutInsets.bottom),
+            )
+            insets
+        }
+        target.requestApplyInsets()
     }
 
     private fun initialUrl(): String {
@@ -232,22 +266,26 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    fun beginRewardedAdFlow(requestId: String) {
+    fun beginRewardedAdFlow(
+        requestId: String,
+        adUnitId: String = BuildConfig.REWARDED_AD_UNIT_ID,
+        jsHookName: String = "puzzloxAndroidRewardHook",
+    ) {
         val previous = currentRewardRequestId
         if (previous != null && previous != requestId) {
-            notifyJsDismissed(previous, false)
+            notifyJsDismissed(previous, false, jsHookName)
         }
         currentRewardRequestId = requestId
         userEarnedThisShow = false
 
         Log.d(
             TAG,
-            "Rewarded load start requestId=$requestId adUnitId=${BuildConfig.REWARDED_AD_UNIT_ID}",
+            "Rewarded load start requestId=$requestId adUnitId=$adUnitId hook=$jsHookName",
         )
         val adRequest = AdRequest.Builder().build()
         RewardedAd.load(
             this,
-            BuildConfig.REWARDED_AD_UNIT_ID,
+            adUnitId,
             adRequest,
             object : RewardedAdLoadCallback() {
                 override fun onAdFailedToLoad(error: LoadAdError) {
@@ -258,7 +296,7 @@ class MainActivity : AppCompatActivity() {
                             "cause=${error.cause} responseInfo=${error.responseInfo}",
                     )
                     if (currentRewardRequestId == requestId) {
-                        notifyJsDismissed(requestId, false)
+                        notifyJsDismissed(requestId, false, jsHookName)
                     }
                 }
 
@@ -283,7 +321,7 @@ class MainActivity : AppCompatActivity() {
                                         "Rewarded onAdDismissedFullScreenContent with reward requestId=$requestId",
                                     )
                                 }
-                                notifyJsDismissed(requestId, earned)
+                                notifyJsDismissed(requestId, earned, jsHookName)
                             }
                         }
 
@@ -295,7 +333,7 @@ class MainActivity : AppCompatActivity() {
                                     "cause=${adError.cause}",
                             )
                             if (currentRewardRequestId == requestId) {
-                                notifyJsDismissed(requestId, false)
+                                notifyJsDismissed(requestId, false, jsHookName)
                             }
                         }
                     }
@@ -308,7 +346,7 @@ class MainActivity : AppCompatActivity() {
                                     TAG,
                                     "Rewarded onUserEarned type=${rewardItem.type} amount=${rewardItem.amount} requestId=$requestId",
                                 )
-                                notifyJsEarned(requestId)
+                                notifyJsEarned(requestId, jsHookName)
                             }
                         },
                     )
@@ -327,21 +365,21 @@ class MainActivity : AppCompatActivity() {
             }
     }
 
-    private fun notifyJsEarned(requestId: String) {
+    private fun notifyJsEarned(requestId: String, jsHookName: String) {
         val r = JSONObject.quote(requestId)
         val script =
-            "if(typeof puzzloxAndroidRewardHook==='function'){puzzloxAndroidRewardHook($r,'earned');}"
+            "if(typeof $jsHookName==='function'){$jsHookName($r,'earned');}"
         webView.post { webView.evaluateJavascript(script, null) }
     }
 
-    private fun notifyJsDismissed(requestId: String, userEarned: Boolean) {
+    private fun notifyJsDismissed(requestId: String, userEarned: Boolean, jsHookName: String) {
         if (currentRewardRequestId == requestId) {
             currentRewardRequestId = null
         }
         val r = JSONObject.quote(requestId)
         val b = if (userEarned) "true" else "false"
         val script =
-            "if(typeof puzzloxAndroidRewardHook==='function'){puzzloxAndroidRewardHook($r,'dismissed', $b);}"
+            "if(typeof $jsHookName==='function'){$jsHookName($r,'dismissed', $b);}"
         webView.post { webView.evaluateJavascript(script, null) }
     }
 

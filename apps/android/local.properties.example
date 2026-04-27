@@ -6,3 +6,6 @@
 
 # Puzzlox 보상형 단 — 기본은 app/build.gradle.kts 의 `puzzloxAdMobRewardedUnitId` 와 같음. 다른 단을 쓸 때만 덮어쓰기.
 # ADMOB_REWARDED_AD_UNIT_ID=ca-app-pub-9880062103386476/9681650177
+
+# 어시스트 포인트(+10) 보상형 단 — 기본은 app/build.gradle.kts 의 `puzzloxAdMobAssistRewardedUnitId`.
+# ADMOB_ASSIST_REWARDED_AD_UNIT_ID=ca-app-pub-9880062103386476/7993225021

@@ -306,9 +306,10 @@ async function startServer() {
         role: normalizedUsername === "admin" ? "admin" : "user",
         completed_puzzles: 0,
         placed_pieces: 0,
+        assist_points: 10,
         profile_public: true,
       })
-      .select("id, username, nickname, role, completed_puzzles, placed_pieces, profile_public, created_at, last_active_at")
+      .select("id, username, nickname, role, completed_puzzles, placed_pieces, assist_points, profile_public, created_at, last_active_at")
       .single();
 
     if (userInsertError || !createdUser) {
@@ -378,7 +379,7 @@ async function startServer() {
 
     const { data: user, error: userError } = await authSupabase
       .from("users")
-      .select("id, username, nickname, role, completed_puzzles, placed_pieces, profile_public, created_at, last_active_at")
+      .select("id, username, nickname, role, completed_puzzles, placed_pieces, assist_points, profile_public, created_at, last_active_at")
       .eq("id", identity.user_id)
       .maybeSingle();
 
@@ -551,6 +552,7 @@ async function startServer() {
           role: "user",
           completed_puzzles: 0,
           placed_pieces: 0,
+          assist_points: 10,
           profile_public: true,
         })
         .select("id")
@@ -586,7 +588,7 @@ async function startServer() {
 
     const { data: user, error: userError } = await authSupabase
       .from("users")
-      .select("id, username, nickname, role, completed_puzzles, placed_pieces, profile_public, created_at, last_active_at")
+      .select("id, username, nickname, role, completed_puzzles, placed_pieces, assist_points, profile_public, created_at, last_active_at")
       .eq("id", userId)
       .single();
 
@@ -626,7 +628,7 @@ async function startServer() {
 
     const { data: user, error } = await authSupabase
       .from("users")
-      .select("id, username, nickname, role, completed_puzzles, placed_pieces, profile_public, created_at, last_active_at")
+      .select("id, username, nickname, role, completed_puzzles, placed_pieces, assist_points, profile_public, created_at, last_active_at")
       .eq("id", userId)
       .maybeSingle();
 
@@ -638,6 +640,89 @@ async function startServer() {
     }
 
     return res.json({ user });
+  });
+
+  app.get("/api/assist-points", authRequired, async (req: AuthedRequest, res) => {
+    if (!authSupabase) {
+      return res.status(503).json({
+        message: "Auth server misconfigured. Set SUPABASE_SECRET_KEY in .env.",
+      });
+    }
+    const userId = Number(req.user?.sub);
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return res.status(401).json({ message: "Invalid token subject." });
+    }
+    const { data, error } = await authSupabase
+      .from("users")
+      .select("assist_points")
+      .eq("id", userId)
+      .maybeSingle();
+    if (error) return res.status(500).json({ message: error.message });
+    const assistPoints = Math.max(0, Number((data as { assist_points?: unknown } | null)?.assist_points ?? 0));
+    return res.json({ assistPoints });
+  });
+
+  app.post("/api/assist-points/earn", authRequired, async (req: AuthedRequest, res) => {
+    if (!authSupabase) {
+      return res.status(503).json({
+        message: "Auth server misconfigured. Set SUPABASE_SECRET_KEY in .env.",
+      });
+    }
+    const userId = Number(req.user?.sub);
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return res.status(401).json({ message: "Invalid token subject." });
+    }
+    const amount = Math.floor(Number((req.body ?? {}).amount ?? 0));
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ message: "amount must be a positive number." });
+    }
+    const { data: current, error: readErr } = await authSupabase
+      .from("users")
+      .select("assist_points")
+      .eq("id", userId)
+      .maybeSingle();
+    if (readErr) return res.status(500).json({ message: readErr.message });
+    const cur = Math.max(0, Number((current as { assist_points?: unknown } | null)?.assist_points ?? 0));
+    const next = cur + amount;
+    const { error: updateErr } = await authSupabase
+      .from("users")
+      .update({ assist_points: next })
+      .eq("id", userId);
+    if (updateErr) return res.status(500).json({ message: updateErr.message });
+    return res.json({ assistPoints: next });
+  });
+
+  app.post("/api/assist-points/spend", authRequired, async (req: AuthedRequest, res) => {
+    if (!authSupabase) {
+      return res.status(503).json({
+        message: "Auth server misconfigured. Set SUPABASE_SECRET_KEY in .env.",
+      });
+    }
+    const userId = Number(req.user?.sub);
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return res.status(401).json({ message: "Invalid token subject." });
+    }
+    const amount = Math.floor(Number((req.body ?? {}).amount ?? 0));
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ message: "amount must be a positive number." });
+    }
+    const { data: current, error: readErr } = await authSupabase
+      .from("users")
+      .select("assist_points")
+      .eq("id", userId)
+      .maybeSingle();
+    if (readErr) return res.status(500).json({ message: readErr.message });
+    const cur = Math.max(0, Number((current as { assist_points?: unknown } | null)?.assist_points ?? 0));
+    if (cur < amount) {
+      return res.status(409).json({ message: "Not enough assist points.", assistPoints: cur });
+    }
+    const next = cur - amount;
+    const { error: updateErr } = await authSupabase
+      .from("users")
+      .update({ assist_points: next })
+      .eq("id", userId);
+    if (updateErr) return res.status(500).json({ message: updateErr.message });
+    return res.json({ assistPoints: next });
   });
 
   app.patch("/api/user/profile", authRequired, async (req: AuthedRequest, res) => {
@@ -674,7 +759,7 @@ async function startServer() {
     }
     const { data: user, error: readErr } = await authSupabase
       .from("users")
-      .select("id, username, nickname, role, completed_puzzles, placed_pieces, profile_public, created_at, last_active_at")
+      .select("id, username, nickname, role, completed_puzzles, placed_pieces, assist_points, profile_public, created_at, last_active_at")
       .eq("id", userId)
       .maybeSingle();
     if (readErr || !user) {

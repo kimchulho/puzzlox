@@ -10,7 +10,18 @@ class PuzzloxJsBridge(private val activity: MainActivity) {
     @JavascriptInterface
     fun showRewardedForRoom(_roomId: String, requestId: String) {
         activity.runOnUiThread {
-            activity.beginRewardedAdFlow(requestId)
+            activity.beginRewardedAdFlow(requestId, BuildConfig.REWARDED_AD_UNIT_ID, "puzzloxAndroidRewardHook")
+        }
+    }
+
+    @JavascriptInterface
+    fun showRewardedForAssistPoints(requestId: String) {
+        activity.runOnUiThread {
+            activity.beginRewardedAdFlow(
+                requestId,
+                BuildConfig.ASSIST_REWARDED_AD_UNIT_ID,
+                "puzzloxAndroidAssistRewardHook",
+            )
         }
     }
 

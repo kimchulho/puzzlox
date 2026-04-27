@@ -27,7 +27,10 @@ function markSeen(roomId: number) {
   localStorage.setItem(LS_SEEN, JSON.stringify([...next].slice(0, 400)));
 }
 
-type AndroidBridge = { showRewardedForRoom: (roomId: string, requestId: string) => void };
+type AndroidBridge = {
+  showRewardedForRoom: (roomId: string, requestId: string) => void;
+  showRewardedForAssistPoints?: (requestId: string) => void;
+};
 
 let nativePending: {
   requestId: string;
@@ -91,6 +94,46 @@ export async function runAndroidNativeRewardedRoomEntry(roomId: number, enter: (
     } catch {
       nativePending = null;
       nativeResolve = null;
+      resolve(false);
+    }
+  });
+}
+
+let nativeAssistPending: { requestId: string } | null = null;
+let nativeAssistResolve: ((b: boolean) => void) | null = null;
+
+function ensureNativeAssistHook(): void {
+  if (typeof window === "undefined") return;
+  if ((window as unknown as { puzzloxAndroidAssistRewardHook?: unknown }).puzzloxAndroidAssistRewardHook) return;
+  (
+    window as unknown as {
+      puzzloxAndroidAssistRewardHook: (req: string, phase: string, userEarned?: boolean) => void;
+    }
+  ).puzzloxAndroidAssistRewardHook = (req: string, phase: string, userEarned?: boolean) => {
+    const p = nativeAssistPending;
+    if (!p || p.requestId !== req) return;
+    if (phase === "dismissed") {
+      const r = nativeAssistResolve;
+      nativeAssistPending = null;
+      nativeAssistResolve = null;
+      r?.(!!userEarned);
+    }
+  };
+}
+
+export async function runAndroidNativeRewardedAssistPointsAd(): Promise<boolean> {
+  const W = window as unknown as { PuzzloxAndroid?: AndroidBridge };
+  if (!W.PuzzloxAndroid?.showRewardedForAssistPoints) return false;
+  ensureNativeAssistHook();
+  return await new Promise<boolean>((resolve) => {
+    const requestId = `assist-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    nativeAssistPending = { requestId };
+    nativeAssistResolve = resolve;
+    try {
+      W.PuzzloxAndroid!.showRewardedForAssistPoints!(requestId);
+    } catch {
+      nativeAssistPending = null;
+      nativeAssistResolve = null;
       resolve(false);
     }
   });

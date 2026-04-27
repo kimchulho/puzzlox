@@ -100,3 +100,51 @@ export async function runTossRewardedRoomEntry(roomId: number, enter: () => void
     });
   });
 }
+
+/** Generic toss rewarded ad gate (no room seen-cache side effects). */
+export async function runTossRewardedAd(): Promise<boolean> {
+  const loadOk = typeof loadFullScreenAd.isSupported === "function" && loadFullScreenAd.isSupported();
+  const showOk = typeof showFullScreenAd.isSupported === "function" && showFullScreenAd.isSupported();
+  if (!loadOk || !showOk) return false;
+
+  return await new Promise<boolean>((resolve) => {
+    let finished = false;
+    let loadUnregister: (() => void) | undefined;
+    let showUnregister: (() => void) | undefined;
+    const cleanup = () => {
+      try {
+        loadUnregister?.();
+      } catch {
+        /* noop */
+      }
+      try {
+        showUnregister?.();
+      } catch {
+        /* noop */
+      }
+    };
+    const done = (ok: boolean) => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      resolve(ok);
+    };
+
+    loadUnregister = loadFullScreenAd({
+      options: { adGroupId: TOSS_REWARDED_AD_GROUP_ID },
+      onEvent: (event) => {
+        if (event.type !== "loaded") return;
+        let rewarded = false;
+        showUnregister = showFullScreenAd({
+          options: { adGroupId: TOSS_REWARDED_AD_GROUP_ID },
+          onEvent: (ev) => {
+            if (ev.type === "userEarnedReward") rewarded = true;
+            if (ev.type === "dismissed" || ev.type === "failedToShow") done(rewarded);
+          },
+          onError: () => done(false),
+        });
+      },
+      onError: () => done(false),
+    });
+  });
+}
