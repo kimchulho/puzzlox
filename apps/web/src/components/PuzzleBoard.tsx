@@ -5030,13 +5030,12 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
           const selectedNine = [...connectedFive, ...fillers];
           const selectedSet = new Set(selectedNine);
 
-          const anchorId = connectedFive[0];
-          const anchorCol = anchorId % GRID_COLS;
-          const anchorRow = Math.floor(anchorId / GRID_COLS);
           // Keep enough separation so gathered pieces do not auto-snap.
-          const nearGapX = pieceWidth + Math.max(SNAP_THRESHOLD + 26, pieceWidth * 0.28);
-          const nearGapY = pieceHeight + Math.max(SNAP_THRESHOLD + 26, pieceHeight * 0.28);
-          const outsideGap = Math.max(pieceWidth, pieceHeight) * 0.35;
+          const nearGapX = pieceWidth + Math.max(SNAP_THRESHOLD + 30, pieceWidth * 0.32);
+          const nearGapY = pieceHeight + Math.max(SNAP_THRESHOLD + 30, pieceHeight * 0.32);
+          const outsideGap = Math.max(pieceWidth, pieceHeight) * 0.45;
+          const gridWidth = pieceWidth + nearGapX * 2;
+          const gridHeight = pieceHeight + nearGapY * 2;
 
           const isRectOutsideBoard = (minX: number, minY: number, maxX: number, maxY: number) => {
             return (
@@ -5047,76 +5046,36 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
             );
           };
 
-          const connectedBoundsByCenter = (cx: number, cy: number) => {
-            let minX = Infinity;
-            let minY = Infinity;
-            let maxX = -Infinity;
-            let maxY = -Infinity;
-            for (const id of connectedFive) {
-              const col = id % GRID_COLS;
-              const row = Math.floor(id / GRID_COLS);
-              const tx = cx + (col - anchorCol) * nearGapX;
-              const ty = cy + (row - anchorRow) * nearGapY;
-              minX = Math.min(minX, tx);
-              minY = Math.min(minY, ty);
-              maxX = Math.max(maxX, tx + pieceWidth);
-              maxY = Math.max(maxY, ty + pieceHeight);
-            }
-            return { minX, minY, maxX, maxY };
-          };
-
-          const makeLayout = (cx: number, cy: number) => {
-            const connectedTargets = new Map<number, { x: number; y: number }>();
-            for (const id of connectedFive) {
-              const col = id % GRID_COLS;
-              const row = Math.floor(id / GRID_COLS);
-              connectedTargets.set(id, {
-                x: cx + (col - anchorCol) * nearGapX,
-                y: cy + (row - anchorRow) * nearGapY,
-              });
-            }
-            const connectedBox = connectedBoundsByCenter(cx, cy);
-            const fillerTargets = new Map<number, { x: number; y: number }>();
-
-            // Build 3x3 slots around the connected group's center.
-            const gridSlots: { x: number; y: number }[] = [];
+          const slotsByCenter = (cx: number, cy: number) => {
+            const slots: { x: number; y: number }[] = [];
             for (let gy = -1; gy <= 1; gy++) {
               for (let gx = -1; gx <= 1; gx++) {
-                gridSlots.push({
+                slots.push({
                   x: cx + gx * nearGapX,
                   y: cy + gy * nearGapY,
                 });
               }
             }
-            // Avoid overlapping with connected piece target points.
-            const occupied = Array.from(connectedTargets.values());
-            const freeSlots = gridSlots.filter((slot) => {
-              return occupied.every(
-                (p) => Math.hypot(p.x - slot.x, p.y - slot.y) > Math.min(nearGapX, nearGapY) * 0.45
-              );
+            return slots;
+          };
+
+          const boundsByCenter = (cx: number, cy: number) => {
+            let minX = Infinity;
+            let minY = Infinity;
+            let maxX = -Infinity;
+            let maxY = -Infinity;
+            const slots = slotsByCenter(cx, cy);
+            slots.forEach((slot) => {
+              minX = Math.min(minX, slot.x);
+              minY = Math.min(minY, slot.y);
+              maxX = Math.max(maxX, slot.x + pieceWidth);
+              maxY = Math.max(maxY, slot.y + pieceHeight);
             });
-            fillers.forEach((id, idx) => {
-              const slot = freeSlots[idx % freeSlots.length] ?? {
-                x: connectedBox.maxX + nearGapX * (1.2 + idx * 0.2),
-                y: cy + ((idx % 2 === 0 ? -1 : 1) * nearGapY * (0.8 + idx * 0.05)),
-              };
-              fillerTargets.set(id, slot);
-            });
-            let minX = connectedBox.minX;
-            let minY = connectedBox.minY;
-            let maxX = connectedBox.maxX;
-            let maxY = connectedBox.maxY;
-            fillerTargets.forEach((p) => {
-              minX = Math.min(minX, p.x);
-              minY = Math.min(minY, p.y);
-              maxX = Math.max(maxX, p.x + pieceWidth);
-              maxY = Math.max(maxY, p.y + pieceHeight);
-            });
-            return { connectedTargets, fillerTargets, bounds: { minX, minY, maxX, maxY } };
+            return { minX, minY, maxX, maxY };
           };
 
           const isRegionClear = (minX: number, minY: number, maxX: number, maxY: number) => {
-            const margin = Math.max(pieceWidth, pieceHeight) * 0.9;
+            const margin = Math.max(pieceWidth, pieceHeight) * 1.1;
             for (let i = 0; i < PIECE_COUNT; i++) {
               if (selectedSet.has(i)) continue;
               const p = pieces.current.get(i);
@@ -5140,30 +5099,62 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
           const boardCx = boardStartX + boardWidth / 2;
           const boardCy = boardStartY + boardHeight / 2;
           const candidates: { x: number; y: number }[] = [];
-          const ringStepX = nearGapX * 1.4;
-          const ringStepY = nearGapY * 1.4;
-          for (let layer = 1; layer <= 10; layer++) {
-            const radiusX = boardWidth / 2 + nearGapX * (1.8 + layer);
-            const radiusY = boardHeight / 2 + nearGapY * (1.8 + layer);
-            candidates.push({ x: boardCx + radiusX, y: boardCy });
-            candidates.push({ x: boardCx - radiusX, y: boardCy });
-            candidates.push({ x: boardCx, y: boardCy + radiusY });
-            candidates.push({ x: boardCx, y: boardCy - radiusY });
-            candidates.push({ x: boardCx + layer * ringStepX, y: boardCy + layer * ringStepY });
-            candidates.push({ x: boardCx - layer * ringStepX, y: boardCy + layer * ringStepY });
+          const ringStep = Math.max(nearGapX, nearGapY) * 1.2;
+          for (let layer = 0; layer <= 10; layer++) {
+            const ext = outsideGap + ringStep * layer;
+            candidates.push({
+              x: boardStartX + boardWidth + gridWidth / 2 + ext,
+              y: boardCy,
+            });
+            candidates.push({
+              x: boardStartX - gridWidth / 2 - ext,
+              y: boardCy,
+            });
+            candidates.push({
+              x: boardCx,
+              y: boardStartY - gridHeight / 2 - ext,
+            });
+            candidates.push({
+              x: boardCx,
+              y: boardStartY + boardHeight + gridHeight / 2 + ext,
+            });
+            candidates.push({
+              x: boardStartX + boardWidth + gridWidth / 2 + ext,
+              y: boardStartY + boardHeight + gridHeight / 2 + ext,
+            });
+            candidates.push({
+              x: boardStartX - gridWidth / 2 - ext,
+              y: boardStartY + boardHeight + gridHeight / 2 + ext,
+            });
           }
 
-          let chosenLayout = makeLayout(candidates[0].x, candidates[0].y);
+          let chosenCenter: { x: number; y: number } | null = null;
           for (const c of candidates) {
-            const layout = makeLayout(c.x, c.y);
-            if (!isRectOutsideBoard(layout.bounds.minX, layout.bounds.minY, layout.bounds.maxX, layout.bounds.maxY)) {
+            const b = boundsByCenter(c.x, c.y);
+            if (!isRectOutsideBoard(b.minX, b.minY, b.maxX, b.maxY)) {
               continue;
             }
-            if (isRegionClear(layout.bounds.minX, layout.bounds.minY, layout.bounds.maxX, layout.bounds.maxY)) {
-              chosenLayout = layout;
+            if (isRegionClear(b.minX, b.minY, b.maxX, b.maxY)) {
+              chosenCenter = c;
               break;
             }
           }
+          if (!chosenCenter) {
+            alert(
+              isKo
+                ? "겹치지 않는 빈 공간을 찾지 못했습니다. 잠시 후 다시 시도해 주세요."
+                : "Could not find an empty non-overlapping area. Please try again."
+            );
+            return;
+          }
+
+          const slotList = slotsByCenter(chosenCenter.x, chosenCenter.y);
+          const randomOrder = [...selectedNine].sort(() => Math.random() - 0.5);
+          const targets = new Map<number, { x: number; y: number }>();
+          randomOrder.forEach((id, idx) => {
+            const slot = slotList[idx];
+            if (slot) targets.set(id, slot);
+          });
 
           const updates: { pieceId: number; x: number; y: number; rotationQuarter?: number; isBackFace?: boolean }[] =
             [];
@@ -5179,7 +5170,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
           for (const id of connectedFive) {
             const p = pieces.current.get(id);
             if (!p) continue;
-            const target = chosenLayout.connectedTargets.get(id);
+            const target = targets.get(id);
             if (!target) continue;
             const jitterX = (Math.random() - 0.5) * Math.min(8, pieceWidth * 0.03);
             const jitterY = (Math.random() - 0.5) * Math.min(8, pieceHeight * 0.03);
@@ -5208,7 +5199,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
           fillers.forEach((id) => {
             const p = pieces.current.get(id);
             if (!p) return;
-            const target = chosenLayout.fillerTargets.get(id);
+            const target = targets.get(id);
             if (!target) return;
             const jitterX = (Math.random() - 0.5) * Math.min(8, pieceWidth * 0.03);
             const jitterY = (Math.random() - 0.5) * Math.min(8, pieceHeight * 0.03);
