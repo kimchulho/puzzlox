@@ -11,7 +11,7 @@
 } from 'react';
 import * as PIXI from 'pixi.js';
 import { throttle } from 'lodash';
-import { Clock, Users, Trophy, ChevronLeft, X, Palette, LayoutGrid, Zap, Heart, Image as ImageIcon, Bot, Maximize, Minimize, RotateCcw, Share2, Plus, Minus, Crosshair, Wifi, WifiOff, Shield } from 'lucide-react';
+import { Clock, Users, Trophy, ChevronLeft, X, Palette, LayoutGrid, Zap, Heart, Image as ImageIcon, Bot, Maximize, Minimize, RotateCcw, Share2, Plus, Minus, Crosshair, Wifi, WifiOff, Shield, CheckCircle2 } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 import confetti from 'canvas-confetti';
 import {
@@ -226,6 +226,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
   const gatherBordersRef = useRef<(() => void) | null>(null);
   const gatherByColorRef = useRef<((quick?: boolean) => void) | null>(null);
   const gatherAdjacentAssistRef = useRef<(() => Promise<boolean>) | null>(null);
+  const snapSelectedPieceToBoardAssistRef = useRef<(() => Promise<boolean>) | null>(null);
   const createMosaicFromImageRef = useRef<((imageUrl: string, quick?: boolean, gapMultiplier?: number) => Promise<void>) | null>(null);
   const rotateFlipSelectionRef = useRef<(() => void) | null>(null);
   const initialPositionsRef = useRef<{x: number, y: number}[]>([]);
@@ -5355,6 +5356,175 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
           return true;
         };
 
+        const snapSelectedPieceToBoardAssist = async (): Promise<boolean> => {
+          if (isColorBotRunningRef.current || isBotRunningRef.current) return false;
+
+          if (!selectedCluster || selectedCluster.size === 0) {
+            alert(isKo ? "맞출 조각을 선택해 주세요." : "Select a piece first.");
+            return false;
+          }
+          if (selectedCluster.size !== 1) {
+            alert(isKo ? "한 조각만 선택해 주세요." : "Select exactly one piece.");
+            return false;
+          }
+          if (isClusterHeldRemotely(selectedCluster)) {
+            alert(isKo ? "다른 플레이어가 잡고 있는 조각입니다." : "Another player is holding this piece.");
+            return false;
+          }
+
+          if (isDragging && dragCluster.size > 0) {
+            sendUnlockBatch(Array.from(dragCluster));
+            dragCluster.forEach((pid) => {
+              const piece = pieces.current.get(pid);
+              if (!piece) return;
+              const li = piece.getChildByLabel("lockIcon");
+              if (li) li.visible = false;
+            });
+            dragCluster = new Set();
+          }
+          isDragging = false;
+          isDraggingSelected = false;
+          isTouchDraggingPiece = false;
+          selectedMoved = false;
+          currentShiftY = 0;
+
+          const onlyId = Array.from(selectedCluster)[0];
+          sendUnlockBatch(Array.from(selectedCluster));
+          selectedCluster.forEach((id) => {
+            const piece = pieces.current.get(id);
+            if (!piece) return;
+            const li = piece.getChildByLabel("lockIcon");
+            if (li) li.visible = false;
+          });
+          selectedCluster = null;
+
+          const p = pieces.current.get(onlyId);
+          if (!p || p.eventMode === "none") {
+            alert(isKo ? "이미 맞춰진 조각이거나 없는 조각입니다." : "This piece is already locked or is missing.");
+            return false;
+          }
+
+          if (isNightmare) {
+            applyPieceOrientationVisual(p, 0, false);
+          }
+
+          const c = onlyId % GRID_COLS;
+          const r = Math.floor(onlyId / GRID_COLS);
+          const targetX = boardStartX + c * pieceWidth;
+          const targetY = boardStartY + r * pieceHeight;
+
+          const canClusterBoardLock = canClusterLockOnBoard(
+            puzzleDifficulty,
+            new Set([onlyId]),
+            boardLockedPieceIdsRef.current,
+            GRID_COLS,
+            GRID_ROWS
+          );
+          const canLockByOrientation = canPieceLockOnBoard(puzzleDifficulty, {
+            rotationQuarter: (p as any).__rotationQuarter,
+            isBackFace: (p as any).__isBackFace,
+          });
+          if (!canClusterBoardLock || !canLockByOrientation) {
+            alert(
+              isKo
+                ? "지금 난이도·배치에서는 이 조각을 바로 맞출 수 없습니다."
+                : "Cannot snap this piece on the board with the current difficulty/rules."
+            );
+            return false;
+          }
+
+          const ownerSnapshot = new Map(solvedPieceOwner);
+          const localOwner = getLocalUsername();
+
+          p.x = targetX;
+          p.y = targetY;
+          rememberSolvedPieceOwner(onlyId, localOwner);
+
+          p.eventMode = "none";
+          p.zIndex = 0;
+          const pLock = p.getChildByLabel("lockIcon");
+          if (pLock) pLock.visible = false;
+          boardLockedPieceIdsRef.current.add(onlyId);
+          hintLayer?.revealPiece(onlyId, GRID_COLS, GRID_ROWS);
+          targetPositions.delete(onlyId);
+
+          const netOwner = (solvedPieceOwner.get(onlyId) ?? localOwner) as string;
+          const rotQ = normalizeRotationQuarter((p as any).__rotationQuarter ?? 0);
+          const isBack = (p as any).__isBackFace === true;
+          const updates: {
+            pieceId: number;
+            x: number;
+            y: number;
+            isLocked: boolean;
+            snappedBy: string;
+            rotationQuarter: number;
+            isBackFace: boolean;
+          }[] = [
+            {
+              pieceId: onlyId,
+              x: p.x,
+              y: p.y,
+              isLocked: true,
+              snappedBy: netOwner,
+              rotationQuarter: rotQ,
+              isBackFace: isBack,
+            },
+          ];
+          const dbUpdates: {
+            piece_index: number;
+            x: number;
+            y: number;
+            is_locked: boolean;
+            snapped_by: string;
+            rotation_quarter: number;
+            is_back_face: boolean;
+          }[] = [
+            {
+              piece_index: onlyId,
+              x: p.x,
+              y: p.y,
+              is_locked: true,
+              snapped_by: netOwner,
+              rotation_quarter: rotQ,
+              is_back_face: isBack,
+            },
+          ];
+
+          if (typeof navigator !== "undefined" && navigator.vibrate) {
+            navigator.vibrate(25);
+          }
+          playSnapSound();
+          sendMoveBatch(updates, { snapped: true });
+          await savePiecesState(dbUpdates, { immediate: true });
+          void checkCompletion();
+
+          const prior = (ownerSnapshot.get(onlyId) ?? "").trim();
+          if (prior === "") {
+            void updateScore(1);
+          }
+
+          const pp = pieces.current.get(onlyId);
+          if (pp) {
+            const minXf = pp.x;
+            const minYf = pp.y;
+            const maxXf = pp.x + pieceWidth;
+            const maxYf = pp.y + pieceHeight;
+            const pad = Math.max(pieceWidth, pieceHeight) * 1.2;
+            const bboxW = Math.max(pieceWidth, maxXf - minXf + pad * 2);
+            const bboxH = Math.max(pieceHeight, maxYf - minYf + pad * 2);
+            const targetScale = Math.max(0.05, Math.min(1, app.screen.width / bboxW, app.screen.height / bboxH));
+            const anchorX = (minXf + maxXf) / 2;
+            const anchorY = (minYf + maxYf) / 2;
+            world.scale.set(targetScale);
+            const anchorGlobal = new PIXI.Point();
+            world.toGlobal(new PIXI.Point(anchorX, anchorY), anchorGlobal);
+            world.x += app.screen.width / 2 - anchorGlobal.x;
+            world.y += app.screen.height / 2 - anchorGlobal.y;
+          }
+
+          return true;
+        };
+
         const createMosaicFromImage = async (targetImageUrl: string, quick: boolean = false, gapMultiplier: number = 1.6) => {
           if (isColorBotRunningRef.current) {
             isColorBotRunningRef.current = false;
@@ -5662,6 +5832,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
         gatherBordersRef.current = gatherBorders;
         gatherByColorRef.current = gatherByColor;
         gatherAdjacentAssistRef.current = gatherAdjacentAssist;
+        snapSelectedPieceToBoardAssistRef.current = snapSelectedPieceToBoardAssist;
         createMosaicFromImageRef.current = createMosaicFromImage;
 
         bumpProgress(46);
@@ -7534,6 +7705,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
           gatherBordersRef.current = null;
           gatherByColorRef.current = null;
           gatherAdjacentAssistRef.current = null;
+          snapSelectedPieceToBoardAssistRef.current = null;
           createMosaicFromImageRef.current = null;
           rotateFlipSelectionRef.current = null;
           initialPositionsRef.current = [];
@@ -8186,35 +8358,18 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
           }`}
         >
           {isTossMode ? (
-            <>
-              <div className="flex items-center justify-center gap-2 flex-1 min-w-0 h-8 rounded-lg bg-[#F4F8FF] px-3 text-[#2F6FE4]">
-                <span className="text-[11px] font-semibold max-w-[120px] truncate whitespace-nowrap" title={currentPlayerLabel}>
-                  {currentPlayerLabel}
-                </span>
-              </div>
-              <div className="flex items-center justify-center gap-2 flex-1 min-w-0 h-8 rounded-lg bg-[#F4F8FF] px-3 text-[#2F6FE4]">
-                <Users size={12} className="text-[#2F6FE4]" />
-                <span className="text-xs font-semibold whitespace-nowrap">{playerCount}/{maxPlayers}</span>
-              </div>
-            </>
+            <div className="flex items-center justify-center gap-2 flex-1 min-w-0 h-8 rounded-lg bg-[#F4F8FF] px-3 text-[#2F6FE4]">
+              <Users size={12} className="text-[#2F6FE4]" />
+              <span className="text-xs font-semibold whitespace-nowrap">{playerCount}/{maxPlayers}</span>
+            </div>
           ) : (
-            <>
-              <div
-                className="flex items-center gap-1 px-2 h-7 rounded-md border flex-1 sm:flex-none justify-center bg-slate-800/50 border-slate-700/50"
-                title={isKo ? "현재 플레이어" : "Current player"}
-              >
-                <span className="text-[11px] font-medium max-w-[96px] truncate whitespace-nowrap text-slate-300" title={currentPlayerLabel}>
-                  {currentPlayerLabel}
-                </span>
-              </div>
-              <div
-                className="flex items-center gap-1 px-2 h-7 rounded-md border flex-1 sm:flex-none justify-center bg-slate-800/50 border-slate-700/50"
-                title={isKo ? "인원" : "Players"}
-              >
-                <Users size={12} className="text-slate-400" />
-                <span className="text-xs font-medium whitespace-nowrap">{playerCount}/{maxPlayers}</span>
-              </div>
-            </>
+            <div
+              className="flex items-center gap-1 px-2 h-7 rounded-md border flex-1 sm:flex-none justify-center bg-slate-800/50 border-slate-700/50"
+              title={isKo ? "인원" : "Players"}
+            >
+              <Users size={12} className="text-slate-400" />
+              <span className="text-xs font-medium whitespace-nowrap">{playerCount}/{maxPlayers}</span>
+            </div>
           )}
 
           {isNightmare && !nightmareFloatingRotateTouchLayout ? (
@@ -8231,36 +8386,6 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
             </button>
           ) : null}
 
-          <button
-            onClick={() => {
-              if (assistPointBusy) return;
-              void (async () => {
-                const ok = await spendAssistPointForAction(1);
-                if (!ok) return;
-                const applied = await gatherAdjacentAssistRef.current?.();
-                if (applied) return;
-                const token = localStorage.getItem("puzzle_access_token") || "";
-                if (user?.id && token) {
-                  const rolledBack = await earnUserAssistPoints(token, 1).catch(() => -1);
-                  if (rolledBack >= 0) setAssistPoints(rolledBack);
-                } else {
-                  setAssistPoints(earnGuestAssistPoints(1));
-                }
-              })();
-            }}
-            disabled={assistPointBusy}
-            className={`flex items-center justify-center gap-1 rounded-md transition-colors shrink-0 ${
-              isTossMode
-                ? "h-8 px-3 rounded-lg bg-[#F4F8FF] text-[#2F6FE4]"
-                : "h-7 px-2 border bg-slate-800/50 border-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-50"
-            }`}
-            title={isKo ? "인접 조각 모으기 (9개 중 5개 연결 가능)" : "Gather 9 pieces (5 connectable)"}
-          >
-            <Zap size={12} />
-            <span className={`font-semibold whitespace-nowrap ${isTossMode ? "text-xs" : "text-[11px]"}`}>
-              {isKo ? "모으기 9(5연결)" : "Gather 9 (5-link)"}
-            </span>
-          </button>
           <div
             className={`flex items-center justify-center gap-1 rounded-md shrink-0 ${
               isTossMode
@@ -8445,91 +8570,238 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
             </div>
           ) : null}
 
-          {!isTossMode && isAdminUser ? (
-            <div className="relative">
-              <button
-                onClick={() => setShowBotMenu(!showBotMenu)}
-                className={`flex items-center justify-center w-7 h-7 rounded-md border transition-colors shrink-0 ${showBotMenu ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-400' : 'bg-slate-800/50 border-slate-700/50 text-slate-400 hover:bg-slate-700 hover:text-white'}`}
-                title="Bot Actions"
+          <div className="relative shrink-0">
+            <button
+              type="button"
+              onClick={() => setShowBotMenu(!showBotMenu)}
+              className={
+                isTossMode
+                  ? `inline-flex items-center justify-center h-8 w-10 rounded-lg transition-colors shrink-0 ${
+                      showBotMenu ? "bg-[#EAF2FF] text-[#2F6FE4]" : "bg-[#F4F8FF] text-[#2F6FE4]"
+                    }`
+                  : `flex items-center justify-center w-7 h-7 rounded-md border transition-colors shrink-0 ${
+                      showBotMenu
+                        ? "bg-indigo-500/20 border-indigo-500/50 text-indigo-400"
+                        : "bg-slate-800/50 border-slate-700/50 text-slate-400 hover:bg-slate-700 hover:text-white"
+                    }`
+              }
+              title={isKo ? "어시스트 · 봇" : "Assist & bot"}
+              aria-haspopup="dialog"
+              aria-expanded={showBotMenu}
+            >
+              <Bot
+                size={14}
+                className={
+                  isColorBotLoading ? (isTossMode ? "animate-pulse" : "animate-pulse text-indigo-400") : ""
+                }
+              />
+            </button>
+
+            {showBotMenu && (
+              <div
+                className={`absolute top-full mt-2 right-0 rounded-xl p-2 z-50 animate-in fade-in slide-in-from-top-2 w-56 ${
+                  isTossMode
+                    ? "bg-white border border-[#D9E8FF] shadow-[0_10px_24px_rgba(47,111,228,0.14)]"
+                    : "bg-slate-800 border border-slate-700"
+                }`}
+                role="dialog"
+                aria-label={isKo ? "어시스트" : "Assist"}
               >
-                <Bot size={14} className={isColorBotLoading ? 'animate-pulse text-indigo-400' : ''} />
-              </button>
-              
-              {showBotMenu && (
-                <div className="absolute top-full mt-2 right-0 bg-slate-800 border border-slate-700 rounded-xl p-3 z-50 animate-in fade-in slide-in-from-top-2 w-48">
-                <div className="flex items-center justify-between mb-3 border-b border-slate-700 pb-2">
-                  <span className="text-xs font-bold text-slate-300 uppercase tracking-wider">Bot Actions</span>
-                  <button onClick={() => setShowBotMenu(false)} className="text-slate-500 hover:text-white">
+                <div
+                  className={`flex items-center justify-between mb-2 pb-2 border-b ${
+                    isTossMode ? "border-[#D9E8FF]" : "border-slate-700"
+                  }`}
+                >
+                  <span className={`text-[11px] font-bold tracking-wide ${isTossMode ? "text-[#2F6FE4]" : "text-slate-300"}`}>
+                    {isKo ? "어시스트" : "Assist"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowBotMenu(false)}
+                    className={isTossMode ? "text-[#2F6FE4] hover:text-[#1f5ec6]" : "text-slate-500 hover:text-white"}
+                    aria-label={isKo ? "닫기" : "Close"}
+                  >
                     <X size={14} />
                   </button>
                 </div>
-                
-                <div className="flex flex-col gap-2">
+                <div className="flex flex-col gap-1.5">
                   <button
+                    type="button"
                     onClick={() => {
-                      gatherBordersRef.current?.();
-                      setShowBotMenu(false);
+                      if (assistPointBusy) return;
+                      void (async () => {
+                        const ok = await spendAssistPointForAction(1);
+                        if (!ok) return;
+                        const applied = await gatherAdjacentAssistRef.current?.();
+                        if (applied) {
+                          setShowBotMenu(false);
+                          return;
+                        }
+                        const token = localStorage.getItem("puzzle_access_token") || "";
+                        if (user?.id && token) {
+                          const rolledBack = await earnUserAssistPoints(token, 1).catch(() => -1);
+                          if (rolledBack >= 0) setAssistPoints(rolledBack);
+                        } else {
+                          setAssistPoints(earnGuestAssistPoints(1));
+                        }
+                      })();
                     }}
-                    className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-900/50 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors text-sm text-left"
+                    disabled={assistPointBusy}
+                    className={`flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-left text-sm transition-colors disabled:opacity-50 ${
+                      isTossMode
+                        ? "bg-[#F4F8FF] hover:bg-[#EAF2FF] text-[#2F6FE4] border border-[#D9E8FF]"
+                        : "bg-slate-900/50 hover:bg-slate-700 text-slate-200 border border-slate-600/60"
+                    }`}
                   >
-                    <LayoutGrid size={14} />
-                    <span>Gather Borders</span>
+                    <span className="flex items-center gap-2 min-w-0">
+                      <Zap size={14} className={isTossMode ? "text-[#2F6FE4] shrink-0" : "text-amber-400 shrink-0"} />
+                      <span className="font-medium truncate">{isKo ? "조각 모으기" : "Gather pieces"}</span>
+                    </span>
+                    <span
+                      className={`text-[11px] font-semibold tabular-nums shrink-0 ${isTossMode ? "text-[#6B7684]" : "text-slate-400"}`}
+                    >
+                      {isKo ? "1P" : "1 pt"}
+                    </span>
                   </button>
-                  
                   <button
+                    type="button"
                     onClick={() => {
-                      gatherByColorRef.current?.(false);
-                      setShowBotMenu(false);
+                      if (assistPointBusy) return;
+                      void (async () => {
+                        const ok = await spendAssistPointForAction(2);
+                        if (!ok) return;
+                        const applied = await snapSelectedPieceToBoardAssistRef.current?.();
+                        if (applied) {
+                          setShowBotMenu(false);
+                          return;
+                        }
+                        const token = localStorage.getItem("puzzle_access_token") || "";
+                        if (user?.id && token) {
+                          const rolledBack = await earnUserAssistPoints(token, 2).catch(() => -1);
+                          if (rolledBack >= 0) setAssistPoints(rolledBack);
+                        } else {
+                          setAssistPoints(earnGuestAssistPoints(2));
+                        }
+                      })();
                     }}
-                    disabled={isColorBotLoading}
-                    className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-900/50 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors text-sm text-left disabled:opacity-50"
+                    disabled={assistPointBusy}
+                    className={`flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-left text-sm transition-colors disabled:opacity-50 ${
+                      isTossMode
+                        ? "bg-[#F4F8FF] hover:bg-[#EAF2FF] text-[#2F6FE4] border border-[#D9E8FF]"
+                        : "bg-slate-900/50 hover:bg-slate-700 text-slate-200 border border-slate-600/60"
+                    }`}
                   >
-                    <Palette size={14} />
-                    <span>Group by Color</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      gatherByColorRef.current?.(true);
-                      setShowBotMenu(false);
-                    }}
-                    disabled={isColorBotLoading}
-                    className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-900/50 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors text-sm text-left disabled:opacity-50"
-                  >
-                    <Zap size={14} className="text-amber-400" />
-                    <span>Quick Group</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      setMosaicQuick(false);
-                      setShowMosaicModal(true);
-                      setShowBotMenu(false);
-                    }}
-                    disabled={isColorBotLoading}
-                    className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-900/50 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors text-sm text-left disabled:opacity-50"
-                  >
-                    <ImageIcon size={14} className="text-indigo-400" />
-                    <span>Image Mosaic</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      setMosaicQuick(true);
-                      setShowMosaicModal(true);
-                      setShowBotMenu(false);
-                    }}
-                    disabled={isColorBotLoading}
-                    className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-900/50 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors text-sm text-left disabled:opacity-50"
-                  >
-                    <Zap size={14} className="text-amber-400" />
-                    <span>Quick Mosaic</span>
+                    <span className="flex items-center gap-2 min-w-0">
+                      <CheckCircle2 size={14} className={isTossMode ? "text-[#2F6FE4] shrink-0" : "text-indigo-400 shrink-0"} />
+                      <span className="font-medium truncate">{isKo ? "조각 맞추기" : "Snap piece"}</span>
+                    </span>
+                    <span
+                      className={`text-[11px] font-semibold tabular-nums shrink-0 ${isTossMode ? "text-[#6B7684]" : "text-slate-400"}`}
+                    >
+                      {isKo ? "2P" : "2 pt"}
+                    </span>
                   </button>
                 </div>
-                </div>
-              )}
-            </div>
-          ) : null}
+
+                {isAdminUser ? (
+                  <div
+                    className={`mt-2 pt-2 border-t flex flex-col gap-1.5 ${
+                      isTossMode ? "border-[#D9E8FF]" : "border-slate-700"
+                    }`}
+                  >
+                    <div
+                      className={`px-1 pb-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                        isTossMode ? "text-[#8B95A1]" : "text-slate-500"
+                      }`}
+                    >
+                      {isKo ? "봇 (관리자)" : "Bot (admin)"}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        gatherBordersRef.current?.();
+                        setShowBotMenu(false);
+                      }}
+                      className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left ${
+                        isTossMode
+                          ? "bg-[#F4F8FF] hover:bg-[#EAF2FF] text-[#2F6FE4]"
+                          : "bg-slate-900/50 hover:bg-slate-700 text-slate-300 hover:text-white"
+                      }`}
+                    >
+                      <LayoutGrid size={14} />
+                      <span>Gather Borders</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        gatherByColorRef.current?.(false);
+                        setShowBotMenu(false);
+                      }}
+                      disabled={isColorBotLoading}
+                      className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left disabled:opacity-50 ${
+                        isTossMode
+                          ? "bg-[#F4F8FF] hover:bg-[#EAF2FF] text-[#2F6FE4]"
+                          : "bg-slate-900/50 hover:bg-slate-700 text-slate-300 hover:text-white"
+                      }`}
+                    >
+                      <Palette size={14} />
+                      <span>Group by Color</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        gatherByColorRef.current?.(true);
+                        setShowBotMenu(false);
+                      }}
+                      disabled={isColorBotLoading}
+                      className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left disabled:opacity-50 ${
+                        isTossMode
+                          ? "bg-[#F4F8FF] hover:bg-[#EAF2FF] text-[#2F6FE4]"
+                          : "bg-slate-900/50 hover:bg-slate-700 text-slate-300 hover:text-white"
+                      }`}
+                    >
+                      <Zap size={14} className={isTossMode ? "text-amber-500" : "text-amber-400"} />
+                      <span>Quick Group</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMosaicQuick(false);
+                        setShowMosaicModal(true);
+                        setShowBotMenu(false);
+                      }}
+                      disabled={isColorBotLoading}
+                      className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left disabled:opacity-50 ${
+                        isTossMode
+                          ? "bg-[#F4F8FF] hover:bg-[#EAF2FF] text-[#2F6FE4]"
+                          : "bg-slate-900/50 hover:bg-slate-700 text-slate-300 hover:text-white"
+                      }`}
+                    >
+                      <ImageIcon size={14} className={isTossMode ? "text-[#2F6FE4]" : "text-indigo-400"} />
+                      <span>Image Mosaic</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMosaicQuick(true);
+                        setShowMosaicModal(true);
+                        setShowBotMenu(false);
+                      }}
+                      disabled={isColorBotLoading}
+                      className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left disabled:opacity-50 ${
+                        isTossMode
+                          ? "bg-[#F4F8FF] hover:bg-[#EAF2FF] text-[#2F6FE4]"
+                          : "bg-slate-900/50 hover:bg-slate-700 text-slate-300 hover:text-white"
+                      }`}
+                    >
+                      <Zap size={14} className={isTossMode ? "text-amber-500" : "text-amber-400"} />
+                      <span>Quick Mosaic</span>
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            )}
+          </div>
 
           <div className="relative">
             {isTossMode ? (
