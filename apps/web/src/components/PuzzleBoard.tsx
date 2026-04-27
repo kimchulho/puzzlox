@@ -212,6 +212,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
   const puzzleBackObjectUrlRef = useRef<string | null>(null);
   const gatherBordersRef = useRef<(() => void) | null>(null);
   const gatherByColorRef = useRef<((quick?: boolean) => void) | null>(null);
+  const gatherAdjacentAssistRef = useRef<(() => Promise<void>) | null>(null);
   const createMosaicFromImageRef = useRef<((imageUrl: string, quick?: boolean, gapMultiplier?: number) => Promise<void>) | null>(null);
   const rotateFlipSelectionRef = useRef<(() => void) | null>(null);
   const initialPositionsRef = useRef<{x: number, y: number}[]>([]);
@@ -4924,6 +4925,285 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
           await executeBotMoves(botTargets, quick);
         };
 
+        const gatherAdjacentAssist = async () => {
+          if (isColorBotRunningRef.current || isBotRunningRef.current) return;
+
+          // Reset current local interactions so assist can move pieces deterministically.
+          if (selectedCluster && selectedCluster.size > 0) {
+            sendUnlockBatch(Array.from(selectedCluster));
+            selectedCluster.forEach((id) => {
+              const p = pieces.current.get(id);
+              if (!p) return;
+              const lockIcon = p.getChildByLabel("lockIcon");
+              if (lockIcon) lockIcon.visible = false;
+            });
+            selectedCluster = null;
+          }
+          if (isDragging && dragCluster.size > 0) {
+            sendUnlockBatch(Array.from(dragCluster));
+            dragCluster.forEach((id) => {
+              const p = pieces.current.get(id);
+              if (!p) return;
+              const lockIcon = p.getChildByLabel("lockIcon");
+              if (lockIcon) lockIcon.visible = false;
+            });
+            dragCluster = new Set();
+          }
+          isDragging = false;
+          isDraggingSelected = false;
+          isTouchDraggingPiece = false;
+          selectedMoved = false;
+          currentShiftY = 0;
+
+          const allSingles: number[] = [];
+          for (let i = 0; i < PIECE_COUNT; i++) {
+            const p = pieces.current.get(i);
+            if (!p || p.eventMode === "none") continue;
+            const centerX = p.x + pieceWidth / 2;
+            const centerY = p.y + pieceHeight / 2;
+            const isOnBoard =
+              centerX >= boardStartX &&
+              centerX <= boardStartX + boardWidth &&
+              centerY >= boardStartY &&
+              centerY <= boardStartY + boardHeight;
+            if (isOnBoard) continue;
+            if (getConnectedCluster(i).size > 1) continue;
+            allSingles.push(i);
+          }
+          if (allSingles.length < 7) {
+            alert(isKo ? "어시스트 가능한 흩어진 조각이 부족합니다." : "Not enough scattered pieces for assist.");
+            return;
+          }
+
+          const singleSet = new Set(allSingles);
+          const findNeighborSingles = (id: number) => {
+            const neighbors = [id - 1, id + 1, id - GRID_COLS, id + GRID_COLS];
+            const c = id % GRID_COLS;
+            const r = Math.floor(id / GRID_COLS);
+            return neighbors.filter((n) => {
+              if (!singleSet.has(n)) return false;
+              const nc = n % GRID_COLS;
+              const nr = Math.floor(n / GRID_COLS);
+              return (Math.abs(c - nc) === 1 && r === nr) || (Math.abs(r - nr) === 1 && c === nc);
+            });
+          };
+
+          let connectedFive: number[] | null = null;
+          const shuffled = [...allSingles].sort(() => Math.random() - 0.5);
+          for (const seed of shuffled) {
+            const visited = new Set<number>();
+            const queue = [seed];
+            while (queue.length > 0 && visited.size < 5) {
+              const curr = queue.shift()!;
+              if (visited.has(curr)) continue;
+              visited.add(curr);
+              const next = findNeighborSingles(curr).sort(() => Math.random() - 0.5);
+              next.forEach((n) => {
+                if (!visited.has(n)) queue.push(n);
+              });
+            }
+            if (visited.size >= 5) {
+              connectedFive = Array.from(visited).slice(0, 5);
+              break;
+            }
+          }
+          if (!connectedFive || connectedFive.length < 5) {
+            alert(
+              isKo
+                ? "서로 맞출 수 있는 조각 5개를 찾지 못했습니다. 잠시 후 다시 시도해 주세요."
+                : "Could not find 5 connectable pieces. Please try again."
+            );
+            return;
+          }
+
+          const connectedSet = new Set(connectedFive);
+          const isAdjacentByIndex = (a: number, b: number) => {
+            const ac = a % GRID_COLS;
+            const ar = Math.floor(a / GRID_COLS);
+            const bc = b % GRID_COLS;
+            const br = Math.floor(b / GRID_COLS);
+            return (Math.abs(ac - bc) === 1 && ar === br) || (Math.abs(ar - br) === 1 && ac === bc);
+          };
+          const rest = allSingles.filter((id) => !connectedSet.has(id));
+          const decoyCandidates = rest.filter((id) => !connectedFive!.some((g) => isAdjacentByIndex(id, g)));
+          const decoys: number[] = [];
+          for (const id of decoyCandidates.sort(() => Math.random() - 0.5)) {
+            if (decoys.length >= 2) break;
+            if (decoys.every((d) => !isAdjacentByIndex(d, id))) decoys.push(id);
+          }
+          if (decoys.length < 2) {
+            for (const id of rest.sort(() => Math.random() - 0.5)) {
+              if (decoys.includes(id)) continue;
+              decoys.push(id);
+              if (decoys.length >= 2) break;
+            }
+          }
+          if (decoys.length < 2) {
+            alert(isKo ? "어시스트용 분리 조각 2개를 찾지 못했습니다." : "Could not find two decoy pieces.");
+            return;
+          }
+
+          const anchorId = connectedFive[0];
+          const anchorCol = anchorId % GRID_COLS;
+          const anchorRow = Math.floor(anchorId / GRID_COLS);
+
+          const clusterBoundsByCenter = (cx: number, cy: number) => {
+            let minX = Infinity;
+            let minY = Infinity;
+            let maxX = -Infinity;
+            let maxY = -Infinity;
+            for (const id of connectedFive) {
+              const col = id % GRID_COLS;
+              const row = Math.floor(id / GRID_COLS);
+              const tx = cx + (col - anchorCol) * pieceWidth;
+              const ty = cy + (row - anchorRow) * pieceHeight;
+              minX = Math.min(minX, tx);
+              minY = Math.min(minY, ty);
+              maxX = Math.max(maxX, tx + pieceWidth);
+              maxY = Math.max(maxY, ty + pieceHeight);
+            }
+            return { minX, minY, maxX, maxY };
+          };
+
+          const isRegionClear = (minX: number, minY: number, maxX: number, maxY: number) => {
+            const margin = Math.max(pieceWidth, pieceHeight) * 0.8;
+            for (let i = 0; i < PIECE_COUNT; i++) {
+              if (connectedSet.has(i) || decoys.includes(i)) continue;
+              const p = pieces.current.get(i);
+              if (!p) continue;
+              const px1 = p.x;
+              const py1 = p.y;
+              const px2 = p.x + pieceWidth;
+              const py2 = p.y + pieceHeight;
+              if (
+                px2 >= minX - margin &&
+                px1 <= maxX + margin &&
+                py2 >= minY - margin &&
+                py1 <= maxY + margin
+              ) {
+                return false;
+              }
+            }
+            return true;
+          };
+
+          const boardCx = boardStartX + boardWidth / 2;
+          const boardCy = boardStartY + boardHeight / 2;
+          const candidates: { x: number; y: number }[] = [];
+          const ringStepX = pieceWidth * 2.2;
+          const ringStepY = pieceHeight * 2.2;
+          for (let layer = 1; layer <= 10; layer++) {
+            const baseX = boardCx + layer * ringStepX;
+            const baseY = boardCy;
+            candidates.push({ x: baseX, y: baseY });
+            candidates.push({ x: boardCx - layer * ringStepX, y: baseY });
+            candidates.push({ x: boardCx, y: boardCy + layer * ringStepY });
+            candidates.push({ x: boardCx, y: boardCy - layer * ringStepY });
+          }
+          candidates.push({ x: boardCx + boardWidth * 0.4, y: boardCy + boardHeight * 0.35 });
+          candidates.push({ x: boardCx - boardWidth * 0.4, y: boardCy + boardHeight * 0.35 });
+
+          let targetCenter = candidates[0];
+          for (const c of candidates) {
+            const b = clusterBoundsByCenter(c.x, c.y);
+            if (isRegionClear(b.minX, b.minY, b.maxX, b.maxY)) {
+              targetCenter = c;
+              break;
+            }
+          }
+
+          const updates: { pieceId: number; x: number; y: number; rotationQuarter?: number; isBackFace?: boolean }[] =
+            [];
+          const dbUpdates: {
+            piece_index: number;
+            x: number;
+            y: number;
+            is_locked: boolean;
+            rotation_quarter?: number;
+            is_back_face?: boolean;
+          }[] = [];
+
+          for (const id of connectedFive) {
+            const p = pieces.current.get(id);
+            if (!p) continue;
+            const col = id % GRID_COLS;
+            const row = Math.floor(id / GRID_COLS);
+            const tx = targetCenter.x + (col - anchorCol) * pieceWidth;
+            const ty = targetCenter.y + (row - anchorRow) * pieceHeight;
+            p.x = tx;
+            p.y = ty;
+            if (isNightmare) applyPieceOrientationVisual(p, 0, false);
+            topZIndex++;
+            p.zIndex = topZIndex;
+            updates.push({
+              pieceId: id,
+              x: tx,
+              y: ty,
+              ...(isNightmare ? { rotationQuarter: 0, isBackFace: false } : {}),
+            });
+            dbUpdates.push({
+              piece_index: id,
+              x: tx,
+              y: ty,
+              is_locked: false,
+              ...(isNightmare ? { rotation_quarter: 0, is_back_face: false } : {}),
+            });
+          }
+
+          const clusterBox = clusterBoundsByCenter(targetCenter.x, targetCenter.y);
+          const decoyOffsets = [
+            { x: pieceWidth * 2.6, y: -pieceHeight * 1.6 },
+            { x: pieceWidth * 2.8, y: pieceHeight * 1.7 },
+          ];
+          decoys.forEach((id, idx) => {
+            const p = pieces.current.get(id);
+            if (!p) return;
+            const tx = clusterBox.maxX + decoyOffsets[idx % decoyOffsets.length].x;
+            const ty = targetCenter.y + decoyOffsets[idx % decoyOffsets.length].y;
+            p.x = tx;
+            p.y = ty;
+            topZIndex++;
+            p.zIndex = topZIndex;
+            updates.push({ pieceId: id, x: tx, y: ty });
+            dbUpdates.push({ piece_index: id, x: tx, y: ty, is_locked: false });
+          });
+
+          if (updates.length > 0) {
+            sendMoveBatch(updates);
+            await savePiecesState(dbUpdates, { immediate: true });
+          }
+
+          const focusIds = [...connectedFive, ...decoys];
+          let minX = Infinity;
+          let minY = Infinity;
+          let maxX = -Infinity;
+          let maxY = -Infinity;
+          focusIds.forEach((id) => {
+            const p = pieces.current.get(id);
+            if (!p) return;
+            minX = Math.min(minX, p.x);
+            minY = Math.min(minY, p.y);
+            maxX = Math.max(maxX, p.x + pieceWidth);
+            maxY = Math.max(maxY, p.y + pieceHeight);
+          });
+          if (minX !== Infinity) {
+            const pad = Math.max(pieceWidth, pieceHeight) * 1.2;
+            const bboxW = Math.max(pieceWidth, maxX - minX + pad * 2);
+            const bboxH = Math.max(pieceHeight, maxY - minY + pad * 2);
+            const targetScale = Math.max(
+              0.05,
+              Math.min(1, app.screen.width / bboxW, app.screen.height / bboxH)
+            );
+            const anchorX = (minX + maxX) / 2;
+            const anchorY = (minY + maxY) / 2;
+            world.scale.set(targetScale);
+            const anchorGlobal = new PIXI.Point();
+            world.toGlobal(new PIXI.Point(anchorX, anchorY), anchorGlobal);
+            world.x += app.screen.width / 2 - anchorGlobal.x;
+            world.y += app.screen.height / 2 - anchorGlobal.y;
+          }
+        };
+
         const createMosaicFromImage = async (targetImageUrl: string, quick: boolean = false, gapMultiplier: number = 1.6) => {
           if (isColorBotRunningRef.current) {
             isColorBotRunningRef.current = false;
@@ -5230,6 +5510,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
 
         gatherBordersRef.current = gatherBorders;
         gatherByColorRef.current = gatherByColor;
+        gatherAdjacentAssistRef.current = gatherAdjacentAssist;
         createMosaicFromImageRef.current = createMosaicFromImage;
 
         bumpProgress(46);
@@ -7101,6 +7382,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
           worldRef.current = null;
           gatherBordersRef.current = null;
           gatherByColorRef.current = null;
+          gatherAdjacentAssistRef.current = null;
           createMosaicFromImageRef.current = null;
           rotateFlipSelectionRef.current = null;
           initialPositionsRef.current = [];
@@ -7797,6 +8079,23 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
               <RotateCcw size={14} />
             </button>
           ) : null}
+
+          <button
+            onClick={() => {
+              void gatherAdjacentAssistRef.current?.();
+            }}
+            className={`flex items-center justify-center gap-1 rounded-md transition-colors shrink-0 ${
+              isTossMode
+                ? "h-8 px-3 rounded-lg bg-[#F4F8FF] text-[#2F6FE4]"
+                : "h-7 px-2 border bg-slate-800/50 border-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-white"
+            }`}
+            title={isKo ? "인접 조각 모으기 (5+2)" : "Gather adjacent pieces (5+2)"}
+          >
+            <Zap size={12} />
+            <span className={`font-semibold whitespace-nowrap ${isTossMode ? "text-xs" : "text-[11px]"}`}>
+              {isKo ? "모으기 5+2" : "Gather 5+2"}
+            </span>
+          </button>
 
           {isTossMode ? (
             <div className={`${isMobileLandscape || isMobilePortrait ? "hidden" : "flex"} items-center justify-center gap-2 flex-1 min-w-0 h-8 rounded-lg bg-[#F4F8FF] px-3 text-[#2F6FE4]`}>
