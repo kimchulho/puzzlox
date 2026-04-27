@@ -5046,6 +5046,18 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
           const anchorId = connectedFive[0];
           const anchorCol = anchorId % GRID_COLS;
           const anchorRow = Math.floor(anchorId / GRID_COLS);
+          const nearGapX = pieceWidth + Math.max(SNAP_THRESHOLD + 8, pieceWidth * 0.16);
+          const nearGapY = pieceHeight + Math.max(SNAP_THRESHOLD + 8, pieceHeight * 0.16);
+          const outsideGap = Math.max(pieceWidth, pieceHeight) * 0.35;
+
+          const isRectOutsideBoard = (minX: number, minY: number, maxX: number, maxY: number) => {
+            return (
+              maxX <= boardStartX - outsideGap ||
+              minX >= boardStartX + boardWidth + outsideGap ||
+              maxY <= boardStartY - outsideGap ||
+              minY >= boardStartY + boardHeight + outsideGap
+            );
+          };
 
           const clusterBoundsByCenter = (cx: number, cy: number) => {
             let minX = Infinity;
@@ -5055,8 +5067,8 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
             for (const id of connectedFive) {
               const col = id % GRID_COLS;
               const row = Math.floor(id / GRID_COLS);
-              const tx = cx + (col - anchorCol) * pieceWidth;
-              const ty = cy + (row - anchorRow) * pieceHeight;
+              const tx = cx + (col - anchorCol) * nearGapX;
+              const ty = cy + (row - anchorRow) * nearGapY;
               minX = Math.min(minX, tx);
               minY = Math.min(minY, ty);
               maxX = Math.max(maxX, tx + pieceWidth);
@@ -5065,8 +5077,40 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
             return { minX, minY, maxX, maxY };
           };
 
+          const makeLayout = (cx: number, cy: number) => {
+            const connectedTargets = new Map<number, { x: number; y: number }>();
+            for (const id of connectedFive) {
+              const col = id % GRID_COLS;
+              const row = Math.floor(id / GRID_COLS);
+              connectedTargets.set(id, {
+                x: cx + (col - anchorCol) * nearGapX,
+                y: cy + (row - anchorRow) * nearGapY,
+              });
+            }
+            const clusterBox = clusterBoundsByCenter(cx, cy);
+            const decoyTargets = new Map<number, { x: number; y: number }>();
+            decoys.forEach((id, idx) => {
+              const lane = idx % 2 === 0 ? -1 : 1;
+              decoyTargets.set(id, {
+                x: clusterBox.maxX + nearGapX * (1.35 + idx * 0.2),
+                y: cy + lane * nearGapY * (0.8 + idx * 0.08),
+              });
+            });
+            let minX = clusterBox.minX;
+            let minY = clusterBox.minY;
+            let maxX = clusterBox.maxX;
+            let maxY = clusterBox.maxY;
+            decoyTargets.forEach((p) => {
+              minX = Math.min(minX, p.x);
+              minY = Math.min(minY, p.y);
+              maxX = Math.max(maxX, p.x + pieceWidth);
+              maxY = Math.max(maxY, p.y + pieceHeight);
+            });
+            return { connectedTargets, decoyTargets, bounds: { minX, minY, maxX, maxY } };
+          };
+
           const isRegionClear = (minX: number, minY: number, maxX: number, maxY: number) => {
-            const margin = Math.max(pieceWidth, pieceHeight) * 0.8;
+            const margin = Math.max(pieceWidth, pieceHeight) * 0.9;
             for (let i = 0; i < PIECE_COUNT; i++) {
               if (connectedSet.has(i) || decoys.includes(i)) continue;
               const p = pieces.current.get(i);
@@ -5090,24 +5134,27 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
           const boardCx = boardStartX + boardWidth / 2;
           const boardCy = boardStartY + boardHeight / 2;
           const candidates: { x: number; y: number }[] = [];
-          const ringStepX = pieceWidth * 2.2;
-          const ringStepY = pieceHeight * 2.2;
+          const ringStepX = nearGapX * 1.4;
+          const ringStepY = nearGapY * 1.4;
           for (let layer = 1; layer <= 10; layer++) {
-            const baseX = boardCx + layer * ringStepX;
-            const baseY = boardCy;
-            candidates.push({ x: baseX, y: baseY });
-            candidates.push({ x: boardCx - layer * ringStepX, y: baseY });
-            candidates.push({ x: boardCx, y: boardCy + layer * ringStepY });
-            candidates.push({ x: boardCx, y: boardCy - layer * ringStepY });
+            const radiusX = boardWidth / 2 + nearGapX * (1.8 + layer);
+            const radiusY = boardHeight / 2 + nearGapY * (1.8 + layer);
+            candidates.push({ x: boardCx + radiusX, y: boardCy });
+            candidates.push({ x: boardCx - radiusX, y: boardCy });
+            candidates.push({ x: boardCx, y: boardCy + radiusY });
+            candidates.push({ x: boardCx, y: boardCy - radiusY });
+            candidates.push({ x: boardCx + layer * ringStepX, y: boardCy + layer * ringStepY });
+            candidates.push({ x: boardCx - layer * ringStepX, y: boardCy + layer * ringStepY });
           }
-          candidates.push({ x: boardCx + boardWidth * 0.4, y: boardCy + boardHeight * 0.35 });
-          candidates.push({ x: boardCx - boardWidth * 0.4, y: boardCy + boardHeight * 0.35 });
 
-          let targetCenter = candidates[0];
+          let chosenLayout = makeLayout(candidates[0].x, candidates[0].y);
           for (const c of candidates) {
-            const b = clusterBoundsByCenter(c.x, c.y);
-            if (isRegionClear(b.minX, b.minY, b.maxX, b.maxY)) {
-              targetCenter = c;
+            const layout = makeLayout(c.x, c.y);
+            if (!isRectOutsideBoard(layout.bounds.minX, layout.bounds.minY, layout.bounds.maxX, layout.bounds.maxY)) {
+              continue;
+            }
+            if (isRegionClear(layout.bounds.minX, layout.bounds.minY, layout.bounds.maxX, layout.bounds.maxY)) {
+              chosenLayout = layout;
               break;
             }
           }
@@ -5126,10 +5173,12 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
           for (const id of connectedFive) {
             const p = pieces.current.get(id);
             if (!p) continue;
-            const col = id % GRID_COLS;
-            const row = Math.floor(id / GRID_COLS);
-            const tx = targetCenter.x + (col - anchorCol) * pieceWidth;
-            const ty = targetCenter.y + (row - anchorRow) * pieceHeight;
+            const target = chosenLayout.connectedTargets.get(id);
+            if (!target) continue;
+            const jitterX = (Math.random() - 0.5) * Math.min(SNAP_THRESHOLD * 0.45, pieceWidth * 0.08);
+            const jitterY = (Math.random() - 0.5) * Math.min(SNAP_THRESHOLD * 0.45, pieceHeight * 0.08);
+            const tx = target.x + jitterX;
+            const ty = target.y + jitterY;
             p.x = tx;
             p.y = ty;
             if (isNightmare) applyPieceOrientationVisual(p, 0, false);
@@ -5150,16 +5199,15 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
             });
           }
 
-          const clusterBox = clusterBoundsByCenter(targetCenter.x, targetCenter.y);
-          const decoyOffsets = [
-            { x: pieceWidth * 2.6, y: -pieceHeight * 1.6 },
-            { x: pieceWidth * 2.8, y: pieceHeight * 1.7 },
-          ];
           decoys.forEach((id, idx) => {
             const p = pieces.current.get(id);
             if (!p) return;
-            const tx = clusterBox.maxX + decoyOffsets[idx % decoyOffsets.length].x;
-            const ty = targetCenter.y + decoyOffsets[idx % decoyOffsets.length].y;
+            const target = chosenLayout.decoyTargets.get(id);
+            if (!target) return;
+            const jitterX = (Math.random() - 0.5) * Math.min(SNAP_THRESHOLD * 0.4, pieceWidth * 0.08);
+            const jitterY = (Math.random() - 0.5) * Math.min(SNAP_THRESHOLD * 0.4, pieceHeight * 0.08);
+            const tx = target.x + jitterX;
+            const ty = target.y + jitterY;
             p.x = tx;
             p.y = ty;
             topZIndex++;
