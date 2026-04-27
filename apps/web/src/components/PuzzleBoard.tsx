@@ -274,6 +274,9 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
   const [socketDisconnectedAt, setSocketDisconnectedAt] = useState<number | null>(null);
   const [showConnectionStatusPopup, setShowConnectionStatusPopup] = useState(false);
   const hasResolvedActualPieceCountRef = useRef(false);
+  /** username → 표시용 이름(순위 API 닉 + Supabase 조회); 원격 커서 라벨에 사용 */
+  const remoteCursorLabelByUsernameRef = useRef<Record<string, string>>({});
+  const refreshRemoteCursorLabelsRef = useRef<(() => void) | null>(null);
   const connectionStatusWrapRef = useRef<HTMLDivElement | null>(null);
   const [showFullImage, setShowFullImage] = useState(false);
   const [showRotateConfirm, setShowRotateConfirm] = useState(false);
@@ -980,8 +983,23 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
     [scores],
   );
 
+  /** 순위표 + 현재 접속자(점수는 아직 없어도 닉 표시·커서 라벨용) */
+  const allPeerUsernamesKey = useMemo(() => {
+    const set = new Set<string>();
+    if (scoreUsernamesKey) {
+      for (const n of scoreUsernamesKey.split("\0")) {
+        if (n) set.add(n);
+      }
+    }
+    activeUsers.forEach((u) => {
+      const k = String(u).trim();
+      if (k) set.add(k);
+    });
+    return [...set].sort().join("\0");
+  }, [scoreUsernamesKey, activeUsers]);
+
   useEffect(() => {
-    const names = scoreUsernamesKey ? scoreUsernamesKey.split("\0") : [];
+    const names = allPeerUsernamesKey ? allPeerUsernamesKey.split("\0") : [];
     if (names.length === 0) {
       setScoreDisplayNames({});
       return;
@@ -1010,7 +1028,33 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [scoreUsernamesKey]);
+  }, [allPeerUsernamesKey]);
+
+  useEffect(() => {
+    const next: Record<string, string> = {};
+    for (const s of scores) {
+      const u = String(s.username ?? "").trim();
+      if (!u) continue;
+      const apiNick = s.nickname != null && String(s.nickname).trim() !== "" ? String(s.nickname).trim() : "";
+      const supa = scoreDisplayNames[u];
+      next[u] = apiNick || (supa && supa !== u ? supa : u);
+    }
+    for (const u of Object.keys(scoreDisplayNames)) {
+      if (!u) continue;
+      const d = scoreDisplayNames[u];
+      if (next[u] == null || next[u] === u) {
+        if (d && d !== u) next[u] = d;
+        else if (next[u] == null) next[u] = u;
+      }
+    }
+    activeUsers.forEach((raw) => {
+      const u = String(raw).trim();
+      if (!u) return;
+      if (next[u] == null) next[u] = scoreDisplayNames[u] ?? u;
+    });
+    remoteCursorLabelByUsernameRef.current = next;
+    refreshRemoteCursorLabelsRef.current?.();
+  }, [scores, scoreDisplayNames, activeUsers]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1369,6 +1413,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
           string,
           {
             container: PIXI.Container;
+            nameText?: PIXI.Text;
             targetX: number;
             targetY: number;
             lastUpdatedAt: number;
@@ -7266,8 +7311,9 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
               const graphics = new PIXI.Graphics();
               graphics.circle(0, 0, 4).fill(0xffffff);
 
+              const displayLabel = remoteCursorLabelByUsernameRef.current[username] ?? username;
               const text = new PIXI.Text({
-                text: username,
+                text: displayLabel,
                 style: {
                   fontFamily: 'Arial',
                   fontSize: 12,
@@ -7287,6 +7333,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
               cursorsContainer.addChild(container);
               cursorData = {
                 container,
+                nameText: text,
                 targetX: x,
                 targetY: y,
                 lastUpdatedAt: Date.now(),
@@ -7315,6 +7362,16 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
               cursorData.targetY += effectiveDeltaY * targetAlpha;
               cursorData.lastUpdatedAt = now;
             }
+          };
+
+          refreshRemoteCursorLabelsRef.current = () => {
+            cursors.forEach((data, uname) => {
+              const nt = data.nameText;
+              if (!nt) return;
+              if ((nt as unknown as { destroyed?: boolean }).destroyed) return;
+              const label = remoteCursorLabelByUsernameRef.current[uname] ?? uname;
+              if (nt.text !== label) nt.text = label;
+            });
           };
 
           socketMoveBatchRef.current = (payload) => {
@@ -7707,6 +7764,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
           gatherAdjacentAssistRef.current = null;
           snapSelectedPieceToBoardAssistRef.current = null;
           createMosaicFromImageRef.current = null;
+          refreshRemoteCursorLabelsRef.current = null;
           rotateFlipSelectionRef.current = null;
           initialPositionsRef.current = [];
           isCompletedRef.current = false;
