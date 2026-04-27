@@ -1932,8 +1932,9 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
           if (isDraggingSelected && !selectedMoved) return;
           if (isDragging && !isTouchDraggingPiece) return;
           
-          const edgeMargin = 20;
-          const scrollSpeed = 2.5;
+          const edgeMargin = 12;
+          const hardEdgeMargin = 6;
+          const scrollSpeed = 2.2;
           let scrollX = 0;
           let scrollY = 0;
           
@@ -1964,18 +1965,27 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
           const isWider = (maxGlobalX - minGlobalX) > (app.screen.width - 2 * edgeMargin);
           const isTaller = (maxGlobalY - minGlobalY) > (app.screen.height - 2 * edgeMargin);
 
-          if (pointerGlobalPos.x < edgeMargin) scrollX = scrollSpeed;
-          else if (pointerGlobalPos.x > app.screen.width - edgeMargin) scrollX = -scrollSpeed;
-          else if (!isWider) {
-            if (minGlobalX < edgeMargin) scrollX = scrollSpeed;
-            else if (maxGlobalX > app.screen.width - edgeMargin) scrollX = -scrollSpeed;
+          const nearLeft = pointerGlobalPos.x < edgeMargin;
+          const nearRight = pointerGlobalPos.x > app.screen.width - edgeMargin;
+          const nearTop = pointerGlobalPos.y < edgeMargin;
+          const nearBottom = pointerGlobalPos.y > app.screen.height - edgeMargin;
+
+          if (nearLeft && (pointerGlobalPos.x < hardEdgeMargin || minGlobalX < edgeMargin - 2)) {
+            scrollX = scrollSpeed;
+          } else if (nearRight && (pointerGlobalPos.x > app.screen.width - hardEdgeMargin || maxGlobalX > app.screen.width - (edgeMargin - 2))) {
+            scrollX = -scrollSpeed;
+          } else if (!isWider) {
+            if (nearLeft && minGlobalX < edgeMargin - 2) scrollX = scrollSpeed;
+            else if (nearRight && maxGlobalX > app.screen.width - (edgeMargin - 2)) scrollX = -scrollSpeed;
           }
-          
-          if (pointerGlobalPos.y < edgeMargin) scrollY = scrollSpeed;
-          else if (pointerGlobalPos.y > app.screen.height - edgeMargin) scrollY = -scrollSpeed;
-          else if (!isTaller) {
-            if (minGlobalY < edgeMargin) scrollY = scrollSpeed;
-            else if (maxGlobalY > app.screen.height - edgeMargin) scrollY = -scrollSpeed;
+
+          if (nearTop && (pointerGlobalPos.y < hardEdgeMargin || minGlobalY < edgeMargin - 2)) {
+            scrollY = scrollSpeed;
+          } else if (nearBottom && (pointerGlobalPos.y > app.screen.height - hardEdgeMargin || maxGlobalY > app.screen.height - (edgeMargin - 2))) {
+            scrollY = -scrollSpeed;
+          } else if (!isTaller) {
+            if (nearTop && minGlobalY < edgeMargin - 2) scrollY = scrollSpeed;
+            else if (nearBottom && maxGlobalY > app.screen.height - (edgeMargin - 2)) scrollY = -scrollSpeed;
           }
           
           if (scrollX !== 0 || scrollY !== 0) {
@@ -5074,8 +5084,14 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
             return { minX, minY, maxX, maxY };
           };
 
-          const isRegionClear = (minX: number, minY: number, maxX: number, maxY: number) => {
-            const margin = Math.max(pieceWidth, pieceHeight) * 1.1;
+          const isRegionClear = (
+            minX: number,
+            minY: number,
+            maxX: number,
+            maxY: number,
+            marginScale: number
+          ) => {
+            const margin = Math.max(pieceWidth, pieceHeight) * marginScale;
             for (let i = 0; i < PIECE_COUNT; i++) {
               if (selectedSet.has(i)) continue;
               const p = pieces.current.get(i);
@@ -5098,45 +5114,29 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
 
           const boardCx = boardStartX + boardWidth / 2;
           const boardCy = boardStartY + boardHeight / 2;
-          const candidates: { x: number; y: number }[] = [];
-          const ringStep = Math.max(nearGapX, nearGapY) * 1.2;
-          for (let layer = 0; layer <= 10; layer++) {
-            const ext = outsideGap + ringStep * layer;
-            candidates.push({
-              x: boardStartX + boardWidth + gridWidth / 2 + ext,
-              y: boardCy,
-            });
-            candidates.push({
-              x: boardStartX - gridWidth / 2 - ext,
-              y: boardCy,
-            });
-            candidates.push({
-              x: boardCx,
-              y: boardStartY - gridHeight / 2 - ext,
-            });
-            candidates.push({
-              x: boardCx,
-              y: boardStartY + boardHeight + gridHeight / 2 + ext,
-            });
-            candidates.push({
-              x: boardStartX + boardWidth + gridWidth / 2 + ext,
-              y: boardStartY + boardHeight + gridHeight / 2 + ext,
-            });
-            candidates.push({
-              x: boardStartX - gridWidth / 2 - ext,
-              y: boardStartY + boardHeight + gridHeight / 2 + ext,
-            });
-          }
-
           let chosenCenter: { x: number; y: number } | null = null;
-          for (const c of candidates) {
-            const b = boundsByCenter(c.x, c.y);
-            if (!isRectOutsideBoard(b.minX, b.minY, b.maxX, b.maxY)) {
-              continue;
-            }
-            if (isRegionClear(b.minX, b.minY, b.maxX, b.maxY)) {
-              chosenCenter = c;
-              break;
+          const searchStep = Math.max(gridWidth, gridHeight) * 0.55;
+          const maxRadius = Math.max(boardWidth, boardHeight) * 3.2;
+          const marginPasses = [1.1, 0.9, 0.72];
+          for (const marginScale of marginPasses) {
+            if (chosenCenter) break;
+            for (let radius = outsideGap + Math.max(gridWidth, gridHeight) * 0.4; radius <= maxRadius; radius += searchStep) {
+              // Sweep around board center to densely probe candidate empty space.
+              const arcCount = Math.max(16, Math.ceil((Math.PI * 2 * radius) / searchStep));
+              for (let i = 0; i < arcCount; i++) {
+                const theta = (i / arcCount) * Math.PI * 2;
+                const c = {
+                  x: boardCx + Math.cos(theta) * radius,
+                  y: boardCy + Math.sin(theta) * radius,
+                };
+                const b = boundsByCenter(c.x, c.y);
+                if (!isRectOutsideBoard(b.minX, b.minY, b.maxX, b.maxY)) continue;
+                if (isRegionClear(b.minX, b.minY, b.maxX, b.maxY, marginScale)) {
+                  chosenCenter = c;
+                  break;
+                }
+              }
+              if (chosenCenter) break;
             }
           }
           if (!chosenCenter) {
