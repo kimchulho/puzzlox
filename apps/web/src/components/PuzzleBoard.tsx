@@ -7871,7 +7871,9 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
       ? String(user.username).trim()
       : (localStorage.getItem("puzzle_guest_name") || "guest");
   const currentPlayerLabel =
-    user?.nickname != null && String(user.nickname).trim() !== ""
+    isTossMode
+      ? currentPlayerId
+      : user?.nickname != null && String(user.nickname).trim() !== ""
       ? String(user.nickname).trim()
       : currentPlayerId;
   const isAdminUser = user?.role === "admin";
