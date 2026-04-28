@@ -1,7 +1,9 @@
 import { loadFullScreenAd, showFullScreenAd } from "@apps-in-toss/web-framework";
 
-/** 앱인토스 콘솔 보상형 광고 라이브 그룹 ID @see https://developers-apps-in-toss.toss.im/bedrock/reference/framework/%EA%B4%91%EA%B3%A0/IntegratedAd.html */
-export const TOSS_REWARDED_AD_GROUP_ID = "ait.v2.live.b10044ea4f814bb9";
+/** 퍼즐방 입장/생성용 보상형 광고 라이브 그룹 ID */
+export const TOSS_REWARDED_ROOM_ENTRY_AD_GROUP_ID = "ait.v2.live.b10044ea4f814bb9";
+/** 자발적 시청(+10P) 보상형 광고 라이브 그룹 ID */
+export const TOSS_REWARDED_ASSIST_POINTS_AD_GROUP_ID = "ait.v2.live.7c55699636464e4a";
 // 테스트 광고 ID:
 // export const TOSS_REWARDED_AD_GROUP_ID = "ait-ad-test-rewarded-id";
 
@@ -30,6 +32,12 @@ function markSeen(roomId: number) {
   localStorage.setItem(LS_SEEN_ROOMS, JSON.stringify([...next].slice(0, 400)));
 }
 
+export function isTossRewardedAdSupported(): boolean {
+  const loadOk = typeof loadFullScreenAd.isSupported === "function" && loadFullScreenAd.isSupported();
+  const showOk = typeof showFullScreenAd.isSupported === "function" && showFullScreenAd.isSupported();
+  return loadOk && showOk;
+}
+
 /**
  * 토스 통합 보상형 광고( load → show ) 후 방 입장.
  * 같은 roomId는 localStorage에 기록되어 같은 기기에서 재입장 시 광고 생략.
@@ -41,9 +49,7 @@ export async function runTossRewardedRoomEntry(roomId: number, enter: () => void
     return true;
   }
 
-  const loadOk = typeof loadFullScreenAd.isSupported === "function" && loadFullScreenAd.isSupported();
-  const showOk = typeof showFullScreenAd.isSupported === "function" && showFullScreenAd.isSupported();
-  if (!loadOk || !showOk) {
+  if (!isTossRewardedAdSupported()) {
     enter();
     return true;
   }
@@ -74,12 +80,12 @@ export async function runTossRewardedRoomEntry(roomId: number, enter: () => void
     };
 
     loadUnregister = loadFullScreenAd({
-      options: { adGroupId: TOSS_REWARDED_AD_GROUP_ID },
+      options: { adGroupId: TOSS_REWARDED_ROOM_ENTRY_AD_GROUP_ID },
       onEvent: (event) => {
         if (event.type !== "loaded") return;
         let rewarded = false;
         showUnregister = showFullScreenAd({
-          options: { adGroupId: TOSS_REWARDED_AD_GROUP_ID },
+          options: { adGroupId: TOSS_REWARDED_ROOM_ENTRY_AD_GROUP_ID },
           onEvent: (ev) => {
             if (ev.type === "userEarnedReward") {
               rewarded = true;
@@ -103,9 +109,7 @@ export async function runTossRewardedRoomEntry(roomId: number, enter: () => void
 
 /** Generic toss rewarded ad gate (no room seen-cache side effects). */
 export async function runTossRewardedAd(): Promise<boolean> {
-  const loadOk = typeof loadFullScreenAd.isSupported === "function" && loadFullScreenAd.isSupported();
-  const showOk = typeof showFullScreenAd.isSupported === "function" && showFullScreenAd.isSupported();
-  if (!loadOk || !showOk) return false;
+  if (!isTossRewardedAdSupported()) return false;
 
   return await new Promise<boolean>((resolve) => {
     let finished = false;
@@ -131,12 +135,12 @@ export async function runTossRewardedAd(): Promise<boolean> {
     };
 
     loadUnregister = loadFullScreenAd({
-      options: { adGroupId: TOSS_REWARDED_AD_GROUP_ID },
+      options: { adGroupId: TOSS_REWARDED_ASSIST_POINTS_AD_GROUP_ID },
       onEvent: (event) => {
         if (event.type !== "loaded") return;
         let rewarded = false;
         showUnregister = showFullScreenAd({
-          options: { adGroupId: TOSS_REWARDED_AD_GROUP_ID },
+          options: { adGroupId: TOSS_REWARDED_ASSIST_POINTS_AD_GROUP_ID },
           onEvent: (ev) => {
             if (ev.type === "userEarnedReward") rewarded = true;
             if (ev.type === "dismissed" || ev.type === "failedToShow") done(rewarded);

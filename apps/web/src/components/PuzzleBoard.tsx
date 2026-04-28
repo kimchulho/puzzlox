@@ -41,7 +41,7 @@ import {
   spendGuestAssistPoints,
   spendUserAssistPoints,
 } from '../lib/assistPoints';
-import { runTossRewardedAd } from '../lib/tossRewardedAdGate';
+import { isTossRewardedAdSupported, runTossRewardedAd } from '../lib/tossRewardedAdGate';
 import { runAndroidNativeRewardedAssistPointsAd } from '../lib/androidNativeRewardedAdGate';
 import { runWebRewardedAd } from '../lib/webRewardedAdGate';
 
@@ -605,7 +605,7 @@ const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
       let rewarded = false;
       if (isAndroidNativeClient) {
         rewarded = await runAndroidNativeRewardedAssistPointsAd();
-      } else if (isTossMode) {
+      } else if (isTossRewardedAdSupported()) {
         rewarded = await runTossRewardedAd();
       } else {
         rewarded = await runWebRewardedAd().catch(() => false);
